@@ -1,0 +1,3 @@
+Exynos 5410 Dual cluster support patch:
+
+http://lwn.net/Articles/570336/
