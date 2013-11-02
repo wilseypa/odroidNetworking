@@ -197,6 +197,11 @@ sub get_dev_info {
 		@fields = split(/\s+/, $line);
 		$ipv4_addr{$eth} = $fields[0];
 	    }
+            elsif ($line =~ /inet [0-9.]+/) {
+              $line =~ s/^\s+inet //g;
+              @fields = split(/\s+/, $line);
+              $ipv4_addr{$eth} = $fields[0];
+            }
 
 	    # get ethernet mtu
 	    if ($line =~ /MTU:/) {
@@ -204,6 +209,11 @@ sub get_dev_info {
 		@fields = split(/\s+/, $line);
 		$eth_mtu{$eth} = $fields[0];
 	    }
+            elsif ($line =~ /.*mtu [0-9]+.*/) {
+              $line =~ s/^.*mtu //g;
+              @fields = split(/\s+/, $line);
+              $eth_mtu{$eth} = $fields[0];
+            }
 	}
     }
 
@@ -359,12 +369,13 @@ sub do_status {
 	# handle case where rxe_drivers are not loaded
 	if (defined($rxe_names{$eth})) {
 		$rxe = $rxe_names{$eth};
-		$rmtu = $rxe_mtu{$rxe};
+		# $rmtu = $rxe_mtu{$rxe};
 	}
 	else {
 		$rxe = "";
 		$rmtu = "";
 	}
+	#$rmtu = 1024;
 
 	if ((!defined($instance) 
 	     && (($linkonly == 0) || ($link_state{$eth} =~ "yes")))
@@ -455,7 +466,7 @@ sub rxe_add {
 
     if (!($eth =~ /eth[0123456789]/)) {
 	print "eth_name ($eth) looks bogus\n";
-	return;
+	#return;
     }
 
     if (!defined($rxe_names{$eth})) {
