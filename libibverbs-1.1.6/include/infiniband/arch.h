@@ -115,6 +115,18 @@ static inline uint64_t ntohll(uint64_t x) { return x; }
 #define wmb()	 mb()
 #define wc_wmb() wmb()
 
+#elif defined(__arm__)
+
+#define CONFIG_OUTER_CACHE
+#define CONFIG_OUTER_CACHE_SYNC
+#include <infiniband/outercache.h>
+
+#define dsb() asm volatile("dsb" ::: "memory")
+#define mb() do { dsb(); outer_sync(); } while (0)
+#define rmb() dsb()
+#define dsb_st() asm volatile("dsb st" ::: "memory")
+#define wmb() do { dsb_st(); outer_sync(); } while (0)
+
 #else
 
 #warning No architecture specific defines found.  Using generic implementation.
