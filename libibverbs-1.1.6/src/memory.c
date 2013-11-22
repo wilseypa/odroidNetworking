@@ -135,6 +135,7 @@ out:
 
 int ibv_fork_init(void)
 {
+  fprintf(stderr, "Called ibv_fork_init\n");
 	void *tmp, *tmp_aligned;
 	int ret;
 	unsigned long size;
@@ -700,6 +701,7 @@ int ibv_dontfork_range(void *base, size_t size)
 	if (mm_root)
 		return ibv_madvise_range(base, size, MADV_DONTFORK);
 	else {
+          fprintf(stderr, "mm_root is not initialized in ibv_dontfork_range\n");
 		too_late = 1;
 		return 0;
 	}

@@ -159,8 +159,14 @@ struct ibv_mr *__ibv_reg_mr(struct ibv_pd *pd, void *addr,
 {
 	struct ibv_mr *mr;
 
-	if (ibv_dontfork_range(addr, length))
-		return NULL;
+	if (ibv_dontfork_range(addr, length)) {
+          fprintf(stderr, "ibv_reg_mr is calling ibv_fork_init\n");
+          ibv_fork_init();
+          if (ibv_dontfork_range(addr, length)) {
+            fprintf(stderr, "ibv_reg_mr returning null because of ibv_dontfork_range\n");
+            return NULL;
+          }
+        }
 
 	mr = pd->context->ops.reg_mr(pd, addr, length, access);
 	if (mr) {
