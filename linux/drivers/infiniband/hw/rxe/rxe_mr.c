@@ -51,7 +51,7 @@ static u8 rxe_get_key(void)
 	return key;
 }
 
-int mem_check_range(struct rxe_mem *mem, u64 iova, size_t length)
+int mem_check_range(struct rxe_mem *mem, u32 iova, size_t length)
 {
 	switch (mem->type) {
 	case RXE_MEM_TYPE_DMA:
@@ -174,7 +174,7 @@ int rxe_mem_init_dma(struct rxe_dev *rxe, struct rxe_pd *pd,
 }
 
 int rxe_mem_init_phys(struct rxe_dev *rxe, struct rxe_pd *pd, int access,
-		      u64 iova, struct ib_phys_buf *phys_buf, int num_buf,
+		      u32 iova, struct ib_phys_buf *phys_buf, int num_buf,
 		      struct rxe_mem *mem)
 {
 	int i;
@@ -231,7 +231,7 @@ err1:
 }
 
 int rxe_mem_init_user(struct rxe_dev *rxe, struct rxe_pd *pd, u64 start,
-	u64 length, u64 iova, int access, struct ib_udata *udata,
+	u64 length, u32 iova, int access, struct ib_udata *udata,
 	struct rxe_mem *mem)
 {
 	int			i;
@@ -423,7 +423,7 @@ static void lookup_iova(
 	}
 }
 
-void *iova_to_vaddr(struct rxe_mem *mem, u64 iova, int length)
+void *iova_to_vaddr(struct rxe_mem *mem, u32 iova, int length)
 {
 	size_t offset;
 	int m, n;
@@ -463,7 +463,7 @@ out:
 /* copy data from a range (vaddr, vaddr+length-1) to or from
    a mem object starting at iova. Compute incremental value of
    crc32 if crcp is not zero. caller must hold a reference to mem */
-int rxe_mem_copy(struct rxe_mem *mem, u64 iova, void *addr, int length,
+int rxe_mem_copy(struct rxe_mem *mem, u32 iova, void *addr, int length,
 		 enum copy_direction dir, u32 *crcp)
 {
 	int			err;
@@ -724,7 +724,7 @@ err1:
 }
 
 int rxe_mem_map_pages(struct rxe_dev *rxe, struct rxe_mem *mem,
-	u64 *page, int num_pages, u64 iova)
+	u64 *page, int num_pages, u32 iova)
 {
 	int i;
 	int num_buf;

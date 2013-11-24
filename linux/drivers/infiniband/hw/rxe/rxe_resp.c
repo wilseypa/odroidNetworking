@@ -551,7 +551,7 @@ static DEFINE_SPINLOCK(atomic_ops_lock);
 static enum resp_states process_atomic(struct rxe_qp *qp,
 				       struct rxe_pkt_info *pkt)
 {
-	u64 iova = atmeth_va(pkt);
+	u32 iova = atmeth_va(pkt);
 	u64 *vaddr;
 	enum resp_states ret;
 	struct rxe_mem *mr = qp->resp.mr;
@@ -1070,7 +1070,7 @@ static enum resp_states duplicate_request(struct rxe_qp *qp,
 		} else {
 			/* Ensure this new request is the same as the previous
 			 * one or a subset of it. */
-			u64 iova = reth_va(pkt);
+			u32 iova = reth_va(pkt);
 			u32 resid = reth_len(pkt);
 
 			if (iova < res->read.va_org ||
