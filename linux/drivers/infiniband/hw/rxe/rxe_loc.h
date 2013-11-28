@@ -110,11 +110,11 @@ int rxe_mem_init_dma(struct rxe_dev *rxe, struct rxe_pd *pd,
 		     int access, struct rxe_mem *mem);
 
 int rxe_mem_init_phys(struct rxe_dev *rxe, struct rxe_pd *pd,
-		      int access, u32 iova, struct ib_phys_buf *buf,
+		      int access, u64 iova, struct ib_phys_buf *buf,
 		      int num_buf, struct rxe_mem *mem);
 
 int rxe_mem_init_user(struct rxe_dev *rxe, struct rxe_pd *pd, u64 start,
-		      u64 length, u32 iova, int access, struct ib_udata *udata,
+		      u64 length, u64 iova, int access, struct ib_udata *udata,
 		      struct rxe_mem *mr);
 
 int rxe_mem_init_fast(struct rxe_dev *rxe, struct rxe_pd *pd,
@@ -126,14 +126,14 @@ int rxe_mem_init_mw(struct rxe_dev *rxe, struct rxe_pd *pd,
 int rxe_mem_init_fmr(struct rxe_dev *rxe, struct rxe_pd *pd, int access,
 		     struct ib_fmr_attr *attr, struct rxe_mem *fmr);
 
-int rxe_mem_copy(struct rxe_mem *mem, u32 iova, void *addr,
+int rxe_mem_copy(struct rxe_mem *mem, u64 iova, void *addr,
 		 int length, enum copy_direction dir, u32 *crcp);
 
 int copy_data(struct rxe_dev *rxe, struct rxe_pd *pd, int access,
 	      struct rxe_dma_info *dma, void *addr, int length,
 	      enum copy_direction dir, u32 *crcp);
 
-void *iova_to_vaddr(struct rxe_mem *mem, u32 iova, int length);
+void *iova_to_vaddr(struct rxe_mem *mem, u64 iova, int length);
 
 enum lookup_type {
 	lookup_local,
@@ -143,10 +143,10 @@ enum lookup_type {
 struct rxe_mem *lookup_mem(struct rxe_pd *pd, int access, u32 key,
 			   enum lookup_type type);
 
-int mem_check_range(struct rxe_mem *mem, u32 iova, size_t length);
+int mem_check_range(struct rxe_mem *mem, u64 iova, size_t length);
 
 int rxe_mem_map_pages(struct rxe_dev *rxe, struct rxe_mem *mem,
-		      u64 *page, int num_pages, u32 iova);
+		      u64 *page, int num_pages, u64 iova);
 
 void rxe_mem_cleanup(void *arg);
 

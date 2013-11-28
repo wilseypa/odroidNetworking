@@ -871,7 +871,7 @@ static struct ib_mr *rxe_reg_phys_mr(struct ib_pd *ibpd,
 	struct rxe_dev *rxe = to_rdev(ibpd->device);
 	struct rxe_pd *pd = to_rpd(ibpd);
 	struct rxe_mem *mr;
-	u32 iova = *iova_start;
+	u64 iova = *iova_start;
 
 	mr = rxe_alloc(&rxe->mr_pool);
 	if (!mr) {
@@ -901,7 +901,7 @@ err1:
 static struct ib_mr *rxe_reg_user_mr(struct ib_pd *ibpd,
 				     u64 start,
 				     u64 length,
-				     u32 iova,
+				     u64 iova,
 				     int access, struct ib_udata *udata)
 {
 	int err;
@@ -1102,7 +1102,7 @@ err1:
 }
 
 static int rxe_map_phys_fmr(struct ib_fmr *ibfmr,
-			    u64 *page_list, int list_length, u32 iova)
+			    u64 *page_list, int list_length, u64 iova)
 {
 	struct rxe_mem *fmr = to_rfmr(ibfmr);
 	struct rxe_dev *rxe = to_rdev(ibfmr->device);

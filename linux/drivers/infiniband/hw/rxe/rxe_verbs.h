@@ -125,7 +125,7 @@ struct rxe_send_wqe {
 	struct rxe_av		av;	/* UD only */
 	u32			status;
 	u32			state;
-	u32			iova;
+	u64			iova;
 	u32			mask;
 	u32			first_psn;
 	u32			last_psn;
