@@ -488,6 +488,10 @@ int rxe_mem_copy(struct rxe_mem *mem, u64 iova, void *addr, int length,
 		if (crcp)
 			*crcp = crc32_le(*crcp, src, length);
 
+                pr_warn("Source is %x\n", src);
+                pr_warn("Destination is %x\n", dest);
+                pr_warn("Length is %x\n", length);
+
 		memcpy(dest, src, length);
 
 		return 0;
@@ -615,6 +619,8 @@ int copy_data(
 
 		if (bytes > 0) {
 			iova = sge->addr + offset;
+
+                        pr_warn("Calling rxe_mem_copy from copy_data\n");
 
 			err = rxe_mem_copy(mem, iova, addr, bytes, dir, crcp);
 			if (err)
