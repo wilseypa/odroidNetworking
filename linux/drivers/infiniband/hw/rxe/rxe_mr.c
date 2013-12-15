@@ -488,9 +488,9 @@ int rxe_mem_copy(struct rxe_mem *mem, u64 iova, void *addr, int length,
 		if (crcp)
 			*crcp = crc32_le(*crcp, src, length);
 
-                pr_warn("Source is %x\n", src);
-                pr_warn("Destination is %x\n", dest);
-                pr_warn("Length is %x\n", length);
+                pr_warn("DMA Source is %x\n", src);
+                pr_warn("DMA Destination is %x\n", dest);
+                pr_warn("DMA Length is %x\n", length);
 
 		memcpy(dest, src, length);
 
@@ -519,11 +519,17 @@ int rxe_mem_copy(struct rxe_mem *mem, u64 iova, void *addr, int length,
 
 		bytes	= buf->size - offset;
 
+                pr_warn("Source is %x\n", src);
+                pr_warn("Destination is %x\n", dest);
+                pr_warn("Remaining length of message is %x\n", length);
+
 		if (bytes > length)
 			bytes = length;
 
 		if (crcp)
 			crc = crc32_le(crc, src, bytes);
+
+                pr_warn("Bytes for this copy is %x\n", length);
 
 		memcpy(dest, src, bytes);
 
