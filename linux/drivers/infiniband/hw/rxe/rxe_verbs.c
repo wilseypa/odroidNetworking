@@ -904,6 +904,7 @@ static struct ib_mr *rxe_reg_user_mr(struct ib_pd *ibpd,
 				     u64 iova,
 				     int access, struct ib_udata *udata)
 {
+  pr_warn("In rxe_reg_user_mr\n");
 	int err;
 	struct rxe_dev *rxe = to_rdev(ibpd->device);
 	struct rxe_pd *pd = to_rpd(ibpd);
@@ -947,6 +948,7 @@ static int rxe_dereg_mr(struct ib_mr *ibmr)
 
 static struct ib_mr *rxe_alloc_fast_reg_mr(struct ib_pd *ibpd, int max_pages)
 {
+  pr_warn("In rxe_alloc_fast_reg_mr\n");
 	struct rxe_dev *rxe = to_rdev(ibpd->device);
 	struct rxe_pd *pd = to_rpd(ibpd);
 	struct rxe_mem *mr;
