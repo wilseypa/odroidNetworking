@@ -33,6 +33,8 @@
 
 /* srq implementation details */
 
+#include <linux/vmalloc.h>
+
 #include "rxe.h"
 #include "rxe_loc.h"
 #include "rxe_queue.h"
