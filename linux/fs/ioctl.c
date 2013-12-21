@@ -10,7 +10,7 @@
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/security.h>
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/uaccess.h>
 #include <linux/writeback.h>
 #include <linux/buffer_head.h>
@@ -42,7 +42,7 @@ static long vfs_ioctl(struct file *filp, unsigned int cmd,
 
 	error = filp->f_op->unlocked_ioctl(filp, cmd, arg);
 	if (error == -ENOIOCTLCMD)
-		error = -EINVAL;
+		error = -ENOTTY;
  out:
 	return error;
 }
@@ -603,21 +603,14 @@ int do_vfs_ioctl(struct file *filp, unsigned int fd, unsigned int cmd,
 
 SYSCALL_DEFINE3(ioctl, unsigned int, fd, unsigned int, cmd, unsigned long, arg)
 {
-	struct file *filp;
-	int error = -EBADF;
-	int fput_needed;
+	int error;
+	struct fd f = fdget(fd);
 
-	filp = fget_light(fd, &fput_needed);
-	if (!filp)
-		goto out;
-
-	error = security_file_ioctl(filp, cmd, arg);
-	if (error)
-		goto out_fput;
-
-	error = do_vfs_ioctl(filp, fd, cmd, arg);
- out_fput:
-	fput_light(filp, fput_needed);
- out:
+	if (!f.file)
+		return -EBADF;
+	error = security_file_ioctl(f.file, cmd, arg);
+	if (!error)
+		error = do_vfs_ioctl(f.file, fd, cmd, arg);
+	fdput(f);
 	return error;
 }

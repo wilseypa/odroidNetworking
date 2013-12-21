@@ -87,7 +87,8 @@ do {									\
 	: "=r" (tmp));							\
 } while (0)
 
-#elif defined(CONFIG_CPU_MIPSR1) && !defined(CONFIG_MIPS_ALCHEMY)
+#elif (defined(CONFIG_CPU_MIPSR1) && !defined(CONFIG_MIPS_ALCHEMY)) || \
+	defined(CONFIG_CPU_BMIPS)
 
 /*
  * These are slightly complicated by the fact that we guarantee R1 kernels to
@@ -139,8 +140,8 @@ do {									\
 } while (0)
 
 #elif defined(CONFIG_MIPS_ALCHEMY) || defined(CONFIG_CPU_CAVIUM_OCTEON) || \
-      defined(CONFIG_CPU_LOONGSON2) || defined(CONFIG_CPU_R10000) || \
-      defined(CONFIG_CPU_R5500)
+	defined(CONFIG_CPU_LOONGSON2) || defined(CONFIG_CPU_R10000) || \
+	defined(CONFIG_CPU_R5500)
 
 /*
  * R10000 rocks - all hazards handled in hardware, so this becomes a nobrainer.
@@ -151,31 +152,6 @@ ASMMACRO(mtc0_tlbw_hazard,
 ASMMACRO(tlbw_use_hazard,
 	)
 ASMMACRO(tlb_probe_hazard,
-	)
-ASMMACRO(irq_enable_hazard,
-	)
-ASMMACRO(irq_disable_hazard,
-	)
-ASMMACRO(back_to_back_c0_hazard,
-	)
-#define instruction_hazard() do { } while (0)
-
-#elif defined(CONFIG_CPU_RM9000)
-
-/*
- * RM9000 hazards.  When the JTLB is updated by tlbwi or tlbwr, a subsequent
- * use of the JTLB for instructions should not occur for 4 cpu cycles and use
- * for data translations should not occur for 3 cpu cycles.
- */
-
-ASMMACRO(mtc0_tlbw_hazard,
-	 _ssnop; _ssnop; _ssnop; _ssnop
-	)
-ASMMACRO(tlbw_use_hazard,
-	 _ssnop; _ssnop; _ssnop; _ssnop
-	)
-ASMMACRO(tlb_probe_hazard,
-	 _ssnop; _ssnop; _ssnop; _ssnop
 	)
 ASMMACRO(irq_enable_hazard,
 	)

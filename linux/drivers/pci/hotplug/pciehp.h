@@ -40,12 +40,10 @@
 
 #define MY_NAME	"pciehp"
 
-extern int pciehp_poll_mode;
+extern bool pciehp_poll_mode;
 extern int pciehp_poll_time;
-extern int pciehp_debug;
-extern int pciehp_force;
-extern struct workqueue_struct *pciehp_wq;
-extern struct workqueue_struct *pciehp_ordered_wq;
+extern bool pciehp_debug;
+extern bool pciehp_force;
 
 #define dbg(format, arg...)						\
 do {									\
@@ -79,6 +77,7 @@ struct slot {
 	struct hotplug_slot *hotplug_slot;
 	struct delayed_work work;	/* work for button event */
 	struct mutex lock;
+	struct workqueue_struct *wq;
 };
 
 struct event_info {
@@ -150,10 +149,6 @@ int pciehp_get_attention_status(struct slot *slot, u8 *status);
 int pciehp_set_attention_status(struct slot *slot, u8 status);
 int pciehp_get_latch_status(struct slot *slot, u8 *status);
 int pciehp_get_adapter_status(struct slot *slot, u8 *status);
-int pciehp_get_max_link_speed(struct slot *slot, enum pci_bus_speed *speed);
-int pciehp_get_max_link_width(struct slot *slot, enum pcie_link_width *val);
-int pciehp_get_cur_link_speed(struct slot *slot, enum pci_bus_speed *speed);
-int pciehp_get_cur_link_width(struct slot *slot, enum pcie_link_width *val);
 int pciehp_query_power_fault(struct slot *slot);
 void pciehp_green_led_on(struct slot *slot);
 void pciehp_green_led_off(struct slot *slot);

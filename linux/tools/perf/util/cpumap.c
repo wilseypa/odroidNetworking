@@ -38,24 +38,19 @@ static struct cpu_map *cpu_map__trim_new(int nr_cpus, int *tmp_cpus)
 	return cpus;
 }
 
-static struct cpu_map *cpu_map__read_all_cpu_map(void)
+struct cpu_map *cpu_map__read(FILE *file)
 {
 	struct cpu_map *cpus = NULL;
-	FILE *onlnf;
 	int nr_cpus = 0;
 	int *tmp_cpus = NULL, *tmp;
 	int max_entries = 0;
 	int n, cpu, prev;
 	char sep;
 
-	onlnf = fopen("/sys/devices/system/cpu/online", "r");
-	if (!onlnf)
-		return cpu_map__default_new();
-
 	sep = 0;
 	prev = -1;
 	for (;;) {
-		n = fscanf(onlnf, "%u%c", &cpu, &sep);
+		n = fscanf(file, "%u%c", &cpu, &sep);
 		if (n <= 0)
 			break;
 		if (prev >= 0) {
@@ -95,6 +90,19 @@ static struct cpu_map *cpu_map__read_all_cpu_map(void)
 		cpus = cpu_map__default_new();
 out_free_tmp:
 	free(tmp_cpus);
+	return cpus;
+}
+
+static struct cpu_map *cpu_map__read_all_cpu_map(void)
+{
+	struct cpu_map *cpus = NULL;
+	FILE *onlnf;
+
+	onlnf = fopen("/sys/devices/system/cpu/online", "r");
+	if (!onlnf)
+		return cpu_map__default_new();
+
+	cpus = cpu_map__read(onlnf);
 	fclose(onlnf);
 	return cpus;
 }
@@ -164,6 +172,17 @@ invalid:
 	free(tmp_cpus);
 out:
 	return cpus;
+}
+
+size_t cpu_map__fprintf(struct cpu_map *map, FILE *fp)
+{
+	int i;
+	size_t printed = fprintf(fp, "%d cpu%s: ",
+				 map->nr, map->nr > 1 ? "s" : "");
+	for (i = 0; i < map->nr; ++i)
+		printed += fprintf(fp, "%s%d", i ? ", " : "", map->map[i]);
+
+	return printed + fprintf(fp, "\n");
 }
 
 struct cpu_map *cpu_map__dummy_new(void)

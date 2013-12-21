@@ -29,6 +29,7 @@
 #include <linux/random.h>
 #include <scsi/fc/fc_fcoe.h>
 #include <scsi/libfc.h>
+#include <scsi/fcoe_sysfs.h>
 
 #define FCOE_MAX_CMD_LEN	16	/* Supported CDB length */
 
@@ -147,6 +148,7 @@ struct fcoe_ctlr {
 	u8 map_dest;
 	u8 spma;
 	u8 probe_tries;
+	u8 priority;
 	u8 dest_addr[ETH_ALEN];
 	u8 ctl_src_addr[ETH_ALEN];
 
@@ -158,13 +160,30 @@ struct fcoe_ctlr {
 };
 
 /**
+ * fcoe_ctlr_priv() - Return the private data from a fcoe_ctlr
+ * @cltr: The fcoe_ctlr whose private data will be returned
+ */
+static inline void *fcoe_ctlr_priv(const struct fcoe_ctlr *ctlr)
+{
+	return (void *)(ctlr + 1);
+}
+
+#define fcoe_ctlr_to_ctlr_dev(x)					\
+	(struct fcoe_ctlr_device *)(((struct fcoe_ctlr_device *)(x)) - 1)
+
+/**
  * struct fcoe_fcf - Fibre-Channel Forwarder
  * @list:	 list linkage
+ * @event_work:  Work for FC Transport actions queue
+ * @event:       The event to be processed
+ * @fip:         The controller that the FCF was discovered on
+ * @fcf_dev:     The associated fcoe_fcf_device instance
  * @time:	 system time (jiffies) when an advertisement was last received
  * @switch_name: WWN of switch from advertisement
  * @fabric_name: WWN of fabric from advertisement
  * @fc_map:	 FC_MAP value from advertisement
- * @fcf_mac:	 Ethernet address of the FCF
+ * @fcf_mac:	 Ethernet address of the FCF for FIP traffic
+ * @fcoe_mac:	 Ethernet address of the FCF for FCoE traffic
  * @vfid:	 virtual fabric ID
  * @pri:	 selection priority, smaller values are better
  * @flogi_sent:	 current FLOGI sent to this FCF
@@ -180,6 +199,9 @@ struct fcoe_ctlr {
  */
 struct fcoe_fcf {
 	struct list_head list;
+	struct work_struct event_work;
+	struct fcoe_ctlr *fip;
+	struct fcoe_fcf_device *fcf_dev;
 	unsigned long time;
 
 	u64 switch_name;
@@ -187,6 +209,7 @@ struct fcoe_fcf {
 	u32 fc_map;
 	u16 vfid;
 	u8 fcf_mac[ETH_ALEN];
+	u8 fcoe_mac[ETH_ALEN];
 
 	u8 pri;
 	u8 flogi_sent;
@@ -194,6 +217,9 @@ struct fcoe_fcf {
 	u32 fka_period;
 	u8 fd_flags:1;
 };
+
+#define fcoe_fcf_to_fcf_dev(x)			\
+	((x)->fcf_dev)
 
 /**
  * struct fcoe_rport - VN2VN remote port
@@ -229,6 +255,11 @@ int fcoe_libfc_config(struct fc_lport *, struct fcoe_ctlr *,
 		      const struct libfc_function_template *, int init_fcp);
 u32 fcoe_fc_crc(struct fc_frame *fp);
 int fcoe_start_io(struct sk_buff *skb);
+int fcoe_get_wwn(struct net_device *netdev, u64 *wwn, int type);
+void __fcoe_get_lesb(struct fc_lport *lport, struct fc_els_lesb *fc_lesb,
+		     struct net_device *netdev);
+void fcoe_wwn_to_str(u64 wwn, char *buf, int len);
+int fcoe_validate_vport_create(struct fc_vport *vport);
 
 /**
  * is_fip_mode() - returns true if FIP mode selected.
@@ -322,6 +353,10 @@ void fcoe_check_wait_queue(struct fc_lport *lport, struct sk_buff *skb);
 void fcoe_queue_timer(ulong lport);
 int fcoe_get_paged_crc_eof(struct sk_buff *skb, int tlen,
 			   struct fcoe_percpu_s *fps);
+
+/* FCoE Sysfs helpers */
+void fcoe_fcf_get_selected(struct fcoe_fcf_device *);
+void fcoe_ctlr_get_fip_mode(struct fcoe_ctlr_device *);
 
 /**
  * struct netdev_list

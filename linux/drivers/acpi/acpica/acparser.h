@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2011, Intel Corp.
+ * Copyright (C) 2000 - 2012, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -150,8 +150,7 @@ u8 acpi_ps_has_completed_scope(struct acpi_parse_state *parser_state);
 
 void
 acpi_ps_pop_scope(struct acpi_parse_state *parser_state,
-		  union acpi_parse_object **op,
-		  u32 * arg_list, u32 * arg_count);
+		  union acpi_parse_object **op, u32 *arg_list, u32 *arg_count);
 
 acpi_status
 acpi_ps_push_scope(struct acpi_parse_state *parser_state,

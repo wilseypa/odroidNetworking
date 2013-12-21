@@ -154,12 +154,18 @@ static void print_amp_vals(struct snd_info_buffer *buffer,
 
 static void print_pcm_rates(struct snd_info_buffer *buffer, unsigned int pcm)
 {
-	char buf[SND_PRINT_RATES_ADVISED_BUFSIZE];
+	static unsigned int rates[] = {
+		8000, 11025, 16000, 22050, 32000, 44100, 48000, 88200,
+		96000, 176400, 192000, 384000
+	};
+	int i;
 
 	pcm &= AC_SUPPCM_RATES;
 	snd_iprintf(buffer, "    rates [0x%x]:", pcm);
-	snd_print_pcm_rates(pcm, buf, sizeof(buf));
-	snd_iprintf(buffer, "%s\n", buf);
+	for (i = 0; i < ARRAY_SIZE(rates); i++)
+		if (pcm & (1 << i))
+			snd_iprintf(buffer,  " %d", rates[i]);
+	snd_iprintf(buffer, "\n");
 }
 
 static void print_pcm_bits(struct snd_info_buffer *buffer, unsigned int pcm)
@@ -396,6 +402,9 @@ static void print_digital_conv(struct snd_info_buffer *buffer,
 {
 	unsigned int digi1 = snd_hda_codec_read(codec, nid, 0,
 						AC_VERB_GET_DIGI_CONVERT_1, 0);
+	unsigned char digi2 = digi1 >> 8;
+	unsigned char digi3 = digi1 >> 16;
+
 	snd_iprintf(buffer, "  Digital:");
 	if (digi1 & AC_DIG1_ENABLE)
 		snd_iprintf(buffer, " Enabled");
@@ -413,17 +422,21 @@ static void print_digital_conv(struct snd_info_buffer *buffer,
 		snd_iprintf(buffer, " Pro");
 	if (digi1 & AC_DIG1_LEVEL)
 		snd_iprintf(buffer, " GenLevel");
+	if (digi3 & AC_DIG3_KAE)
+		snd_iprintf(buffer, " KAE");
 	snd_iprintf(buffer, "\n");
 	snd_iprintf(buffer, "  Digital category: 0x%x\n",
-		    (digi1 >> 8) & AC_DIG2_CC);
+		    digi2 & AC_DIG2_CC);
+	snd_iprintf(buffer, "  IEC Coding Type: 0x%x\n",
+			digi3 & AC_DIG3_ICT);
 }
 
 static const char *get_pwr_state(u32 state)
 {
-	static const char * const buf[4] = {
-		"D0", "D1", "D2", "D3"
+	static const char * const buf[] = {
+		"D0", "D1", "D2", "D3", "D3cold"
 	};
-	if (state < 4)
+	if (state < ARRAY_SIZE(buf))
 		return buf[state];
 	return "UNKNOWN";
 }
@@ -445,14 +458,21 @@ static void print_power_state(struct snd_info_buffer *buffer,
 	int sup = snd_hda_param_read(codec, nid, AC_PAR_POWER_STATE);
 	int pwr = snd_hda_codec_read(codec, nid, 0,
 				     AC_VERB_GET_POWER_STATE, 0);
-	if (sup)
+	if (sup != -1)
 		snd_iprintf(buffer, "  Power states: %s\n",
 			    bits_names(sup, names, ARRAY_SIZE(names)));
 
-	snd_iprintf(buffer, "  Power: setting=%s, actual=%s\n",
+	snd_iprintf(buffer, "  Power: setting=%s, actual=%s",
 		    get_pwr_state(pwr & AC_PWRST_SETTING),
 		    get_pwr_state((pwr & AC_PWRST_ACTUAL) >>
 				  AC_PWRST_ACTUAL_SHIFT));
+	if (pwr & AC_PWRST_ERROR)
+		snd_iprintf(buffer, ", Error");
+	if (pwr & AC_PWRST_CLK_STOP_OK)
+		snd_iprintf(buffer, ", Clock-stop-OK");
+	if (pwr & AC_PWRST_SETTING_RESET)
+		snd_iprintf(buffer, ", Setting-reset");
+	snd_iprintf(buffer, "\n");
 }
 
 static void print_unsol_cap(struct snd_info_buffer *buffer,
@@ -638,16 +658,23 @@ static void print_codec_info(struct snd_info_entry *entry,
 			wid_caps |= AC_WCAP_CONN_LIST;
 
 		if (wid_caps & AC_WCAP_CONN_LIST)
-			conn_len = snd_hda_get_connections(codec, nid, conn,
+			conn_len = snd_hda_get_raw_connections(codec, nid, conn,
 							   HDA_MAX_CONNECTIONS);
 
 		if (wid_caps & AC_WCAP_IN_AMP) {
 			snd_iprintf(buffer, "  Amp-In caps: ");
 			print_amp_caps(buffer, codec, nid, HDA_INPUT);
 			snd_iprintf(buffer, "  Amp-In vals: ");
-			print_amp_vals(buffer, codec, nid, HDA_INPUT,
-				       wid_caps & AC_WCAP_STEREO,
-				       wid_type == AC_WID_PIN ? 1 : conn_len);
+			if (wid_type == AC_WID_PIN ||
+			    (codec->single_adc_amp &&
+			     wid_type == AC_WID_AUD_IN))
+				print_amp_vals(buffer, codec, nid, HDA_INPUT,
+					       wid_caps & AC_WCAP_STEREO,
+					       1);
+			else
+				print_amp_vals(buffer, codec, nid, HDA_INPUT,
+					       wid_caps & AC_WCAP_STEREO,
+					       conn_len);
 		}
 		if (wid_caps & AC_WCAP_OUT_AMP) {
 			snd_iprintf(buffer, "  Amp-Out caps: ");

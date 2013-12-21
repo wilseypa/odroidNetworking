@@ -13,6 +13,7 @@
 #include <linux/fs.h>
 #include <linux/log2.h>
 #include <linux/mount.h>
+#include <linux/magic.h>
 #include <linux/pipe_fs_i.h>
 #include <linux/uio.h>
 #include <linux/highmem.h>
@@ -223,14 +224,14 @@ static void anon_pipe_buf_release(struct pipe_inode_info *pipe,
  *	and the caller has to be careful not to fault before calling
  *	the unmap function.
  *
- *	Note that this function occupies KM_USER0 if @atomic != 0.
+ *	Note that this function calls kmap_atomic() if @atomic != 0.
  */
 void *generic_pipe_buf_map(struct pipe_inode_info *pipe,
 			   struct pipe_buffer *buf, int atomic)
 {
 	if (atomic) {
 		buf->flags |= PIPE_BUF_FLAG_ATOMIC;
-		return kmap_atomic(buf->page, KM_USER0);
+		return kmap_atomic(buf->page);
 	}
 
 	return kmap(buf->page);
@@ -251,7 +252,7 @@ void generic_pipe_buf_unmap(struct pipe_inode_info *pipe,
 {
 	if (buf->flags & PIPE_BUF_FLAG_ATOMIC) {
 		buf->flags &= ~PIPE_BUF_FLAG_ATOMIC;
-		kunmap_atomic(map_data, KM_USER0);
+		kunmap_atomic(map_data);
 	} else
 		kunmap(buf->page);
 }
@@ -587,14 +588,14 @@ redo1:
 			iov_fault_in_pages_read(iov, chars);
 redo2:
 			if (atomic)
-				src = kmap_atomic(page, KM_USER0);
+				src = kmap_atomic(page);
 			else
 				src = kmap(page);
 
 			error = pipe_iov_copy_from_user(src, iov, chars,
 							atomic);
 			if (atomic)
-				kunmap_atomic(src, KM_USER0);
+				kunmap_atomic(src);
 			else
 				kunmap(page);
 
@@ -653,8 +654,11 @@ out:
 		wake_up_interruptible_sync_poll(&pipe->wait, POLLIN | POLLRDNORM);
 		kill_fasync(&pipe->fasync_readers, SIGIO, POLL_IN);
 	}
-	if (ret > 0)
-		file_update_time(filp);
+	if (ret > 0) {
+		int err = file_update_time(filp);
+		if (err)
+			ret = err;
+	}
 	return ret;
 }
 
@@ -692,7 +696,7 @@ static long pipe_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
 			return put_user(count, (int __user *)arg);
 		default:
-			return -EINVAL;
+			return -ENOIOCTLCMD;
 	}
 }
 
@@ -978,7 +982,7 @@ static const struct dentry_operations pipefs_dentry_operations = {
 
 static struct inode * get_pipe_inode(void)
 {
-	struct inode *inode = new_inode(pipe_mnt->mnt_sb);
+	struct inode *inode = new_inode_pseudo(pipe_mnt->mnt_sb);
 	struct pipe_inode_info *pipe;
 
 	if (!inode)
@@ -1015,18 +1019,16 @@ fail_inode:
 	return NULL;
 }
 
-struct file *create_write_pipe(int flags)
+int create_pipe_files(struct file **res, int flags)
 {
 	int err;
-	struct inode *inode;
+	struct inode *inode = get_pipe_inode();
 	struct file *f;
 	struct path path;
-	struct qstr name = { .name = "" };
+	static struct qstr name = { .name = "" };
 
-	err = -ENFILE;
-	inode = get_pipe_inode();
 	if (!inode)
-		goto err;
+		return -ENFILE;
 
 	err = -ENOMEM;
 	path.dentry = d_alloc_pseudo(pipe_mnt->mnt_sb, &name);
@@ -1040,62 +1042,42 @@ struct file *create_write_pipe(int flags)
 	f = alloc_file(&path, FMODE_WRITE, &write_pipefifo_fops);
 	if (!f)
 		goto err_dentry;
-	f->f_mapping = inode->i_mapping;
 
 	f->f_flags = O_WRONLY | (flags & (O_NONBLOCK | O_DIRECT));
-	f->f_version = 0;
 
-	return f;
+	res[0] = alloc_file(&path, FMODE_READ, &read_pipefifo_fops);
+	if (!res[0])
+		goto err_file;
 
- err_dentry:
+	path_get(&path);
+	res[0]->f_flags = O_RDONLY | (flags & O_NONBLOCK);
+	res[1] = f;
+	return 0;
+
+err_file:
+	put_filp(f);
+err_dentry:
 	free_pipe_info(inode);
 	path_put(&path);
-	return ERR_PTR(err);
+	return err;
 
- err_inode:
+err_inode:
 	free_pipe_info(inode);
 	iput(inode);
- err:
-	return ERR_PTR(err);
+	return err;
 }
 
-void free_write_pipe(struct file *f)
+static int __do_pipe_flags(int *fd, struct file **files, int flags)
 {
-	free_pipe_info(f->f_dentry->d_inode);
-	path_put(&f->f_path);
-	put_filp(f);
-}
-
-struct file *create_read_pipe(struct file *wrf, int flags)
-{
-	/* Grab pipe from the writer */
-	struct file *f = alloc_file(&wrf->f_path, FMODE_READ,
-				    &read_pipefifo_fops);
-	if (!f)
-		return ERR_PTR(-ENFILE);
-
-	path_get(&wrf->f_path);
-	f->f_flags = O_RDONLY | (flags & O_NONBLOCK);
-
-	return f;
-}
-
-int do_pipe_flags(int *fd, int flags)
-{
-	struct file *fw, *fr;
 	int error;
 	int fdw, fdr;
 
 	if (flags & ~(O_CLOEXEC | O_NONBLOCK | O_DIRECT))
 		return -EINVAL;
 
-	fw = create_write_pipe(flags);
-	if (IS_ERR(fw))
-		return PTR_ERR(fw);
-	fr = create_read_pipe(fw, flags);
-	error = PTR_ERR(fr);
-	if (IS_ERR(fr))
-		goto err_write_pipe;
+	error = create_pipe_files(files, flags);
+	if (error)
+		return error;
 
 	error = get_unused_fd_flags(flags);
 	if (error < 0)
@@ -1108,20 +1090,26 @@ int do_pipe_flags(int *fd, int flags)
 	fdw = error;
 
 	audit_fd_pair(fdr, fdw);
-	fd_install(fdr, fr);
-	fd_install(fdw, fw);
 	fd[0] = fdr;
 	fd[1] = fdw;
-
 	return 0;
 
  err_fdr:
 	put_unused_fd(fdr);
  err_read_pipe:
-	path_put(&fr->f_path);
-	put_filp(fr);
- err_write_pipe:
-	free_write_pipe(fw);
+	fput(files[0]);
+	fput(files[1]);
+	return error;
+}
+
+int do_pipe_flags(int *fd, int flags)
+{
+	struct file *files[2];
+	int error = __do_pipe_flags(fd, files, flags);
+	if (!error) {
+		fd_install(fd[0], files[0]);
+		fd_install(fd[1], files[1]);
+	}
 	return error;
 }
 
@@ -1131,15 +1119,21 @@ int do_pipe_flags(int *fd, int flags)
  */
 SYSCALL_DEFINE2(pipe2, int __user *, fildes, int, flags)
 {
+	struct file *files[2];
 	int fd[2];
 	int error;
 
-	error = do_pipe_flags(fd, flags);
+	error = __do_pipe_flags(fd, files, flags);
 	if (!error) {
-		if (copy_to_user(fildes, fd, sizeof(fd))) {
-			sys_close(fd[0]);
-			sys_close(fd[1]);
+		if (unlikely(copy_to_user(fildes, fd, sizeof(fd)))) {
+			fput(files[0]);
+			fput(files[1]);
+			put_unused_fd(fd[0]);
+			put_unused_fd(fd[1]);
 			error = -EFAULT;
+		} else {
+			fd_install(fd[0], files[0]);
+			fd_install(fd[1], files[1]);
 		}
 	}
 	return error;
@@ -1167,7 +1161,7 @@ static long pipe_set_size(struct pipe_inode_info *pipe, unsigned long nr_pages)
 	if (nr_pages < pipe->nrbufs)
 		return -EBUSY;
 
-	bufs = kcalloc(nr_pages, sizeof(struct pipe_buffer), GFP_KERNEL);
+	bufs = kcalloc(nr_pages, sizeof(*bufs), GFP_KERNEL | __GFP_NOWARN);
 	if (unlikely(!bufs))
 		return -ENOMEM;
 
@@ -1284,6 +1278,7 @@ out:
 
 static const struct super_operations pipefs_ops = {
 	.destroy_inode = free_inode_nonrcu,
+	.statfs = simple_statfs,
 };
 
 /*
@@ -1319,11 +1314,4 @@ static int __init init_pipe_fs(void)
 	return err;
 }
 
-static void __exit exit_pipe_fs(void)
-{
-	unregister_filesystem(&pipe_fs_type);
-	mntput(pipe_mnt);
-}
-
 fs_initcall(init_pipe_fs);
-module_exit(exit_pipe_fs);

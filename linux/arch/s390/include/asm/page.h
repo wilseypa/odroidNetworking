@@ -1,8 +1,6 @@
 /*
- *  include/asm-s390/page.h
- *
  *  S390 version
- *    Copyright (C) 1999,2000 IBM Deutschland Entwicklung GmbH, IBM Corporation
+ *    Copyright IBM Corp. 1999, 2000
  *    Author(s): Hartmut Penner (hp@de.ibm.com)
  */
 
@@ -32,12 +30,22 @@
 #include <asm/setup.h>
 #ifndef __ASSEMBLY__
 
+void storage_key_init_range(unsigned long start, unsigned long end);
+
+static unsigned long pfmf(unsigned long function, unsigned long address)
+{
+	asm volatile(
+		"	.insn	rre,0xb9af0000,%[function],%[address]"
+		: [address] "+a" (address)
+		: [function] "d" (function)
+		: "memory");
+	return address;
+}
+
 static inline void clear_page(void *page)
 {
 	if (MACHINE_HAS_PFMF) {
-		asm volatile(
-			"	.insn	rre,0xb9af0000,%0,%1"
-			: : "d" (0x10000), "a" (page) : "memory", "cc");
+		pfmf(0x10000, (unsigned long)page);
 	} else {
 		register unsigned long reg1 asm ("1") = 0;
 		register void *reg2 asm ("2") = page;
@@ -152,6 +160,9 @@ static inline int page_reset_referenced(unsigned long addr)
  * race against modification of the referenced bit. This function
  * should therefore only be called if it is not mapped in any
  * address space.
+ *
+ * Note that the bit gets set whenever page content is changed. That means
+ * also when the page is modified by DMA or from inside the kernel.
  */
 #define __HAVE_ARCH_PAGE_TEST_AND_CLEAR_DIRTY
 static inline int page_test_and_clear_dirty(unsigned long pfn, int mapped)
@@ -177,6 +188,7 @@ static inline int page_test_and_clear_young(unsigned long pfn)
 struct page;
 void arch_free_page(struct page *page, int order);
 void arch_alloc_page(struct page *page, int order);
+void arch_set_page_states(int make_stable);
 
 static inline int devmem_is_allowed(unsigned long pfn)
 {

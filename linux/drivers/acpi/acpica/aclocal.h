@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2011, Intel Corp.
+ * Copyright (C) 2000 - 2012, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -53,7 +53,7 @@ typedef u32 acpi_mutex_handle;
 
 /* Total number of aml opcodes defined */
 
-#define AML_NUM_OPCODES                 0x7F
+#define AML_NUM_OPCODES                 0x81
 
 /* Forward declarations */
 
@@ -249,19 +249,23 @@ struct acpi_create_field_info {
 	struct acpi_namespace_node *field_node;
 	struct acpi_namespace_node *register_node;
 	struct acpi_namespace_node *data_register_node;
+	struct acpi_namespace_node *connection_node;
+	u8 *resource_buffer;
 	u32 bank_value;
 	u32 field_bit_position;
 	u32 field_bit_length;
+	u16 resource_length;
 	u8 field_flags;
 	u8 attribute;
 	u8 field_type;
+	u8 access_length;
 };
 
 typedef
-acpi_status(*ACPI_INTERNAL_METHOD) (struct acpi_walk_state * walk_state);
+acpi_status(*acpi_internal_method) (struct acpi_walk_state * walk_state);
 
 /*
- * Bitmapped ACPI types.  Used internally only
+ * Bitmapped ACPI types. Used internally only
  */
 #define ACPI_BTYPE_ANY                  0x00000000
 #define ACPI_BTYPE_INTEGER              0x00000001
@@ -295,7 +299,7 @@ acpi_status(*ACPI_INTERNAL_METHOD) (struct acpi_walk_state * walk_state);
  * Information structure for ACPI predefined names.
  * Each entry in the table contains the following items:
  *
- * Name                 - The ACPI reserved name
+ * name                 - The ACPI reserved name
  * param_count          - Number of arguments to the method
  * expected_return_btypes - Allowed type(s) for the return value
  */
@@ -315,7 +319,8 @@ struct acpi_name_info {
 
 /*
  * Used for ACPI_PTYPE1_FIXED, ACPI_PTYPE1_VAR, ACPI_PTYPE2,
- * ACPI_PTYPE2_MIN, ACPI_PTYPE2_PKG_COUNT, ACPI_PTYPE2_COUNT
+ * ACPI_PTYPE2_MIN, ACPI_PTYPE2_PKG_COUNT, ACPI_PTYPE2_COUNT,
+ * ACPI_PTYPE2_FIX_VAR
  */
 struct acpi_package_info {
 	u8 type;
@@ -365,6 +370,7 @@ struct acpi_predefined_data {
 /* Defines for Flags field above */
 
 #define ACPI_OBJECT_REPAIRED    1
+#define ACPI_OBJECT_WRAPPED     2
 
 /*
  * Bitmapped return value types
@@ -398,6 +404,13 @@ struct acpi_gpe_handler_info {
 	u8 originally_enabled;  /* True if GPE was originally enabled */
 };
 
+/* Notify info for implicit notify, multiple device objects */
+
+struct acpi_gpe_notify_info {
+	struct acpi_namespace_node *device_node;	/* Device to be notified */
+	struct acpi_gpe_notify_info *next;
+};
+
 struct acpi_gpe_notify_object {
 	struct acpi_namespace_node *node;
 	struct acpi_gpe_notify_object *next;
@@ -406,7 +419,7 @@ struct acpi_gpe_notify_object {
 union acpi_gpe_dispatch_info {
 	struct acpi_namespace_node *method_node;	/* Method node for this GPE level */
 	struct acpi_gpe_handler_info *handler;  /* Installed GPE handler */
-	struct acpi_gpe_notify_object device;   /* List of _PRW devices for implicit notify */
+	struct acpi_gpe_notify_info *notify_list;	/* List of _PRW devices for implicit notifies */
 };
 
 /*
@@ -414,7 +427,7 @@ union acpi_gpe_dispatch_info {
  * NOTE: Important to keep this struct as small as possible.
  */
 struct acpi_gpe_event_info {
-	union acpi_gpe_dispatch_info dispatch;	/* Either Method or Handler */
+	union acpi_gpe_dispatch_info dispatch;	/* Either Method, Handler, or notify_list */
 	struct acpi_gpe_register_info *register_info;	/* Backpointer to register info */
 	u8 flags;		/* Misc info about this GPE */
 	u8 gpe_number;		/* This GPE */
@@ -473,8 +486,10 @@ struct acpi_gpe_device_info {
 	struct acpi_namespace_node *gpe_device;
 };
 
-typedef acpi_status(*acpi_gpe_callback) (struct acpi_gpe_xrupt_info *gpe_xrupt_info,
-		struct acpi_gpe_block_info *gpe_block, void *context);
+typedef acpi_status(*acpi_gpe_callback) (struct acpi_gpe_xrupt_info *
+					 gpe_xrupt_info,
+					 struct acpi_gpe_block_info *gpe_block,
+					 void *context);
 
 /* Information about each particular fixed event */
 
@@ -569,7 +584,7 @@ struct acpi_pscope_state {
 };
 
 /*
- * Thread state - one per thread across multiple walk states.  Multiple walk
+ * Thread state - one per thread across multiple walk states. Multiple walk
  * states are created when there are nested control methods executing.
  */
 struct acpi_thread_state {
@@ -594,13 +609,22 @@ acpi_status(*acpi_parse_downwards) (struct acpi_walk_state * walk_state,
 
 typedef acpi_status(*acpi_parse_upwards) (struct acpi_walk_state * walk_state);
 
+/* Global handlers for AML Notifies */
+
+struct acpi_global_notify_handler {
+	acpi_notify_handler handler;
+	void *context;
+};
+
 /*
  * Notify info - used to pass info to the deferred notify
  * handler/dispatcher.
  */
 struct acpi_notify_info {
-	ACPI_STATE_COMMON struct acpi_namespace_node *node;
-	union acpi_operand_object *handler_obj;
+	ACPI_STATE_COMMON u8 handler_list_id;
+	struct acpi_namespace_node *node;
+	union acpi_operand_object *handler_list_head;
+	struct acpi_global_notify_handler *global;
 };
 
 /* Generic state is union of structs above */
@@ -623,7 +647,16 @@ union acpi_generic_state {
  *
  ****************************************************************************/
 
-typedef acpi_status(*ACPI_EXECUTE_OP) (struct acpi_walk_state * walk_state);
+typedef acpi_status(*acpi_execute_op) (struct acpi_walk_state * walk_state);
+
+/* Address Range info block */
+
+struct acpi_address_range {
+	struct acpi_address_range *next;
+	struct acpi_namespace_node *region_node;
+	acpi_physical_address start_address;
+	acpi_physical_address end_address;
+};
 
 /*****************************************************************************
  *
@@ -676,15 +709,18 @@ union acpi_parse_value {
 	u8                              disasm_opcode;  /* Subtype used for disassembly */\
 	char                            aml_op_name[16])	/* Op name (debug only) */
 
-#define ACPI_DASM_BUFFER                0x00
-#define ACPI_DASM_RESOURCE              0x01
-#define ACPI_DASM_STRING                0x02
-#define ACPI_DASM_UNICODE               0x03
-#define ACPI_DASM_EISAID                0x04
-#define ACPI_DASM_MATCHOP               0x05
-#define ACPI_DASM_LNOT_PREFIX           0x06
-#define ACPI_DASM_LNOT_SUFFIX           0x07
-#define ACPI_DASM_IGNORE                0x08
+/* Flags for disasm_flags field above */
+
+#define ACPI_DASM_BUFFER                0x00	/* Buffer is a simple data buffer */
+#define ACPI_DASM_RESOURCE              0x01	/* Buffer is a Resource Descriptor */
+#define ACPI_DASM_STRING                0x02	/* Buffer is a ASCII string */
+#define ACPI_DASM_UNICODE               0x03	/* Buffer is a Unicode string */
+#define ACPI_DASM_PLD_METHOD            0x04	/* Buffer is a _PLD method bit-packed buffer */
+#define ACPI_DASM_EISAID                0x05	/* Integer is an EISAID */
+#define ACPI_DASM_MATCHOP               0x06	/* Parent opcode is a Match() operator */
+#define ACPI_DASM_LNOT_PREFIX           0x07	/* Start of a Lnot_equal (etc.) pair of opcodes */
+#define ACPI_DASM_LNOT_SUFFIX           0x08	/* End  of a Lnot_equal (etc.) pair of opcodes */
+#define ACPI_DASM_IGNORE                0x09	/* Not used at this time */
 
 /*
  * Generic operation (for example:  If, While, Store)
@@ -703,7 +739,7 @@ struct acpi_parse_obj_named {
 	u32 name;		/* 4-byte name or zero if no name */
 };
 
-/* This version is used by the i_aSL compiler only */
+/* This version is used by the iASL compiler only */
 
 #define ACPI_MAX_PARSEOP_NAME   20
 
@@ -772,6 +808,7 @@ struct acpi_parse_state {
 #define ACPI_PARSEOP_IGNORE             0x01
 #define ACPI_PARSEOP_PARAMLIST          0x02
 #define ACPI_PARSEOP_EMPTY_TERMLIST     0x04
+#define ACPI_PARSEOP_PREDEF_CHECKED     0x08
 #define ACPI_PARSEOP_SPECIAL            0x10
 
 /*****************************************************************************
@@ -900,6 +937,7 @@ struct acpi_bit_register_info {
 #define ACPI_OSI_WIN_VISTA_SP1          0x09
 #define ACPI_OSI_WIN_VISTA_SP2          0x0A
 #define ACPI_OSI_WIN_7                  0x0B
+#define ACPI_OSI_WIN_8                  0x0C
 
 #define ACPI_ALWAYS_ILLEGAL             0x00
 
@@ -951,7 +989,7 @@ struct acpi_port_info {
 #define ACPI_RESOURCE_NAME_END_DEPENDENT        0x38
 #define ACPI_RESOURCE_NAME_IO                   0x40
 #define ACPI_RESOURCE_NAME_FIXED_IO             0x48
-#define ACPI_RESOURCE_NAME_RESERVED_S1          0x50
+#define ACPI_RESOURCE_NAME_FIXED_DMA            0x50
 #define ACPI_RESOURCE_NAME_RESERVED_S2          0x58
 #define ACPI_RESOURCE_NAME_RESERVED_S3          0x60
 #define ACPI_RESOURCE_NAME_RESERVED_S4          0x68
@@ -973,7 +1011,9 @@ struct acpi_port_info {
 #define ACPI_RESOURCE_NAME_EXTENDED_IRQ         0x89
 #define ACPI_RESOURCE_NAME_ADDRESS64            0x8A
 #define ACPI_RESOURCE_NAME_EXTENDED_ADDRESS64   0x8B
-#define ACPI_RESOURCE_NAME_LARGE_MAX            0x8B
+#define ACPI_RESOURCE_NAME_GPIO                 0x8C
+#define ACPI_RESOURCE_NAME_SERIAL_BUS           0x8E
+#define ACPI_RESOURCE_NAME_LARGE_MAX            0x8E
 
 /*****************************************************************************
  *
@@ -990,8 +1030,10 @@ struct acpi_port_info {
  ****************************************************************************/
 
 struct acpi_db_method_info {
+	acpi_handle method;
 	acpi_handle main_thread_gate;
 	acpi_handle thread_complete_gate;
+	acpi_handle info_gate;
 	acpi_thread_id *threads;
 	u32 num_threads;
 	u32 num_created;
@@ -1002,6 +1044,7 @@ struct acpi_db_method_info {
 	u32 num_loops;
 	char pathname[128];
 	char **args;
+	acpi_object_type *types;
 
 	/*
 	 * Arguments to be passed to method for the command
@@ -1057,5 +1100,19 @@ struct acpi_debug_mem_block {
 #define ACPI_MEM_LIST_NSNODE            1
 #define ACPI_MEM_LIST_MAX               1
 #define ACPI_NUM_MEM_LISTS              2
+
+/*****************************************************************************
+ *
+ * Info/help support
+ *
+ ****************************************************************************/
+
+struct ah_predefined_name {
+	char *name;
+	char *description;
+#ifndef ACPI_ASL_COMPILER
+	char *action;
+#endif
+};
 
 #endif				/* __ACLOCAL_H__ */

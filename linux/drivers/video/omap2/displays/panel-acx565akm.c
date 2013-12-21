@@ -487,6 +487,13 @@ static struct omap_video_timings acx_panel_timings = {
 	.vfp		= 3,
 	.vsw		= 3,
 	.vbp		= 4,
+
+	.vsync_level	= OMAPDSS_SIG_ACTIVE_LOW,
+	.hsync_level	= OMAPDSS_SIG_ACTIVE_LOW,
+
+	.data_pclk_edge	= OMAPDSS_DRIVE_SIG_RISING_EDGE,
+	.de_level	= OMAPDSS_SIG_ACTIVE_HIGH,
+	.sync_pclk_edge	= OMAPDSS_DRIVE_SIG_OPPOSITE_EDGES,
 };
 
 static int acx_panel_probe(struct omap_dss_device *dssdev)
@@ -498,8 +505,7 @@ static int acx_panel_probe(struct omap_dss_device *dssdev)
 	struct backlight_properties props;
 
 	dev_dbg(&dssdev->dev, "%s\n", __func__);
-	dssdev->panel.config = OMAP_DSS_LCD_TFT | OMAP_DSS_LCD_IVS |
-					OMAP_DSS_LCD_IHS;
+
 	/* FIXME AC bias ? */
 	dssdev->panel.timings = acx_panel_timings;
 
@@ -532,6 +538,7 @@ static int acx_panel_probe(struct omap_dss_device *dssdev)
 
 	/*------- Backlight control --------*/
 
+	memset(&props, 0, sizeof(props));
 	props.fb_blank = FB_BLANK_UNBLANK;
 	props.power = FB_BLANK_UNBLANK;
 	props.type = BACKLIGHT_RAW;
@@ -592,6 +599,9 @@ static int acx_panel_power_on(struct omap_dss_device *dssdev)
 		return 0;
 
 	mutex_lock(&md->mutex);
+
+	omapdss_sdi_set_timings(dssdev, &dssdev->panel.timings);
+	omapdss_sdi_set_datapairs(dssdev, dssdev->phy.sdi.datapairs);
 
 	r = omapdss_sdi_display_enable(dssdev);
 	if (r) {
@@ -700,48 +710,12 @@ static void acx_panel_disable(struct omap_dss_device *dssdev)
 	dssdev->state = OMAP_DSS_DISPLAY_DISABLED;
 }
 
-static int acx_panel_suspend(struct omap_dss_device *dssdev)
-{
-	dev_dbg(&dssdev->dev, "%s\n", __func__);
-	acx_panel_power_off(dssdev);
-	dssdev->state = OMAP_DSS_DISPLAY_SUSPENDED;
-	return 0;
-}
-
-static int acx_panel_resume(struct omap_dss_device *dssdev)
-{
-	int r;
-
-	dev_dbg(&dssdev->dev, "%s\n", __func__);
-	r = acx_panel_power_on(dssdev);
-	if (r)
-		return r;
-
-	dssdev->state = OMAP_DSS_DISPLAY_ACTIVE;
-	return 0;
-}
-
 static void acx_panel_set_timings(struct omap_dss_device *dssdev,
 		struct omap_video_timings *timings)
 {
-	int r;
-
-	if (dssdev->state == OMAP_DSS_DISPLAY_ACTIVE)
-		omapdss_sdi_display_disable(dssdev);
+	omapdss_sdi_set_timings(dssdev, timings);
 
 	dssdev->panel.timings = *timings;
-
-	if (dssdev->state == OMAP_DSS_DISPLAY_ACTIVE) {
-		r = omapdss_sdi_display_enable(dssdev);
-		if (r)
-			dev_err(&dssdev->dev, "%s enable failed\n", __func__);
-	}
-}
-
-static void acx_panel_get_timings(struct omap_dss_device *dssdev,
-		struct omap_video_timings *timings)
-{
-	*timings = dssdev->panel.timings;
 }
 
 static int acx_panel_check_timings(struct omap_dss_device *dssdev,
@@ -757,11 +731,8 @@ static struct omap_dss_driver acx_panel_driver = {
 
 	.enable		= acx_panel_enable,
 	.disable	= acx_panel_disable,
-	.suspend	= acx_panel_suspend,
-	.resume		= acx_panel_resume,
 
 	.set_timings	= acx_panel_set_timings,
-	.get_timings	= acx_panel_get_timings,
 	.check_timings	= acx_panel_check_timings,
 
 	.get_recommended_bpp = acx_get_recommended_bpp,
@@ -803,25 +774,13 @@ static int acx565akm_spi_remove(struct spi_device *spi)
 static struct spi_driver acx565akm_spi_driver = {
 	.driver = {
 		.name	= "acx565akm",
-		.bus	= &spi_bus_type,
 		.owner	= THIS_MODULE,
 	},
 	.probe	= acx565akm_spi_probe,
-	.remove	= __devexit_p(acx565akm_spi_remove),
+	.remove	= acx565akm_spi_remove,
 };
 
-static int __init acx565akm_init(void)
-{
-	return spi_register_driver(&acx565akm_spi_driver);
-}
-
-static void __exit acx565akm_exit(void)
-{
-	spi_unregister_driver(&acx565akm_spi_driver);
-}
-
-module_init(acx565akm_init);
-module_exit(acx565akm_exit);
+module_spi_driver(acx565akm_spi_driver);
 
 MODULE_AUTHOR("Nokia Corporation");
 MODULE_DESCRIPTION("acx565akm LCD Driver");

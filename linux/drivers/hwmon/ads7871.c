@@ -34,9 +34,11 @@
 #define REG_SER_CONTROL 24 /*Serial Interface Control Register*/
 #define REG_ID		31 /*ID Register*/
 
-/*From figure 17 in the datasheet
-* These bits get ORed with the address to form
-* the instruction byte */
+/*
+ * From figure 17 in the datasheet
+ * These bits get ORed with the address to form
+ * the instruction byte
+ */
 /*Instruction Bit masks*/
 #define INST_MODE_bm	(1<<7)
 #define INST_READ_bm	(1<<6)
@@ -105,8 +107,10 @@ static ssize_t show_voltage(struct device *dev,
 	uint8_t channel, mux_cnv;
 
 	channel = attr->index;
-	/*TODO: add support for conversions
-	 *other than single ended with a gain of 1*/
+	/*
+	 * TODO: add support for conversions
+	 * other than single ended with a gain of 1
+	 */
 	/*MUX_M3_bm forces single ended*/
 	/*This is also where the gain of the PGA would be set*/
 	ads7871_write_reg8(spi, REG_GAIN_MUX,
@@ -114,8 +118,10 @@ static ssize_t show_voltage(struct device *dev,
 
 	ret = ads7871_read_reg8(spi, REG_GAIN_MUX);
 	mux_cnv = ((ret & MUX_CNV_bm)>>MUX_CNV_bv);
-	/*on 400MHz arm9 platform the conversion
-	 *is already done when we do this test*/
+	/*
+	 * on 400MHz arm9 platform the conversion
+	 * is already done when we do this test
+	 */
 	while ((i < 2) && mux_cnv) {
 		i++;
 		ret = ads7871_read_reg8(spi, REG_GAIN_MUX);
@@ -167,7 +173,7 @@ static const struct attribute_group ads7871_group = {
 	.attrs = ads7871_attributes,
 };
 
-static int __devinit ads7871_probe(struct spi_device *spi)
+static int ads7871_probe(struct spi_device *spi)
 {
 	int ret, err;
 	uint8_t val;
@@ -188,22 +194,21 @@ static int __devinit ads7871_probe(struct spi_device *spi)
 	ret = ads7871_read_reg8(spi, REG_OSC_CONTROL);
 
 	dev_dbg(&spi->dev, "REG_OSC_CONTROL write:%x, read:%x\n", val, ret);
-	/*because there is no other error checking on an SPI bus
-	we need to make sure we really have a chip*/
-	if (val != ret) {
-		err = -ENODEV;
-		goto exit;
-	}
+	/*
+	 * because there is no other error checking on an SPI bus
+	 * we need to make sure we really have a chip
+	 */
+	if (val != ret)
+		return -ENODEV;
 
-	pdata = kzalloc(sizeof(struct ads7871_data), GFP_KERNEL);
-	if (!pdata) {
-		err = -ENOMEM;
-		goto exit;
-	}
+	pdata = devm_kzalloc(&spi->dev, sizeof(struct ads7871_data),
+			     GFP_KERNEL);
+	if (!pdata)
+		return -ENOMEM;
 
 	err = sysfs_create_group(&spi->dev.kobj, &ads7871_group);
 	if (err < 0)
-		goto error_free;
+		return err;
 
 	spi_set_drvdata(spi, pdata);
 
@@ -217,45 +222,29 @@ static int __devinit ads7871_probe(struct spi_device *spi)
 
 error_remove:
 	sysfs_remove_group(&spi->dev.kobj, &ads7871_group);
-error_free:
-	kfree(pdata);
-exit:
 	return err;
 }
 
-static int __devexit ads7871_remove(struct spi_device *spi)
+static int ads7871_remove(struct spi_device *spi)
 {
 	struct ads7871_data *pdata = spi_get_drvdata(spi);
 
 	hwmon_device_unregister(pdata->hwmon_dev);
 	sysfs_remove_group(&spi->dev.kobj, &ads7871_group);
-	kfree(pdata);
 	return 0;
 }
 
 static struct spi_driver ads7871_driver = {
 	.driver = {
 		.name = DEVICE_NAME,
-		.bus = &spi_bus_type,
 		.owner = THIS_MODULE,
 	},
 
 	.probe = ads7871_probe,
-	.remove = __devexit_p(ads7871_remove),
+	.remove = ads7871_remove,
 };
 
-static int __init ads7871_init(void)
-{
-	return spi_register_driver(&ads7871_driver);
-}
-
-static void __exit ads7871_exit(void)
-{
-	spi_unregister_driver(&ads7871_driver);
-}
-
-module_init(ads7871_init);
-module_exit(ads7871_exit);
+module_spi_driver(ads7871_driver);
 
 MODULE_AUTHOR("Paul Thomas <pthomas8589@gmail.com>");
 MODULE_DESCRIPTION("TI ADS7871 A/D driver");

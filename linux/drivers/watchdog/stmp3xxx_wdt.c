@@ -6,6 +6,9 @@
  * Copyright 2008 Freescale Semiconductor, Inc. All Rights Reserved.
  * Copyright 2008 Embedded Alley Solutions, Inc All Rights Reserved.
  */
+
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/fs.h>
@@ -14,6 +17,7 @@
 #include <linux/platform_device.h>
 #include <linux/spinlock.h>
 #include <linux/uaccess.h>
+#include <linux/module.h>
 
 #include <mach/platform.h>
 #include <mach/regs-rtc.h>
@@ -31,7 +35,7 @@
 
 static DEFINE_SPINLOCK(stmp3xxx_wdt_io_lock);
 static unsigned long wdt_status;
-static const int nowayout = WATCHDOG_NOWAYOUT;
+static const bool nowayout = WATCHDOG_NOWAYOUT;
 static int heartbeat = DEFAULT_HEARTBEAT;
 static unsigned long boot_status;
 
@@ -173,7 +177,7 @@ static int stmp3xxx_wdt_release(struct inode *inode, struct file *file)
 	if (!nowayout) {
 		if (!test_bit(WDT_OK_TO_CLOSE, &wdt_status)) {
 			wdt_ping();
-			pr_debug("%s: Device closed unexpectdly\n", __func__);
+			pr_debug("%s: Device closed unexpectedly\n", __func__);
 			ret = -EINVAL;
 		} else {
 			wdt_disable();
@@ -200,7 +204,7 @@ static struct miscdevice stmp3xxx_wdt_miscdev = {
 	.fops = &stmp3xxx_wdt_fops,
 };
 
-static int __devinit stmp3xxx_wdt_probe(struct platform_device *pdev)
+static int stmp3xxx_wdt_probe(struct platform_device *pdev)
 {
 	int ret = 0;
 
@@ -220,13 +224,12 @@ static int __devinit stmp3xxx_wdt_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	printk(KERN_INFO "stmp3xxx watchdog: initialized, heartbeat %d sec\n",
-		heartbeat);
+	pr_info("initialized, heartbeat %d sec\n", heartbeat);
 
 	return ret;
 }
 
-static int __devexit stmp3xxx_wdt_remove(struct platform_device *pdev)
+static int stmp3xxx_wdt_remove(struct platform_device *pdev)
 {
 	misc_deregister(&stmp3xxx_wdt_miscdev);
 	return 0;
@@ -266,23 +269,12 @@ static struct platform_driver platform_wdt_driver = {
 		.name = "stmp3xxx_wdt",
 	},
 	.probe = stmp3xxx_wdt_probe,
-	.remove = __devexit_p(stmp3xxx_wdt_remove),
+	.remove = stmp3xxx_wdt_remove,
 	.suspend = stmp3xxx_wdt_suspend,
 	.resume = stmp3xxx_wdt_resume,
 };
 
-static int __init stmp3xxx_wdt_init(void)
-{
-	return platform_driver_register(&platform_wdt_driver);
-}
-
-static void __exit stmp3xxx_wdt_exit(void)
-{
-	return platform_driver_unregister(&platform_wdt_driver);
-}
-
-module_init(stmp3xxx_wdt_init);
-module_exit(stmp3xxx_wdt_exit);
+module_platform_driver(platform_wdt_driver);
 
 MODULE_DESCRIPTION("STMP3XXX Watchdog Driver");
 MODULE_LICENSE("GPL");

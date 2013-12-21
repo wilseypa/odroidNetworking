@@ -268,8 +268,9 @@ static const struct ni_board_struct ni_boards[] = {
 	 }
 };
 
-static const int ni_irqpin[] =
-    { -1, -1, -1, 0, 1, 2, -1, 3, -1, -1, 4, 5, 6, -1, -1, 7 };
+static const int ni_irqpin[] = {
+	-1, -1, -1, 0, 1, 2, -1, 3, -1, -1, 4, 5, 6, -1, -1, 7
+};
 
 #define interrupt_pin(a)	(ni_irqpin[(a)])
 
@@ -279,8 +280,9 @@ static const int ni_irqpin[] =
 
 struct ni_private {
 	struct pnp_dev *isapnp_dev;
- NI_PRIVATE_COMMON};
-#define devpriv ((struct ni_private *)dev->private)
+	NI_PRIVATE_COMMON
+
+};
 
 /* How we access registers */
 
@@ -299,6 +301,7 @@ struct ni_private {
 
 static void ni_atmio_win_out(struct comedi_device *dev, uint16_t data, int addr)
 {
+	struct ni_private *devpriv = dev->private;
 	unsigned long flags;
 
 	spin_lock_irqsave(&devpriv->window_lock, flags);
@@ -313,6 +316,7 @@ static void ni_atmio_win_out(struct comedi_device *dev, uint16_t data, int addr)
 
 static uint16_t ni_atmio_win_in(struct comedi_device *dev, int addr)
 {
+	struct ni_private *devpriv = dev->private;
 	unsigned long flags;
 	uint16_t ret;
 
@@ -339,48 +343,7 @@ static struct pnp_device_id device_ids[] = {
 
 MODULE_DEVICE_TABLE(pnp, device_ids);
 
-static int ni_atmio_attach(struct comedi_device *dev,
-			   struct comedi_devconfig *it);
-static int ni_atmio_detach(struct comedi_device *dev);
-static struct comedi_driver driver_atmio = {
-	.driver_name = "ni_atmio",
-	.module = THIS_MODULE,
-	.attach = ni_atmio_attach,
-	.detach = ni_atmio_detach,
-};
-
-static int __init driver_atmio_init_module(void)
-{
-	return comedi_driver_register(&driver_atmio);
-}
-
-static void __exit driver_atmio_cleanup_module(void)
-{
-	comedi_driver_unregister(&driver_atmio);
-}
-
-module_init(driver_atmio_init_module);
-module_exit(driver_atmio_cleanup_module);
-
 #include "ni_mio_common.c"
-
-static int ni_getboardtype(struct comedi_device *dev);
-
-/* clean up allocated resources */
-static int ni_atmio_detach(struct comedi_device *dev)
-{
-	mio_common_detach(dev);
-
-	if (dev->iobase)
-		release_region(dev->iobase, NI_SIZE);
-	if (dev->irq)
-		free_irq(dev->irq, dev);
-
-	if (devpriv->isapnp_dev)
-		pnp_device_detach(devpriv->isapnp_dev);
-
-	return 0;
-}
 
 static int ni_isapnp_find_board(struct pnp_dev **dev)
 {
@@ -420,19 +383,40 @@ static int ni_isapnp_find_board(struct pnp_dev **dev)
 	return 0;
 }
 
+static int ni_getboardtype(struct comedi_device *dev)
+{
+	int device_id = ni_read_eeprom(dev, 511);
+	int i;
+
+	for (i = 0; i < n_ni_boards; i++) {
+		if (ni_boards[i].device_id == device_id)
+			return i;
+
+	}
+	if (device_id == 255)
+		printk(" can't find board\n");
+	 else if (device_id == 0)
+		printk(" EEPROM read error (?) or device not found\n");
+	 else
+		printk(" unknown device ID %d -- contact author\n", device_id);
+
+	return -1;
+}
+
 static int ni_atmio_attach(struct comedi_device *dev,
 			   struct comedi_devconfig *it)
 {
+	struct ni_private *devpriv;
 	struct pnp_dev *isapnp_dev;
 	int ret;
 	unsigned long iobase;
 	int board;
 	unsigned int irq;
 
-	/* allocate private area */
 	ret = ni_alloc_private(dev);
-	if (ret < 0)
+	if (ret)
 		return ret;
+	devpriv = dev->private;
 
 	devpriv->stc_writew = &ni_atmio_win_out;
 	devpriv->stc_readw = &ni_atmio_win_in;
@@ -506,7 +490,7 @@ static int ni_atmio_attach(struct comedi_device *dev,
 
 	/* generic E series stuff in ni_mio_common.c */
 
-	ret = ni_E_init(dev, it);
+	ret = ni_E_init(dev);
 	if (ret < 0)
 		return ret;
 
@@ -514,22 +498,23 @@ static int ni_atmio_attach(struct comedi_device *dev,
 	return 0;
 }
 
-static int ni_getboardtype(struct comedi_device *dev)
+static void ni_atmio_detach(struct comedi_device *dev)
 {
-	int device_id = ni_read_eeprom(dev, 511);
-	int i;
+	struct ni_private *devpriv = dev->private;
 
-	for (i = 0; i < n_ni_boards; i++) {
-		if (ni_boards[i].device_id == device_id)
-			return i;
-
-	}
-	if (device_id == 255)
-		printk(" can't find board\n");
-	 else if (device_id == 0)
-		printk(" EEPROM read error (?) or device not found\n");
-	 else
-		printk(" unknown device ID %d -- contact author\n", device_id);
-
-	return -1;
+	mio_common_detach(dev);
+	if (dev->iobase)
+		release_region(dev->iobase, NI_SIZE);
+	if (dev->irq)
+		free_irq(dev->irq, dev);
+	if (devpriv->isapnp_dev)
+		pnp_device_detach(devpriv->isapnp_dev);
 }
+
+static struct comedi_driver ni_atmio_driver = {
+	.driver_name	= "ni_atmio",
+	.module		= THIS_MODULE,
+	.attach		= ni_atmio_attach,
+	.detach		= ni_atmio_detach,
+};
+module_comedi_driver(ni_atmio_driver);

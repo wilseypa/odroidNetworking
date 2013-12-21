@@ -20,12 +20,11 @@
 
 #define DRIVER_NAME "line6usb"
 
-#if defined(CONFIG_LINE6_USB_DUMP_CTRL) || defined(CONFIG_LINE6_USB_DUMP_MIDI) || defined(CONFIG_LINE6_USB_DUMP_PCM)
+#if defined(CONFIG_LINE6_USB_DUMP_PCM)
 #define CONFIG_LINE6_USB_DUMP_ANY
 #endif
 
 #define LINE6_TIMEOUT 1
-#define LINE6_MAX_DEVICES 8
 #define LINE6_BUFSIZE_LISTEN 32
 #define LINE6_MESSAGE_MAXLEN 256
 
@@ -53,12 +52,6 @@
 
 #define LINE6_CHANNEL_MASK 0x0f
 
-#ifdef CONFIG_LINE6_USB_DEBUG
-#define DEBUG_MESSAGES(x) (x)
-#else
-#define DEBUG_MESSAGES(x)
-#endif
-
 #define MISSING_CASE	\
 	printk(KERN_ERR "line6usb driver bug: missing case in %s:%d\n", \
 		__FILE__, __LINE__)
@@ -78,7 +71,6 @@ do {					\
 } while (0)
 
 extern const unsigned char line6_midi_id[3];
-extern struct usb_line6 *line6_devices[LINE6_MAX_DEVICES];
 
 static const int SYSEX_DATA_OFS = sizeof(line6_midi_id) + 3;
 static const int SYSEX_EXTRA_SIZE = sizeof(line6_midi_id) + 4;
@@ -87,6 +79,11 @@ static const int SYSEX_EXTRA_SIZE = sizeof(line6_midi_id) + 4;
 	 Common properties of Line6 devices.
 */
 struct line6_properties {
+	/**
+		 Bit identifying this device in the line6usb driver.
+	*/
+	int device_bit;
+
 	/**
 		 Card id string (maximum 16 characters).
 		 This can be used to address the device in ALSA programs as
@@ -98,11 +95,6 @@ struct line6_properties {
 		 Card short name (maximum 32 characters).
 	*/
 	const char *name;
-
-	/**
-		 Bit identifying this device in the line6usb driver.
-	*/
-	int device_bit;
 
 	/**
 		 Bit vector defining this device's capabilities in the
@@ -209,7 +201,7 @@ extern int line6_read_data(struct usb_line6 *line6, int address, void *data,
 			   size_t datalen);
 extern int line6_read_serial_number(struct usb_line6 *line6,
 				    int *serial_number);
-extern int line6_send_program(struct usb_line6 *line6, int value);
+extern int line6_send_program(struct usb_line6 *line6, u8 value);
 extern int line6_send_raw_message(struct usb_line6 *line6, const char *buffer,
 				  int size);
 extern int line6_send_raw_message_async(struct usb_line6 *line6,
@@ -224,7 +216,7 @@ extern void line6_start_timer(struct timer_list *timer, unsigned int msecs,
 			      void (*function) (unsigned long),
 			      unsigned long data);
 extern int line6_transmit_parameter(struct usb_line6 *line6, int param,
-				    int value);
+				    u8 value);
 extern int line6_version_request_async(struct usb_line6 *line6);
 extern int line6_write_data(struct usb_line6 *line6, int address, void *data,
 			    size_t datalen);

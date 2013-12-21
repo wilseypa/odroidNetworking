@@ -1,6 +1,6 @@
 /******************************************************************************
  *
- * Copyright(c) 2009-2010  Realtek Corporation.
+ * Copyright(c) 2009-2012  Realtek Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of version 2 of the GNU General Public License as
@@ -76,7 +76,7 @@ enum ap_peer {
 	SET_BITS_TO_LE_2BYTE(_hdr, 8, 1, _val)
 
 #define SET_80211_PS_POLL_AID(_hdr, _val)		\
-	(*(u16 *)((u8 *)(_hdr) + 2) = le16_to_cpu(_val))
+	(*(u16 *)((u8 *)(_hdr) + 2) = _val)
 #define SET_80211_PS_POLL_BSSID(_hdr, _val)		\
 	memcpy(((u8 *)(_hdr)) + 4, (u8 *)(_val), ETH_ALEN)
 #define SET_80211_PS_POLL_TA(_hdr, _val)		\
@@ -138,6 +138,10 @@ int rtl_send_smps_action(struct ieee80211_hw *hw,
 		enum ieee80211_smps_mode smps);
 u8 *rtl_find_ie(u8 *data, unsigned int len, u8 ie);
 void rtl_recognize_peer(struct ieee80211_hw *hw, u8 *data, unsigned int len);
-u8 rtl_tid_to_ac(struct ieee80211_hw *hw, u8 tid);
+u8 rtl_tid_to_ac(u8 tid);
 extern struct attribute_group rtl_attribute_group;
+int rtlwifi_rate_mapping(struct ieee80211_hw *hw,
+			 bool isht, u8 desc_rate, bool first_ampdu);
+bool rtl_tx_mgmt_proc(struct ieee80211_hw *hw, struct sk_buff *skb);
+
 #endif

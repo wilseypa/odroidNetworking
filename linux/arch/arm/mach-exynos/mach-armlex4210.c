@@ -1,4 +1,4 @@
-/* linux/arch/arm/mach-exynos/mach-armlex4210.c
+/* linux/arch/arm/mach-exynos4/mach-armlex4210.c
  *
  * Copyright (c) 2011 Samsung Electronics Co., Ltd.
  *		http://www.samsung.com
@@ -16,17 +16,19 @@
 #include <linux/smsc911x.h>
 
 #include <asm/mach/arch.h>
+#include <asm/hardware/gic.h>
 #include <asm/mach-types.h>
 
 #include <plat/cpu.h>
 #include <plat/devs.h>
-#include <plat/exynos4.h>
 #include <plat/gpio-cfg.h>
 #include <plat/regs-serial.h>
 #include <plat/regs-srom.h>
 #include <plat/sdhci.h>
 
 #include <mach/map.h>
+
+#include "common.h"
 
 /* Following are default values for UCON, ULCON and UFCON UART registers */
 #define ARMLEX4210_UCON_DEFAULT	(S3C2410_UCON_TXILEVEL |	\
@@ -75,7 +77,6 @@ static struct s3c2410_uartcfg armlex4210_uartcfgs[] __initdata = {
 
 static struct s3c_sdhci_platdata armlex4210_hsmmc0_pdata __initdata = {
 	.cd_type		= S3C_SDHCI_CD_PERMANENT,
-	.clk_type		= S3C_SDHCI_CLK_DIV_EXTERNAL,
 #ifdef CONFIG_EXYNOS4_SDHCI_CH0_8BIT
 	.max_width		= 8,
 	.host_caps		= MMC_CAP_8_BIT_DATA,
@@ -86,13 +87,11 @@ static struct s3c_sdhci_platdata armlex4210_hsmmc2_pdata __initdata = {
 	.cd_type		= S3C_SDHCI_CD_GPIO,
 	.ext_cd_gpio		= EXYNOS4_GPX2(5),
 	.ext_cd_gpio_invert	= 1,
-	.clk_type		= S3C_SDHCI_CLK_DIV_EXTERNAL,
 	.max_width		= 4,
 };
 
 static struct s3c_sdhci_platdata armlex4210_hsmmc3_pdata __initdata = {
 	.cd_type		= S3C_SDHCI_CD_PERMANENT,
-	.clk_type		= S3C_SDHCI_CLK_DIV_EXTERNAL,
 	.max_width		= 4,
 };
 
@@ -119,16 +118,9 @@ static void __init armlex4210_wlan_init(void)
 }
 
 static struct resource armlex4210_smsc911x_resources[] = {
-	[0] = {
-		.start	= EXYNOS4_PA_SROM_BANK(3),
-		.end	= EXYNOS4_PA_SROM_BANK(3) + SZ_64K - 1,
-		.flags	= IORESOURCE_MEM,
-	},
-	[1] = {
-		.start	= IRQ_EINT(27),
-		.end	= IRQ_EINT(27),
-		.flags	= IORESOURCE_IRQ | IRQF_TRIGGER_HIGH,
-	},
+	[0] = DEFINE_RES_MEM(EXYNOS4_PA_SROM_BANK(3), SZ_64K),
+	[1] = DEFINE_RES_NAMED(IRQ_EINT(27), 1, NULL, IORESOURCE_IRQ \
+					| IRQF_TRIGGER_HIGH),
 };
 
 static struct smsc911x_platform_config smsc9215_config = {
@@ -155,7 +147,6 @@ static struct platform_device *armlex4210_devices[] __initdata = {
 	&s3c_device_hsmmc3,
 	&s3c_device_rtc,
 	&s3c_device_wdt,
-	&samsung_asoc_dma,
 	&armlex4210_smsc911x,
 	&exynos4_device_ahci,
 };
@@ -186,7 +177,7 @@ static void __init armlex4210_smsc911x_init(void)
 
 static void __init armlex4210_map_io(void)
 {
-	s5p_init_io(NULL, 0, S5P_VA_CHIPID);
+	exynos_init_io(NULL, 0);
 	s3c24xx_init_clocks(24000000);
 	s3c24xx_init_uarts(armlex4210_uartcfgs,
 			   ARRAY_SIZE(armlex4210_uartcfgs));
@@ -206,9 +197,13 @@ static void __init armlex4210_machine_init(void)
 
 MACHINE_START(ARMLEX4210, "ARMLEX4210")
 	/* Maintainer: Alim Akhtar <alim.akhtar@samsung.com> */
-	.boot_params	= S5P_PA_SDRAM + 0x100,
+	.atag_offset	= 0x100,
+	.smp		= smp_ops(exynos_smp_ops),
 	.init_irq	= exynos4_init_irq,
 	.map_io		= armlex4210_map_io,
+	.handle_irq	= gic_handle_irq,
 	.init_machine	= armlex4210_machine_init,
+	.init_late	= exynos_init_late,
 	.timer		= &exynos4_timer,
+	.restart	= exynos4_restart,
 MACHINE_END

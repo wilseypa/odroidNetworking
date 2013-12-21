@@ -305,20 +305,22 @@ mega_query_adapter(adapter_t *adapter)
 
 	adapter->host->sg_tablesize = adapter->sglen;
 
-
-	/* use HP firmware and bios version encoding */
-	if (adapter->product_info.subsysvid == HP_SUBSYS_VID) {
+	/* use HP firmware and bios version encoding
+	   Note: fw_version[0|1] and bios_version[0|1] were originally shifted
+	   right 8 bits making them zero. This 0 value was hardcoded to fix
+	   sparse warnings. */
+	if (adapter->product_info.subsysvid == PCI_VENDOR_ID_HP) {
 		sprintf (adapter->fw_version, "%c%d%d.%d%d",
 			 adapter->product_info.fw_version[2],
-			 adapter->product_info.fw_version[1] >> 8,
+			 0,
 			 adapter->product_info.fw_version[1] & 0x0f,
-			 adapter->product_info.fw_version[0] >> 8,
+			 0,
 			 adapter->product_info.fw_version[0] & 0x0f);
 		sprintf (adapter->bios_version, "%c%d%d.%d%d",
 			 adapter->product_info.bios_version[2],
-			 adapter->product_info.bios_version[1] >> 8,
+			 0,
 			 adapter->product_info.bios_version[1] & 0x0f,
-			 adapter->product_info.bios_version[0] >> 8,
+			 0,
 			 adapter->product_info.bios_version[0] & 0x0f);
 	} else {
 		memcpy(adapter->fw_version,
@@ -521,7 +523,7 @@ mega_build_cmd(adapter_t *adapter, Scsi_Cmnd *cmd, int *busy)
 	mega_passthru	*pthru;
 	scb_t	*scb;
 	mbox_t	*mbox;
-	long	seg;
+	u32	seg;
 	char	islogical;
 	int	max_ldrv_num;
 	int	channel = 0;
@@ -667,10 +669,10 @@ mega_build_cmd(adapter_t *adapter, Scsi_Cmnd *cmd, int *busy)
 			struct scatterlist *sg;
 
 			sg = scsi_sglist(cmd);
-			buf = kmap_atomic(sg_page(sg), KM_IRQ0) + sg->offset;
+			buf = kmap_atomic(sg_page(sg)) + sg->offset;
 
 			memset(buf, 0, cmd->cmnd[4]);
-			kunmap_atomic(buf - sg->offset, KM_IRQ0);
+			kunmap_atomic(buf - sg->offset);
 
 			cmd->result = (DID_OK << 16);
 			cmd->scsi_done(cmd);
@@ -855,7 +857,7 @@ mega_build_cmd(adapter_t *adapter, Scsi_Cmnd *cmd, int *busy)
 
 			/* Calculate Scatter-Gather info */
 			mbox->m_out.numsgelements = mega_build_sglist(adapter, scb,
-					(u32 *)&mbox->m_out.xferaddr, (u32 *)&seg);
+					(u32 *)&mbox->m_out.xferaddr, &seg);
 
 			return scb;
 
@@ -4520,7 +4522,7 @@ static struct scsi_host_template megaraid_template = {
 	.eh_host_reset_handler		= megaraid_reset,
 };
 
-static int __devinit
+static int
 megaraid_probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 {
 	struct Scsi_Host *host;
@@ -4713,7 +4715,7 @@ megaraid_probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	 * support, since this firmware cannot handle 64 bit
 	 * addressing
 	 */
-	if ((subsysvid == HP_SUBSYS_VID) &&
+	if ((subsysvid == PCI_VENDOR_ID_HP) &&
 	    ((subsysid == 0x60E7) || (subsysid == 0x60E8))) {
 		/*
 		 * which firmware
@@ -4912,7 +4914,7 @@ __megaraid_shutdown(adapter_t *adapter)
 		mdelay(1000);
 }
 
-static void __devexit
+static void
 megaraid_remove_one(struct pci_dev *pdev)
 {
 	struct Scsi_Host *host = pci_get_drvdata(pdev);
@@ -5006,7 +5008,7 @@ static struct pci_driver megaraid_pci_driver = {
 	.name		= "megaraid_legacy",
 	.id_table	= megaraid_pci_tbl,
 	.probe		= megaraid_probe_one,
-	.remove		= __devexit_p(megaraid_remove_one),
+	.remove		= megaraid_remove_one,
 	.shutdown	= megaraid_shutdown,
 };
 

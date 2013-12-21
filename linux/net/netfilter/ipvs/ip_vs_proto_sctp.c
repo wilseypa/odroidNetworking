@@ -10,28 +10,26 @@
 
 static int
 sctp_conn_schedule(int af, struct sk_buff *skb, struct ip_vs_proto_data *pd,
-		   int *verdict, struct ip_vs_conn **cpp)
+		   int *verdict, struct ip_vs_conn **cpp,
+		   struct ip_vs_iphdr *iph)
 {
 	struct net *net;
 	struct ip_vs_service *svc;
 	sctp_chunkhdr_t _schunkh, *sch;
 	sctp_sctphdr_t *sh, _sctph;
-	struct ip_vs_iphdr iph;
 
-	ip_vs_fill_iphdr(af, skb_network_header(skb), &iph);
-
-	sh = skb_header_pointer(skb, iph.len, sizeof(_sctph), &_sctph);
+	sh = skb_header_pointer(skb, iph->len, sizeof(_sctph), &_sctph);
 	if (sh == NULL)
 		return 0;
 
-	sch = skb_header_pointer(skb, iph.len + sizeof(sctp_sctphdr_t),
+	sch = skb_header_pointer(skb, iph->len + sizeof(sctp_sctphdr_t),
 				 sizeof(_schunkh), &_schunkh);
 	if (sch == NULL)
 		return 0;
 	net = skb_net(skb);
 	if ((sch->type == SCTP_CID_INIT) &&
-	    (svc = ip_vs_service_get(net, af, skb->mark, iph.protocol,
-				     &iph.daddr, sh->dest))) {
+	    (svc = ip_vs_service_get(net, af, skb->mark, iph->protocol,
+				     &iph->daddr, sh->dest))) {
 		int ignored;
 
 		if (ip_vs_todrop(net_ipvs(net))) {
@@ -47,10 +45,10 @@ sctp_conn_schedule(int af, struct sk_buff *skb, struct ip_vs_proto_data *pd,
 		 * Let the virtual server select a real server for the
 		 * incoming connection, and create a connection entry.
 		 */
-		*cpp = ip_vs_schedule(svc, skb, pd, &ignored);
+		*cpp = ip_vs_schedule(svc, skb, pd, &ignored, iph);
 		if (!*cpp && ignored <= 0) {
 			if (!ignored)
-				*verdict = ip_vs_leave(svc, skb, pd);
+				*verdict = ip_vs_leave(svc, skb, pd, iph);
 			else {
 				ip_vs_service_put(svc);
 				*verdict = NF_DROP;
@@ -63,21 +61,32 @@ sctp_conn_schedule(int af, struct sk_buff *skb, struct ip_vs_proto_data *pd,
 	return 1;
 }
 
+static void sctp_nat_csum(struct sk_buff *skb, sctp_sctphdr_t *sctph,
+			  unsigned int sctphoff)
+{
+	__u32 crc32;
+	struct sk_buff *iter;
+
+	crc32 = sctp_start_cksum((__u8 *)sctph, skb_headlen(skb) - sctphoff);
+	skb_walk_frags(skb, iter)
+		crc32 = sctp_update_cksum((u8 *) iter->data,
+					  skb_headlen(iter), crc32);
+	sctph->checksum = sctp_end_cksum(crc32);
+
+	skb->ip_summed = CHECKSUM_UNNECESSARY;
+}
+
 static int
-sctp_snat_handler(struct sk_buff *skb,
-		  struct ip_vs_protocol *pp, struct ip_vs_conn *cp)
+sctp_snat_handler(struct sk_buff *skb, struct ip_vs_protocol *pp,
+		  struct ip_vs_conn *cp, struct ip_vs_iphdr *iph)
 {
 	sctp_sctphdr_t *sctph;
-	unsigned int sctphoff;
-	struct sk_buff *iter;
-	__be32 crc32;
+	unsigned int sctphoff = iph->len;
 
 #ifdef CONFIG_IP_VS_IPV6
-	if (cp->af == AF_INET6)
-		sctphoff = sizeof(struct ipv6hdr);
-	else
+	if (cp->af == AF_INET6 && iph->fragoffs)
+		return 1;
 #endif
-		sctphoff = ip_hdrlen(skb);
 
 	/* csum_check requires unshared skb */
 	if (!skb_make_writable(skb, sctphoff + sizeof(*sctph)))
@@ -96,32 +105,22 @@ sctp_snat_handler(struct sk_buff *skb,
 	sctph = (void *) skb_network_header(skb) + sctphoff;
 	sctph->source = cp->vport;
 
-	/* Calculate the checksum */
-	crc32 = sctp_start_cksum((u8 *) sctph, skb_headlen(skb) - sctphoff);
-	skb_walk_frags(skb, iter)
-		crc32 = sctp_update_cksum((u8 *) iter->data, skb_headlen(iter),
-				          crc32);
-	crc32 = sctp_end_cksum(crc32);
-	sctph->checksum = crc32;
+	sctp_nat_csum(skb, sctph, sctphoff);
 
 	return 1;
 }
 
 static int
-sctp_dnat_handler(struct sk_buff *skb,
-		  struct ip_vs_protocol *pp, struct ip_vs_conn *cp)
+sctp_dnat_handler(struct sk_buff *skb, struct ip_vs_protocol *pp,
+		  struct ip_vs_conn *cp, struct ip_vs_iphdr *iph)
 {
 	sctp_sctphdr_t *sctph;
-	unsigned int sctphoff;
-	struct sk_buff *iter;
-	__be32 crc32;
+	unsigned int sctphoff = iph->len;
 
 #ifdef CONFIG_IP_VS_IPV6
-	if (cp->af == AF_INET6)
-		sctphoff = sizeof(struct ipv6hdr);
-	else
+	if (cp->af == AF_INET6 && iph->fragoffs)
+		return 1;
 #endif
-		sctphoff = ip_hdrlen(skb);
 
 	/* csum_check requires unshared skb */
 	if (!skb_make_writable(skb, sctphoff + sizeof(*sctph)))
@@ -140,13 +139,7 @@ sctp_dnat_handler(struct sk_buff *skb,
 	sctph = (void *) skb_network_header(skb) + sctphoff;
 	sctph->dest = cp->dport;
 
-	/* Calculate the checksum */
-	crc32 = sctp_start_cksum((u8 *) sctph, skb_headlen(skb) - sctphoff);
-	skb_walk_frags(skb, iter)
-		crc32 = sctp_update_cksum((u8 *) iter->data, skb_headlen(iter),
-					  crc32);
-	crc32 = sctp_end_cksum(crc32);
-	sctph->checksum = crc32;
+	sctp_nat_csum(skb, sctph, sctphoff);
 
 	return 1;
 }
@@ -906,7 +899,7 @@ static const char *sctp_state_name(int state)
 	return "?";
 }
 
-static inline int
+static inline void
 set_sctp_state(struct ip_vs_proto_data *pd, struct ip_vs_conn *cp,
 		int direction, const struct sk_buff *skb)
 {
@@ -924,7 +917,7 @@ set_sctp_state(struct ip_vs_proto_data *pd, struct ip_vs_conn *cp,
 	sch = skb_header_pointer(skb, ihl + sizeof(sctp_sctphdr_t),
 				sizeof(_sctpch), &_sctpch);
 	if (sch == NULL)
-		return 0;
+		return;
 
 	chunk_type = sch->type;
 	/*
@@ -993,21 +986,15 @@ set_sctp_state(struct ip_vs_proto_data *pd, struct ip_vs_conn *cp,
 		cp->timeout = pd->timeout_table[cp->state = next_state];
 	else	/* What to do ? */
 		cp->timeout = sctp_timeouts[cp->state = next_state];
-
-	return 1;
 }
 
-static int
+static void
 sctp_state_transition(struct ip_vs_conn *cp, int direction,
 		const struct sk_buff *skb, struct ip_vs_proto_data *pd)
 {
-	int ret = 0;
-
 	spin_lock(&cp->lock);
-	ret = set_sctp_state(pd, cp, direction, skb);
+	set_sctp_state(pd, cp, direction, skb);
 	spin_unlock(&cp->lock);
-
-	return ret;
 }
 
 static inline __u16 sctp_app_hashkey(__be16 port)
@@ -1096,7 +1083,7 @@ out:
  *   timeouts is netns related now.
  * ---------------------------------------------
  */
-static void __ip_vs_sctp_init(struct net *net, struct ip_vs_proto_data *pd)
+static int __ip_vs_sctp_init(struct net *net, struct ip_vs_proto_data *pd)
 {
 	struct netns_ipvs *ipvs = net_ipvs(net);
 
@@ -1104,6 +1091,9 @@ static void __ip_vs_sctp_init(struct net *net, struct ip_vs_proto_data *pd)
 	spin_lock_init(&ipvs->sctp_app_lock);
 	pd->timeout_table = ip_vs_create_timeout_table((int *)sctp_timeouts,
 							sizeof(sctp_timeouts));
+	if (!pd->timeout_table)
+		return -ENOMEM;
+	return 0;
 }
 
 static void __ip_vs_sctp_exit(struct net *net, struct ip_vs_proto_data *pd)

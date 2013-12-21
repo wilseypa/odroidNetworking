@@ -1,7 +1,7 @@
 /*
  * OMAP powerdomain control
  *
- * Copyright (C) 2007-2008 Texas Instruments, Inc.
+ * Copyright (C) 2007-2008, 2011 Texas Instruments, Inc.
  * Copyright (C) 2007-2011 Nokia Corporation
  *
  * Written by Paul Walmsley
@@ -28,11 +28,11 @@
 #include "prm44xx.h"
 
 #include <asm/cpu.h>
-#include <plat/cpu.h>
+
 #include "powerdomain.h"
 #include "clockdomain.h"
-#include <plat/prcm.h>
 
+#include "soc.h"
 #include "pm.h"
 
 #define PWRDM_TRACE_STATES_FLAG	(1<<31)
@@ -77,11 +77,9 @@ static struct powerdomain *_pwrdm_lookup(const char *name)
 static int _pwrdm_register(struct powerdomain *pwrdm)
 {
 	int i;
+	struct voltagedomain *voltdm;
 
 	if (!pwrdm || !pwrdm->name)
-		return -EINVAL;
-
-	if (!omap_chip_is(pwrdm->omap_chip))
 		return -EINVAL;
 
 	if (cpu_is_omap44xx() &&
@@ -93,6 +91,16 @@ static int _pwrdm_register(struct powerdomain *pwrdm)
 
 	if (_pwrdm_lookup(pwrdm->name))
 		return -EEXIST;
+
+	voltdm = voltdm_lookup(pwrdm->voltdm.name);
+	if (!voltdm) {
+		pr_err("powerdomain: %s: voltagedomain %s does not exist\n",
+		       pwrdm->name, pwrdm->voltdm.name);
+		return -EINVAL;
+	}
+	pwrdm->voltdm.ptr = voltdm;
+	INIT_LIST_HEAD(&pwrdm->voltdm_node);
+	voltdm_add_pwrdm(voltdm, pwrdm);
 
 	list_add(&pwrdm->node, &pwrdm_list);
 
@@ -194,29 +202,76 @@ static int _pwrdm_post_transition_cb(struct powerdomain *pwrdm, void *unused)
 /* Public functions */
 
 /**
- * pwrdm_init - set up the powerdomain layer
- * @pwrdm_list: array of struct powerdomain pointers to register
- * @custom_funcs: func pointers for arch specific implementations
+ * pwrdm_register_platform_funcs - register powerdomain implementation fns
+ * @po: func pointers for arch specific implementations
  *
- * Loop through the array of powerdomains @pwrdm_list, registering all
- * that are available on the current CPU. If pwrdm_list is supplied
- * and not null, all of the referenced powerdomains will be
- * registered.  No return value.  XXX pwrdm_list is not really a
- * "list"; it is an array.  Rename appropriately.
+ * Register the list of function pointers used to implement the
+ * powerdomain functions on different OMAP SoCs.  Should be called
+ * before any other pwrdm_register*() function.  Returns -EINVAL if
+ * @po is null, -EEXIST if platform functions have already been
+ * registered, or 0 upon success.
  */
-void pwrdm_init(struct powerdomain **pwrdm_list, struct pwrdm_ops *custom_funcs)
+int pwrdm_register_platform_funcs(struct pwrdm_ops *po)
+{
+	if (!po)
+		return -EINVAL;
+
+	if (arch_pwrdm)
+		return -EEXIST;
+
+	arch_pwrdm = po;
+
+	return 0;
+}
+
+/**
+ * pwrdm_register_pwrdms - register SoC powerdomains
+ * @ps: pointer to an array of struct powerdomain to register
+ *
+ * Register the powerdomains available on a particular OMAP SoC.  Must
+ * be called after pwrdm_register_platform_funcs().  May be called
+ * multiple times.  Returns -EACCES if called before
+ * pwrdm_register_platform_funcs(); -EINVAL if the argument @ps is
+ * null; or 0 upon success.
+ */
+int pwrdm_register_pwrdms(struct powerdomain **ps)
 {
 	struct powerdomain **p = NULL;
 
-	if (!custom_funcs)
-		WARN(1, "powerdomain: No custom pwrdm functions registered\n");
-	else
-		arch_pwrdm = custom_funcs;
+	if (!arch_pwrdm)
+		return -EEXIST;
 
-	if (pwrdm_list) {
-		for (p = pwrdm_list; *p; p++)
-			_pwrdm_register(*p);
-	}
+	if (!ps)
+		return -EINVAL;
+
+	for (p = ps; *p; p++)
+		_pwrdm_register(*p);
+
+	return 0;
+}
+
+/**
+ * pwrdm_complete_init - set up the powerdomain layer
+ *
+ * Do whatever is necessary to initialize registered powerdomains and
+ * powerdomain code.  Currently, this programs the next power state
+ * for each powerdomain to ON.  This prevents powerdomains from
+ * unexpectedly losing context or entering high wakeup latency modes
+ * with non-power-management-enabled kernels.  Must be called after
+ * pwrdm_register_pwrdms().  Returns -EACCES if called before
+ * pwrdm_register_pwrdms(), or 0 upon success.
+ */
+int pwrdm_complete_init(void)
+{
+	struct powerdomain *temp_p;
+
+	if (list_empty(&pwrdm_list))
+		return -EACCES;
+
+	list_for_each_entry(temp_p, &pwrdm_list, node)
+		pwrdm_set_next_pwrst(temp_p, PWRDM_POWER_ON);
+
+	return 0;
 }
 
 /**
@@ -284,8 +339,8 @@ int pwrdm_add_clkdm(struct powerdomain *pwrdm, struct clockdomain *clkdm)
 	if (!pwrdm || !clkdm)
 		return -EINVAL;
 
-	pr_debug("powerdomain: associating clockdomain %s with powerdomain "
-		 "%s\n", clkdm->name, pwrdm->name);
+	pr_debug("powerdomain: %s: associating clockdomain %s\n",
+		 pwrdm->name, clkdm->name);
 
 	for (i = 0; i < PWRDM_MAX_CLKDMS; i++) {
 		if (!pwrdm->pwrdm_clkdms[i])
@@ -299,8 +354,8 @@ int pwrdm_add_clkdm(struct powerdomain *pwrdm, struct clockdomain *clkdm)
 	}
 
 	if (i == PWRDM_MAX_CLKDMS) {
-		pr_debug("powerdomain: increase PWRDM_MAX_CLKDMS for "
-			 "pwrdm %s clkdm %s\n", pwrdm->name, clkdm->name);
+		pr_debug("powerdomain: %s: increase PWRDM_MAX_CLKDMS for clkdm %s\n",
+			 pwrdm->name, clkdm->name);
 		WARN_ON(1);
 		ret = -ENOMEM;
 		goto pac_exit;
@@ -332,16 +387,16 @@ int pwrdm_del_clkdm(struct powerdomain *pwrdm, struct clockdomain *clkdm)
 	if (!pwrdm || !clkdm)
 		return -EINVAL;
 
-	pr_debug("powerdomain: dissociating clockdomain %s from powerdomain "
-		 "%s\n", clkdm->name, pwrdm->name);
+	pr_debug("powerdomain: %s: dissociating clockdomain %s\n",
+		 pwrdm->name, clkdm->name);
 
 	for (i = 0; i < PWRDM_MAX_CLKDMS; i++)
 		if (pwrdm->pwrdm_clkdms[i] == clkdm)
 			break;
 
 	if (i == PWRDM_MAX_CLKDMS) {
-		pr_debug("powerdomain: clkdm %s not associated with pwrdm "
-			 "%s ?!\n", clkdm->name, pwrdm->name);
+		pr_debug("powerdomain: %s: clkdm %s not associated?!\n",
+			 pwrdm->name, clkdm->name);
 		ret = -ENOENT;
 		goto pdc_exit;
 	}
@@ -383,6 +438,18 @@ int pwrdm_for_each_clkdm(struct powerdomain *pwrdm,
 }
 
 /**
+ * pwrdm_get_voltdm - return a ptr to the voltdm that this pwrdm resides in
+ * @pwrdm: struct powerdomain *
+ *
+ * Return a pointer to the struct voltageomain that the specified powerdomain
+ * @pwrdm exists in.
+ */
+struct voltagedomain *pwrdm_get_voltdm(struct powerdomain *pwrdm)
+{
+	return pwrdm->voltdm.ptr;
+}
+
+/**
  * pwrdm_get_mem_bank_count - get number of memory banks in this powerdomain
  * @pwrdm: struct powerdomain *
  *
@@ -418,7 +485,7 @@ int pwrdm_set_next_pwrst(struct powerdomain *pwrdm, u8 pwrst)
 	if (!(pwrdm->pwrsts & (1 << pwrst)))
 		return -EINVAL;
 
-	pr_debug("powerdomain: setting next powerstate for %s to %0x\n",
+	pr_debug("powerdomain: %s: setting next powerstate to %0x\n",
 		 pwrdm->name, pwrst);
 
 	if (arch_pwrdm && arch_pwrdm->pwrdm_set_next_pwrst) {
@@ -459,7 +526,8 @@ int pwrdm_read_next_pwrst(struct powerdomain *pwrdm)
  *
  * Return the powerdomain @pwrdm's current power state.	Returns -EINVAL
  * if the powerdomain pointer is null or returns the current power state
- * upon success.
+ * upon success. Note that if the power domain only supports the ON state
+ * then just return ON as the current state.
  */
 int pwrdm_read_pwrst(struct powerdomain *pwrdm)
 {
@@ -467,6 +535,9 @@ int pwrdm_read_pwrst(struct powerdomain *pwrdm)
 
 	if (!pwrdm)
 		return -EINVAL;
+
+	if (pwrdm->pwrsts == PWRSTS_ON)
+		return PWRDM_POWER_ON;
 
 	if (arch_pwrdm && arch_pwrdm->pwrdm_read_pwrst)
 		ret = arch_pwrdm->pwrdm_read_pwrst(pwrdm);
@@ -516,7 +587,7 @@ int pwrdm_set_logic_retst(struct powerdomain *pwrdm, u8 pwrst)
 	if (!(pwrdm->pwrsts_logic_ret & (1 << pwrst)))
 		return -EINVAL;
 
-	pr_debug("powerdomain: setting next logic powerstate for %s to %0x\n",
+	pr_debug("powerdomain: %s: setting next logic powerstate to %0x\n",
 		 pwrdm->name, pwrst);
 
 	if (arch_pwrdm && arch_pwrdm->pwrdm_set_logic_retst)
@@ -553,8 +624,8 @@ int pwrdm_set_mem_onst(struct powerdomain *pwrdm, u8 bank, u8 pwrst)
 	if (!(pwrdm->pwrsts_mem_on[bank] & (1 << pwrst)))
 		return -EINVAL;
 
-	pr_debug("powerdomain: setting next memory powerstate for domain %s "
-		 "bank %0x while pwrdm-ON to %0x\n", pwrdm->name, bank, pwrst);
+	pr_debug("powerdomain: %s: setting next memory powerstate for bank %0x while pwrdm-ON to %0x\n",
+		 pwrdm->name, bank, pwrst);
 
 	if (arch_pwrdm && arch_pwrdm->pwrdm_set_mem_onst)
 		ret = arch_pwrdm->pwrdm_set_mem_onst(pwrdm, bank, pwrst);
@@ -591,8 +662,8 @@ int pwrdm_set_mem_retst(struct powerdomain *pwrdm, u8 bank, u8 pwrst)
 	if (!(pwrdm->pwrsts_mem_ret[bank] & (1 << pwrst)))
 		return -EINVAL;
 
-	pr_debug("powerdomain: setting next memory powerstate for domain %s "
-		 "bank %0x while pwrdm-RET to %0x\n", pwrdm->name, bank, pwrst);
+	pr_debug("powerdomain: %s: setting next memory powerstate for bank %0x while pwrdm-RET to %0x\n",
+		 pwrdm->name, bank, pwrst);
 
 	if (arch_pwrdm && arch_pwrdm->pwrdm_set_mem_retst)
 		ret = arch_pwrdm->pwrdm_set_mem_retst(pwrdm, bank, pwrst);
@@ -770,7 +841,7 @@ int pwrdm_clear_all_prev_pwrst(struct powerdomain *pwrdm)
 	 * warn & fail if it is not ON.
 	 */
 
-	pr_debug("powerdomain: clearing previous power state reg for %s\n",
+	pr_debug("powerdomain: %s: clearing previous power state reg\n",
 		 pwrdm->name);
 
 	if (arch_pwrdm && arch_pwrdm->pwrdm_clear_all_prev_pwrst)
@@ -800,8 +871,7 @@ int pwrdm_enable_hdwr_sar(struct powerdomain *pwrdm)
 	if (!(pwrdm->flags & PWRDM_HAS_HDWR_SAR))
 		return ret;
 
-	pr_debug("powerdomain: %s: setting SAVEANDRESTORE bit\n",
-		 pwrdm->name);
+	pr_debug("powerdomain: %s: setting SAVEANDRESTORE bit\n", pwrdm->name);
 
 	if (arch_pwrdm && arch_pwrdm->pwrdm_enable_hdwr_sar)
 		ret = arch_pwrdm->pwrdm_enable_hdwr_sar(pwrdm);
@@ -830,8 +900,7 @@ int pwrdm_disable_hdwr_sar(struct powerdomain *pwrdm)
 	if (!(pwrdm->flags & PWRDM_HAS_HDWR_SAR))
 		return ret;
 
-	pr_debug("powerdomain: %s: clearing SAVEANDRESTORE bit\n",
-		 pwrdm->name);
+	pr_debug("powerdomain: %s: clearing SAVEANDRESTORE bit\n", pwrdm->name);
 
 	if (arch_pwrdm && arch_pwrdm->pwrdm_disable_hdwr_sar)
 		ret = arch_pwrdm->pwrdm_disable_hdwr_sar(pwrdm);
@@ -905,28 +974,32 @@ int pwrdm_wait_transition(struct powerdomain *pwrdm)
 
 int pwrdm_state_switch(struct powerdomain *pwrdm)
 {
-	return _pwrdm_state_switch(pwrdm, PWRDM_STATE_NOW);
+	int ret;
+
+	ret = pwrdm_wait_transition(pwrdm);
+	if (!ret)
+		ret = _pwrdm_state_switch(pwrdm, PWRDM_STATE_NOW);
+
+	return ret;
 }
 
-int pwrdm_clkdm_state_switch(struct clockdomain *clkdm)
+int pwrdm_pre_transition(struct powerdomain *pwrdm)
 {
-	if (clkdm != NULL && clkdm->pwrdm.ptr != NULL) {
-		pwrdm_wait_transition(clkdm->pwrdm.ptr);
-		return pwrdm_state_switch(clkdm->pwrdm.ptr);
-	}
+	if (pwrdm)
+		_pwrdm_pre_transition_cb(pwrdm, NULL);
+	else
+		pwrdm_for_each(_pwrdm_pre_transition_cb, NULL);
 
-	return -EINVAL;
-}
-
-int pwrdm_pre_transition(void)
-{
-	pwrdm_for_each(_pwrdm_pre_transition_cb, NULL);
 	return 0;
 }
 
-int pwrdm_post_transition(void)
+int pwrdm_post_transition(struct powerdomain *pwrdm)
 {
-	pwrdm_for_each(_pwrdm_post_transition_cb, NULL);
+	if (pwrdm)
+		_pwrdm_post_transition_cb(pwrdm, NULL);
+	else
+		pwrdm_for_each(_pwrdm_post_transition_cb, NULL);
+
 	return 0;
 }
 
@@ -935,16 +1008,16 @@ int pwrdm_post_transition(void)
  * @pwrdm: struct powerdomain * to wait for
  *
  * Context loss count is the sum of powerdomain off-mode counter, the
- * logic off counter and the per-bank memory off counter.  Returns 0
+ * logic off counter and the per-bank memory off counter.  Returns negative
  * (and WARNs) upon error, otherwise, returns the context loss count.
  */
-u32 pwrdm_get_context_loss_count(struct powerdomain *pwrdm)
+int pwrdm_get_context_loss_count(struct powerdomain *pwrdm)
 {
 	int i, count;
 
 	if (!pwrdm) {
 		WARN(1, "powerdomain: %s: pwrdm is null\n", __func__);
-		return 0;
+		return -ENODEV;
 	}
 
 	count = pwrdm->state_counter[PWRDM_POWER_OFF];
@@ -953,7 +1026,13 @@ u32 pwrdm_get_context_loss_count(struct powerdomain *pwrdm)
 	for (i = 0; i < pwrdm->banks; i++)
 		count += pwrdm->ret_mem_off_counter[i];
 
-	pr_debug("powerdomain: %s: context loss count = %u\n",
+	/*
+	 * Context loss count has to be a non-negative value. Clear the sign
+	 * bit to get a value range from 0 to INT_MAX.
+	 */
+	count &= INT_MAX;
+
+	pr_debug("powerdomain: %s: context loss count = %d\n",
 		 pwrdm->name, count);
 
 	return count;

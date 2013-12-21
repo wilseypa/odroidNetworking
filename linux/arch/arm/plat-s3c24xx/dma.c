@@ -27,7 +27,6 @@
 #include <linux/errno.h>
 #include <linux/io.h>
 
-#include <asm/system.h>
 #include <asm/irq.h>
 #include <mach/hardware.h>
 #include <mach/dma.h>
@@ -326,7 +325,7 @@ static int s3c2410_dma_start(struct s3c2410_dma_chan *chan)
 
 	chan->state = S3C2410_DMA_RUNNING;
 
-	/* check wether there is anything to load, and if not, see
+	/* check whether there is anything to load, and if not, see
 	 * if we can find anything to load
 	 */
 
@@ -474,12 +473,13 @@ int s3c2410_dma_enqueue(enum dma_ch channel, void *id,
 		pr_debug("dma%d: %s: buffer %p queued onto non-empty channel\n",
 			 chan->number, __func__, buf);
 
-		if (chan->end == NULL)
+		if (chan->end == NULL) {
 			pr_debug("dma%d: %s: %p not empty, and chan->end==NULL?\n",
 				 chan->number, __func__, chan);
-
-		chan->end->next = buf;
-		chan->end = buf;
+		} else {
+			chan->end->next = buf;
+			chan->end = buf;
+		}
 	}
 
 	/* if necessary, update the next buffer field */
@@ -1094,14 +1094,14 @@ EXPORT_SYMBOL(s3c2410_dma_config);
  *
  * configure the dma source/destination hardware type and address
  *
- * source:    S3C2410_DMASRC_HW: source is hardware
- *            S3C2410_DMASRC_MEM: source is memory
+ * source:    DMA_FROM_DEVICE: source is hardware
+ *            DMA_TO_DEVICE: source is memory
  *
  * devaddr:   physical address of the source
 */
 
 int s3c2410_dma_devconfig(enum dma_ch channel,
-			  enum s3c2410_dmasrc source,
+			  enum dma_data_direction source,
 			  unsigned long devaddr)
 {
 	struct s3c2410_dma_chan *chan = s3c_dma_lookup_channel(channel);
@@ -1131,7 +1131,7 @@ int s3c2410_dma_devconfig(enum dma_ch channel,
 	 hwcfg |= S3C2410_DISRCC_INC;
 
 	switch (source) {
-	case S3C2410_DMASRC_HW:
+	case DMA_FROM_DEVICE:
 		/* source is hardware */
 		pr_debug("%s: hw source, devaddr=%08lx, hwcfg=%d\n",
 			 __func__, devaddr, hwcfg);
@@ -1142,7 +1142,7 @@ int s3c2410_dma_devconfig(enum dma_ch channel,
 		chan->addr_reg = dma_regaddr(chan, S3C2410_DMA_DIDST);
 		break;
 
-	case S3C2410_DMASRC_MEM:
+	case DMA_TO_DEVICE:
 		/* source is memory */
 		pr_debug("%s: mem source, devaddr=%08lx, hwcfg=%d\n",
 			 __func__, devaddr, hwcfg);
@@ -1437,11 +1437,10 @@ int __init s3c24xx_dma_init_map(struct s3c24xx_dma_selection *sel)
 	size_t map_sz = sizeof(*nmap) * sel->map_size;
 	int ptr;
 
-	nmap = kmalloc(map_sz, GFP_KERNEL);
+	nmap = kmemdup(sel->map, map_sz, GFP_KERNEL);
 	if (nmap == NULL)
 		return -ENOMEM;
 
-	memcpy(nmap, sel->map, map_sz);
 	memcpy(&dma_sel, sel, sizeof(*sel));
 
 	dma_sel.map = nmap;

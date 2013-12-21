@@ -22,7 +22,6 @@
 
 #include <linux/module.h>
 #include <linux/slab.h>
-#include <linux/delay.h>
 #include <linux/io.h>
 #include <linux/init.h>
 #include <linux/err.h>
@@ -34,7 +33,7 @@
 #include <linux/hwmon-sysfs.h>
 
 #include <plat/adc.h>
-#include <plat/hwmon.h>
+#include <linux/platform_data/hwmon-s3c.h>
 
 struct s3c_hwmon_attr {
 	struct sensor_device_attribute	in;
@@ -276,7 +275,7 @@ static void s3c_hwmon_remove_attr(struct device *dev,
  * s3c_hwmon_probe - device probe entry.
  * @dev: The device being probed.
 */
-static int __devinit s3c_hwmon_probe(struct platform_device *dev)
+static int s3c_hwmon_probe(struct platform_device *dev)
 {
 	struct s3c_hwmon_pdata *pdata = dev->dev.platform_data;
 	struct s3c_hwmon *hwmon;
@@ -288,7 +287,7 @@ static int __devinit s3c_hwmon_probe(struct platform_device *dev)
 		return -EINVAL;
 	}
 
-	hwmon = kzalloc(sizeof(struct s3c_hwmon), GFP_KERNEL);
+	hwmon = devm_kzalloc(&dev->dev, sizeof(struct s3c_hwmon), GFP_KERNEL);
 	if (hwmon == NULL) {
 		dev_err(&dev->dev, "no memory\n");
 		return -ENOMEM;
@@ -303,8 +302,7 @@ static int __devinit s3c_hwmon_probe(struct platform_device *dev)
 	hwmon->client = s3c_adc_register(dev, NULL, NULL, 0);
 	if (IS_ERR(hwmon->client)) {
 		dev_err(&dev->dev, "cannot register adc\n");
-		ret = PTR_ERR(hwmon->client);
-		goto err_mem;
+		return PTR_ERR(hwmon->client);
 	}
 
 	/* add attributes for our adc devices. */
@@ -363,12 +361,10 @@ static int __devinit s3c_hwmon_probe(struct platform_device *dev)
  err_registered:
 	s3c_adc_release(hwmon->client);
 
- err_mem:
-	kfree(hwmon);
 	return ret;
 }
 
-static int __devexit s3c_hwmon_remove(struct platform_device *dev)
+static int s3c_hwmon_remove(struct platform_device *dev)
 {
 	struct s3c_hwmon *hwmon = platform_get_drvdata(dev);
 	int i;
@@ -390,21 +386,10 @@ static struct platform_driver s3c_hwmon_driver = {
 		.owner		= THIS_MODULE,
 	},
 	.probe		= s3c_hwmon_probe,
-	.remove		= __devexit_p(s3c_hwmon_remove),
+	.remove		= s3c_hwmon_remove,
 };
 
-static int __init s3c_hwmon_init(void)
-{
-	return platform_driver_register(&s3c_hwmon_driver);
-}
-
-static void __exit s3c_hwmon_exit(void)
-{
-	platform_driver_unregister(&s3c_hwmon_driver);
-}
-
-module_init(s3c_hwmon_init);
-module_exit(s3c_hwmon_exit);
+module_platform_driver(s3c_hwmon_driver);
 
 MODULE_AUTHOR("Ben Dooks <ben@simtec.co.uk>");
 MODULE_DESCRIPTION("S3C ADC HWMon driver");

@@ -11,7 +11,7 @@
 #include <linux/uio.h>
 #include <linux/fsnotify.h>
 #include <linux/security.h>
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/syscalls.h>
 #include <linux/pagemap.h>
 #include <linux/splice.h>
@@ -35,23 +35,46 @@ static inline int unsigned_offsets(struct file *file)
 	return file->f_mode & FMODE_UNSIGNED_OFFSET;
 }
 
+static loff_t lseek_execute(struct file *file, struct inode *inode,
+		loff_t offset, loff_t maxsize)
+{
+	if (offset < 0 && !unsigned_offsets(file))
+		return -EINVAL;
+	if (offset > maxsize)
+		return -EINVAL;
+
+	if (offset != file->f_pos) {
+		file->f_pos = offset;
+		file->f_version = 0;
+	}
+	return offset;
+}
+
 /**
- * generic_file_llseek_unlocked - lockless generic llseek implementation
+ * generic_file_llseek_size - generic llseek implementation for regular files
  * @file:	file structure to seek on
  * @offset:	file offset to seek to
- * @origin:	type of seek
+ * @whence:	type of seek
+ * @size:	max size of this file in file system
+ * @eof:	offset used for SEEK_END position
  *
- * Updates the file offset to the value specified by @offset and @origin.
- * Locking must be provided by the caller.
+ * This is a variant of generic_file_llseek that allows passing in a custom
+ * maximum file size and a custom EOF position, for e.g. hashed directories
+ *
+ * Synchronization:
+ * SEEK_SET and SEEK_END are unsynchronized (but atomic on 64bit platforms)
+ * SEEK_CUR is synchronized against other SEEK_CURs, but not read/writes.
+ * read/writes behave like SEEK_SET against seeks.
  */
 loff_t
-generic_file_llseek_unlocked(struct file *file, loff_t offset, int origin)
+generic_file_llseek_size(struct file *file, loff_t offset, int whence,
+		loff_t maxsize, loff_t eof)
 {
 	struct inode *inode = file->f_mapping->host;
 
-	switch (origin) {
+	switch (whence) {
 	case SEEK_END:
-		offset += inode->i_size;
+		offset += eof;
 		break;
 	case SEEK_CUR:
 		/*
@@ -62,44 +85,56 @@ generic_file_llseek_unlocked(struct file *file, loff_t offset, int origin)
 		 */
 		if (offset == 0)
 			return file->f_pos;
-		offset += file->f_pos;
+		/*
+		 * f_lock protects against read/modify/write race with other
+		 * SEEK_CURs. Note that parallel writes and reads behave
+		 * like SEEK_SET.
+		 */
+		spin_lock(&file->f_lock);
+		offset = lseek_execute(file, inode, file->f_pos + offset,
+				       maxsize);
+		spin_unlock(&file->f_lock);
+		return offset;
+	case SEEK_DATA:
+		/*
+		 * In the generic case the entire file is data, so as long as
+		 * offset isn't at the end of the file then the offset is data.
+		 */
+		if (offset >= eof)
+			return -ENXIO;
+		break;
+	case SEEK_HOLE:
+		/*
+		 * There is a virtual hole at the end of the file, so as long as
+		 * offset isn't i_size or larger, return i_size.
+		 */
+		if (offset >= eof)
+			return -ENXIO;
+		offset = eof;
 		break;
 	}
 
-	if (offset < 0 && !unsigned_offsets(file))
-		return -EINVAL;
-	if (offset > inode->i_sb->s_maxbytes)
-		return -EINVAL;
-
-	/* Special lock needed here? */
-	if (offset != file->f_pos) {
-		file->f_pos = offset;
-		file->f_version = 0;
-	}
-
-	return offset;
+	return lseek_execute(file, inode, offset, maxsize);
 }
-EXPORT_SYMBOL(generic_file_llseek_unlocked);
+EXPORT_SYMBOL(generic_file_llseek_size);
 
 /**
  * generic_file_llseek - generic llseek implementation for regular files
  * @file:	file structure to seek on
  * @offset:	file offset to seek to
- * @origin:	type of seek
+ * @whence:	type of seek
  *
  * This is a generic implemenation of ->llseek useable for all normal local
  * filesystems.  It just updates the file offset to the value specified by
- * @offset and @origin under i_mutex.
+ * @offset and @whence under i_mutex.
  */
-loff_t generic_file_llseek(struct file *file, loff_t offset, int origin)
+loff_t generic_file_llseek(struct file *file, loff_t offset, int whence)
 {
-	loff_t rval;
+	struct inode *inode = file->f_mapping->host;
 
-	mutex_lock(&file->f_dentry->d_inode->i_mutex);
-	rval = generic_file_llseek_unlocked(file, offset, origin);
-	mutex_unlock(&file->f_dentry->d_inode->i_mutex);
-
-	return rval;
+	return generic_file_llseek_size(file, offset, whence,
+					inode->i_sb->s_maxbytes,
+					i_size_read(inode));
 }
 EXPORT_SYMBOL(generic_file_llseek);
 
@@ -107,33 +142,34 @@ EXPORT_SYMBOL(generic_file_llseek);
  * noop_llseek - No Operation Performed llseek implementation
  * @file:	file structure to seek on
  * @offset:	file offset to seek to
- * @origin:	type of seek
+ * @whence:	type of seek
  *
  * This is an implementation of ->llseek useable for the rare special case when
  * userspace expects the seek to succeed but the (device) file is actually not
  * able to perform the seek. In this case you use noop_llseek() instead of
  * falling back to the default implementation of ->llseek.
  */
-loff_t noop_llseek(struct file *file, loff_t offset, int origin)
+loff_t noop_llseek(struct file *file, loff_t offset, int whence)
 {
 	return file->f_pos;
 }
 EXPORT_SYMBOL(noop_llseek);
 
-loff_t no_llseek(struct file *file, loff_t offset, int origin)
+loff_t no_llseek(struct file *file, loff_t offset, int whence)
 {
 	return -ESPIPE;
 }
 EXPORT_SYMBOL(no_llseek);
 
-loff_t default_llseek(struct file *file, loff_t offset, int origin)
+loff_t default_llseek(struct file *file, loff_t offset, int whence)
 {
+	struct inode *inode = file->f_path.dentry->d_inode;
 	loff_t retval;
 
-	mutex_lock(&file->f_dentry->d_inode->i_mutex);
-	switch (origin) {
+	mutex_lock(&inode->i_mutex);
+	switch (whence) {
 		case SEEK_END:
-			offset += i_size_read(file->f_path.dentry->d_inode);
+			offset += i_size_read(inode);
 			break;
 		case SEEK_CUR:
 			if (offset == 0) {
@@ -141,6 +177,30 @@ loff_t default_llseek(struct file *file, loff_t offset, int origin)
 				goto out;
 			}
 			offset += file->f_pos;
+			break;
+		case SEEK_DATA:
+			/*
+			 * In the generic case the entire file is data, so as
+			 * long as offset isn't at the end of the file then the
+			 * offset is data.
+			 */
+			if (offset >= inode->i_size) {
+				retval = -ENXIO;
+				goto out;
+			}
+			break;
+		case SEEK_HOLE:
+			/*
+			 * There is a virtual hole at the end of the file, so
+			 * as long as offset isn't i_size or larger, return
+			 * i_size.
+			 */
+			if (offset >= inode->i_size) {
+				retval = -ENXIO;
+				goto out;
+			}
+			offset = inode->i_size;
+			break;
 	}
 	retval = -EINVAL;
 	if (offset >= 0 || unsigned_offsets(file)) {
@@ -151,12 +211,12 @@ loff_t default_llseek(struct file *file, loff_t offset, int origin)
 		retval = offset;
 	}
 out:
-	mutex_unlock(&file->f_dentry->d_inode->i_mutex);
+	mutex_unlock(&inode->i_mutex);
 	return retval;
 }
 EXPORT_SYMBOL(default_llseek);
 
-loff_t vfs_llseek(struct file *file, loff_t offset, int origin)
+loff_t vfs_llseek(struct file *file, loff_t offset, int whence)
 {
 	loff_t (*fn)(struct file *, loff_t, int);
 
@@ -165,54 +225,46 @@ loff_t vfs_llseek(struct file *file, loff_t offset, int origin)
 		if (file->f_op && file->f_op->llseek)
 			fn = file->f_op->llseek;
 	}
-	return fn(file, offset, origin);
+	return fn(file, offset, whence);
 }
 EXPORT_SYMBOL(vfs_llseek);
 
-SYSCALL_DEFINE3(lseek, unsigned int, fd, off_t, offset, unsigned int, origin)
+SYSCALL_DEFINE3(lseek, unsigned int, fd, off_t, offset, unsigned int, whence)
 {
 	off_t retval;
-	struct file * file;
-	int fput_needed;
-
-	retval = -EBADF;
-	file = fget_light(fd, &fput_needed);
-	if (!file)
-		goto bad;
+	struct fd f = fdget(fd);
+	if (!f.file)
+		return -EBADF;
 
 	retval = -EINVAL;
-	if (origin <= SEEK_MAX) {
-		loff_t res = vfs_llseek(file, offset, origin);
+	if (whence <= SEEK_MAX) {
+		loff_t res = vfs_llseek(f.file, offset, whence);
 		retval = res;
 		if (res != (loff_t)retval)
 			retval = -EOVERFLOW;	/* LFS: should only happen on 32 bit platforms */
 	}
-	fput_light(file, fput_needed);
-bad:
+	fdput(f);
 	return retval;
 }
 
 #ifdef __ARCH_WANT_SYS_LLSEEK
 SYSCALL_DEFINE5(llseek, unsigned int, fd, unsigned long, offset_high,
 		unsigned long, offset_low, loff_t __user *, result,
-		unsigned int, origin)
+		unsigned int, whence)
 {
 	int retval;
-	struct file * file;
+	struct fd f = fdget(fd);
 	loff_t offset;
-	int fput_needed;
 
-	retval = -EBADF;
-	file = fget_light(fd, &fput_needed);
-	if (!file)
-		goto bad;
+	if (!f.file)
+		return -EBADF;
 
 	retval = -EINVAL;
-	if (origin > SEEK_MAX)
+	if (whence > SEEK_MAX)
 		goto out_putf;
 
-	offset = vfs_llseek(file, ((loff_t) offset_high << 32) | offset_low,
-			origin);
+	offset = vfs_llseek(f.file, ((loff_t) offset_high << 32) | offset_low,
+			whence);
 
 	retval = (int)offset;
 	if (offset >= 0) {
@@ -221,8 +273,7 @@ SYSCALL_DEFINE5(llseek, unsigned int, fd, unsigned long, offset_high,
 			retval = 0;
 	}
 out_putf:
-	fput_light(file, fput_needed);
-bad:
+	fdput(f);
 	return retval;
 }
 #endif
@@ -401,34 +452,29 @@ static inline void file_pos_write(struct file *file, loff_t pos)
 
 SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)
 {
-	struct file *file;
+	struct fd f = fdget(fd);
 	ssize_t ret = -EBADF;
-	int fput_needed;
 
-	file = fget_light(fd, &fput_needed);
-	if (file) {
-		loff_t pos = file_pos_read(file);
-		ret = vfs_read(file, buf, count, &pos);
-		file_pos_write(file, pos);
-		fput_light(file, fput_needed);
+	if (f.file) {
+		loff_t pos = file_pos_read(f.file);
+		ret = vfs_read(f.file, buf, count, &pos);
+		file_pos_write(f.file, pos);
+		fdput(f);
 	}
-
 	return ret;
 }
 
 SYSCALL_DEFINE3(write, unsigned int, fd, const char __user *, buf,
 		size_t, count)
 {
-	struct file *file;
+	struct fd f = fdget(fd);
 	ssize_t ret = -EBADF;
-	int fput_needed;
 
-	file = fget_light(fd, &fput_needed);
-	if (file) {
-		loff_t pos = file_pos_read(file);
-		ret = vfs_write(file, buf, count, &pos);
-		file_pos_write(file, pos);
-		fput_light(file, fput_needed);
+	if (f.file) {
+		loff_t pos = file_pos_read(f.file);
+		ret = vfs_write(f.file, buf, count, &pos);
+		file_pos_write(f.file, pos);
+		fdput(f);
 	}
 
 	return ret;
@@ -437,19 +483,18 @@ SYSCALL_DEFINE3(write, unsigned int, fd, const char __user *, buf,
 SYSCALL_DEFINE(pread64)(unsigned int fd, char __user *buf,
 			size_t count, loff_t pos)
 {
-	struct file *file;
+	struct fd f;
 	ssize_t ret = -EBADF;
-	int fput_needed;
 
 	if (pos < 0)
 		return -EINVAL;
 
-	file = fget_light(fd, &fput_needed);
-	if (file) {
+	f = fdget(fd);
+	if (f.file) {
 		ret = -ESPIPE;
-		if (file->f_mode & FMODE_PREAD)
-			ret = vfs_read(file, buf, count, &pos);
-		fput_light(file, fput_needed);
+		if (f.file->f_mode & FMODE_PREAD)
+			ret = vfs_read(f.file, buf, count, &pos);
+		fdput(f);
 	}
 
 	return ret;
@@ -466,19 +511,18 @@ SYSCALL_ALIAS(sys_pread64, SyS_pread64);
 SYSCALL_DEFINE(pwrite64)(unsigned int fd, const char __user *buf,
 			 size_t count, loff_t pos)
 {
-	struct file *file;
+	struct fd f;
 	ssize_t ret = -EBADF;
-	int fput_needed;
 
 	if (pos < 0)
 		return -EINVAL;
 
-	file = fget_light(fd, &fput_needed);
-	if (file) {
+	f = fdget(fd);
+	if (f.file) {
 		ret = -ESPIPE;
-		if (file->f_mode & FMODE_PWRITE)  
-			ret = vfs_write(file, buf, count, &pos);
-		fput_light(file, fput_needed);
+		if (f.file->f_mode & FMODE_PWRITE)  
+			ret = vfs_write(f.file, buf, count, &pos);
+		fdput(f);
 	}
 
 	return ret;
@@ -631,7 +675,8 @@ ssize_t rw_copy_check_uvector(int type, const struct iovec __user * uvector,
 			ret = -EINVAL;
 			goto out;
 		}
-		if (unlikely(!access_ok(vrfy_dir(type), buf, len))) {
+		if (type >= 0
+		    && unlikely(!access_ok(vrfy_dir(type), buf, len))) {
 			ret = -EFAULT;
 			goto out;
 		}
@@ -663,7 +708,7 @@ static ssize_t do_readv_writev(int type, struct file *file,
 	}
 
 	ret = rw_copy_check_uvector(type, uvector, nr_segs,
-			ARRAY_SIZE(iovstack), iovstack, &iov);
+				    ARRAY_SIZE(iovstack), iovstack, &iov);
 	if (ret <= 0)
 		goto out;
 
@@ -728,16 +773,14 @@ EXPORT_SYMBOL(vfs_writev);
 SYSCALL_DEFINE3(readv, unsigned long, fd, const struct iovec __user *, vec,
 		unsigned long, vlen)
 {
-	struct file *file;
+	struct fd f = fdget(fd);
 	ssize_t ret = -EBADF;
-	int fput_needed;
 
-	file = fget_light(fd, &fput_needed);
-	if (file) {
-		loff_t pos = file_pos_read(file);
-		ret = vfs_readv(file, vec, vlen, &pos);
-		file_pos_write(file, pos);
-		fput_light(file, fput_needed);
+	if (f.file) {
+		loff_t pos = file_pos_read(f.file);
+		ret = vfs_readv(f.file, vec, vlen, &pos);
+		file_pos_write(f.file, pos);
+		fdput(f);
 	}
 
 	if (ret > 0)
@@ -749,16 +792,14 @@ SYSCALL_DEFINE3(readv, unsigned long, fd, const struct iovec __user *, vec,
 SYSCALL_DEFINE3(writev, unsigned long, fd, const struct iovec __user *, vec,
 		unsigned long, vlen)
 {
-	struct file *file;
+	struct fd f = fdget(fd);
 	ssize_t ret = -EBADF;
-	int fput_needed;
 
-	file = fget_light(fd, &fput_needed);
-	if (file) {
-		loff_t pos = file_pos_read(file);
-		ret = vfs_writev(file, vec, vlen, &pos);
-		file_pos_write(file, pos);
-		fput_light(file, fput_needed);
+	if (f.file) {
+		loff_t pos = file_pos_read(f.file);
+		ret = vfs_writev(f.file, vec, vlen, &pos);
+		file_pos_write(f.file, pos);
+		fdput(f);
 	}
 
 	if (ret > 0)
@@ -777,19 +818,18 @@ SYSCALL_DEFINE5(preadv, unsigned long, fd, const struct iovec __user *, vec,
 		unsigned long, vlen, unsigned long, pos_l, unsigned long, pos_h)
 {
 	loff_t pos = pos_from_hilo(pos_h, pos_l);
-	struct file *file;
+	struct fd f;
 	ssize_t ret = -EBADF;
-	int fput_needed;
 
 	if (pos < 0)
 		return -EINVAL;
 
-	file = fget_light(fd, &fput_needed);
-	if (file) {
+	f = fdget(fd);
+	if (f.file) {
 		ret = -ESPIPE;
-		if (file->f_mode & FMODE_PREAD)
-			ret = vfs_readv(file, vec, vlen, &pos);
-		fput_light(file, fput_needed);
+		if (f.file->f_mode & FMODE_PREAD)
+			ret = vfs_readv(f.file, vec, vlen, &pos);
+		fdput(f);
 	}
 
 	if (ret > 0)
@@ -802,19 +842,18 @@ SYSCALL_DEFINE5(pwritev, unsigned long, fd, const struct iovec __user *, vec,
 		unsigned long, vlen, unsigned long, pos_l, unsigned long, pos_h)
 {
 	loff_t pos = pos_from_hilo(pos_h, pos_l);
-	struct file *file;
+	struct fd f;
 	ssize_t ret = -EBADF;
-	int fput_needed;
 
 	if (pos < 0)
 		return -EINVAL;
 
-	file = fget_light(fd, &fput_needed);
-	if (file) {
+	f = fdget(fd);
+	if (f.file) {
 		ret = -ESPIPE;
-		if (file->f_mode & FMODE_PWRITE)
-			ret = vfs_writev(file, vec, vlen, &pos);
-		fput_light(file, fput_needed);
+		if (f.file->f_mode & FMODE_PWRITE)
+			ret = vfs_writev(f.file, vec, vlen, &pos);
+		fdput(f);
 	}
 
 	if (ret > 0)
@@ -823,31 +862,31 @@ SYSCALL_DEFINE5(pwritev, unsigned long, fd, const struct iovec __user *, vec,
 	return ret;
 }
 
-static ssize_t do_sendfile(int out_fd, int in_fd, loff_t *ppos,
-			   size_t count, loff_t max)
+ssize_t do_sendfile(int out_fd, int in_fd, loff_t *ppos, size_t count,
+		    loff_t max)
 {
-	struct file * in_file, * out_file;
-	struct inode * in_inode, * out_inode;
+	struct fd in, out;
+	struct inode *in_inode, *out_inode;
 	loff_t pos;
 	ssize_t retval;
-	int fput_needed_in, fput_needed_out, fl;
+	int fl;
 
 	/*
 	 * Get input file, and verify that it is ok..
 	 */
 	retval = -EBADF;
-	in_file = fget_light(in_fd, &fput_needed_in);
-	if (!in_file)
+	in = fdget(in_fd);
+	if (!in.file)
 		goto out;
-	if (!(in_file->f_mode & FMODE_READ))
+	if (!(in.file->f_mode & FMODE_READ))
 		goto fput_in;
 	retval = -ESPIPE;
 	if (!ppos)
-		ppos = &in_file->f_pos;
+		ppos = &in.file->f_pos;
 	else
-		if (!(in_file->f_mode & FMODE_PREAD))
+		if (!(in.file->f_mode & FMODE_PREAD))
 			goto fput_in;
-	retval = rw_verify_area(READ, in_file, ppos, count);
+	retval = rw_verify_area(READ, in.file, ppos, count);
 	if (retval < 0)
 		goto fput_in;
 	count = retval;
@@ -856,15 +895,15 @@ static ssize_t do_sendfile(int out_fd, int in_fd, loff_t *ppos,
 	 * Get output file, and verify that it is ok..
 	 */
 	retval = -EBADF;
-	out_file = fget_light(out_fd, &fput_needed_out);
-	if (!out_file)
+	out = fdget(out_fd);
+	if (!out.file)
 		goto fput_in;
-	if (!(out_file->f_mode & FMODE_WRITE))
+	if (!(out.file->f_mode & FMODE_WRITE))
 		goto fput_out;
 	retval = -EINVAL;
-	in_inode = in_file->f_path.dentry->d_inode;
-	out_inode = out_file->f_path.dentry->d_inode;
-	retval = rw_verify_area(WRITE, out_file, &out_file->f_pos, count);
+	in_inode = in.file->f_path.dentry->d_inode;
+	out_inode = out.file->f_path.dentry->d_inode;
+	retval = rw_verify_area(WRITE, out.file, &out.file->f_pos, count);
 	if (retval < 0)
 		goto fput_out;
 	count = retval;
@@ -888,14 +927,16 @@ static ssize_t do_sendfile(int out_fd, int in_fd, loff_t *ppos,
 	 * and the application is arguably buggy if it doesn't expect
 	 * EAGAIN on a non-blocking file descriptor.
 	 */
-	if (in_file->f_flags & O_NONBLOCK)
+	if (in.file->f_flags & O_NONBLOCK)
 		fl = SPLICE_F_NONBLOCK;
 #endif
-	retval = do_splice_direct(in_file, ppos, out_file, count, fl);
+	retval = do_splice_direct(in.file, ppos, out.file, count, fl);
 
 	if (retval > 0) {
 		add_rchar(current, retval);
 		add_wchar(current, retval);
+		fsnotify_access(in.file);
+		fsnotify_modify(out.file);
 	}
 
 	inc_syscr(current);
@@ -904,9 +945,9 @@ static ssize_t do_sendfile(int out_fd, int in_fd, loff_t *ppos,
 		retval = -EOVERFLOW;
 
 fput_out:
-	fput_light(out_file, fput_needed_out);
+	fdput(out);
 fput_in:
-	fput_light(in_file, fput_needed_in);
+	fdput(in);
 out:
 	return retval;
 }

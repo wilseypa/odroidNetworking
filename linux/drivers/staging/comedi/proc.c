@@ -28,9 +28,8 @@
 	was cool.
 */
 
-#define __NO_VERSION__
 #include "comedidev.h"
-#include "comedi_fops.h"
+#include "comedi_internal.h"
 #include <linux/proc_fs.h>
 #include <linux/string.h>
 

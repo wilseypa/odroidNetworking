@@ -28,6 +28,7 @@
 #include <linux/acpi.h>
 #include <linux/backlight.h>
 #include <linux/slab.h>
+#include <linux/module.h>
 
 MODULE_AUTHOR("Thomas Renninger <trenn@suse.de>");
 MODULE_DESCRIPTION("MSI laptop WMI hotkeys driver");
@@ -175,7 +176,7 @@ static void msi_wmi_notify(u32 value, void *context)
 				pr_debug("Suppressed key event 0x%X - "
 					 "Last press was %lld us ago\n",
 					 key->code, ktime_to_us(diff));
-				return;
+				goto msi_wmi_notify_exit;
 			}
 			last_pressed[key->code - SCANCODE_BASE] = cur;
 
@@ -194,6 +195,8 @@ static void msi_wmi_notify(u32 value, void *context)
 			pr_info("Unknown key pressed - %x\n", eventcode);
 	} else
 		pr_info("Unknown event received\n");
+
+msi_wmi_notify_exit:
 	kfree(response.pointer);
 }
 
@@ -272,6 +275,7 @@ static int __init msi_wmi_init(void)
 err_free_backlight:
 	backlight_device_unregister(backlight);
 err_free_input:
+	sparse_keymap_free(msi_wmi_input_dev);
 	input_unregister_device(msi_wmi_input_dev);
 err_uninstall_notifier:
 	wmi_remove_notify_handler(MSIWMI_EVENT_GUID);

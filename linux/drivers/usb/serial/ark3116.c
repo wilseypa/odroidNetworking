@@ -37,12 +37,6 @@
 #include <linux/mutex.h>
 #include <linux/spinlock.h>
 
-static int debug;
-/*
- * Version information
- */
-
-#define DRIVER_VERSION "v0.7"
 #define DRIVER_AUTHOR "Bart Hartgers <bart.hartgers+ark3116@gmail.com>"
 #define DRIVER_DESC "USB ARK3116 serial/IrDA driver"
 #define DRIVER_DEV_DESC "ARK3116 RS232/IrDA"
@@ -68,7 +62,6 @@ static int is_irda(struct usb_serial *serial)
 }
 
 struct ark3116_private {
-	wait_queue_head_t       delta_msr_wait;
 	struct async_icount	icount;
 	int			irda;	/* 1 for irda device */
 
@@ -126,9 +119,6 @@ static inline int calc_divisor(int bps)
 
 static int ark3116_attach(struct usb_serial *serial)
 {
-	struct usb_serial_port *port = serial->port[0];
-	struct ark3116_private *priv;
-
 	/* make sure we have our end-points */
 	if ((serial->num_bulk_in == 0) ||
 	    (serial->num_bulk_out == 0) ||
@@ -143,12 +133,18 @@ static int ark3116_attach(struct usb_serial *serial)
 		return -EINVAL;
 	}
 
-	priv = kzalloc(sizeof(struct ark3116_private),
-		       GFP_KERNEL);
+	return 0;
+}
+
+static int ark3116_port_probe(struct usb_serial_port *port)
+{
+	struct usb_serial *serial = port->serial;
+	struct ark3116_private *priv;
+
+	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
 	if (!priv)
 		return -ENOMEM;
 
-	init_waitqueue_head(&priv->delta_msr_wait);
 	mutex_init(&priv->hw_lock);
 	spin_lock_init(&priv->status_lock);
 
@@ -199,23 +195,20 @@ static int ark3116_attach(struct usb_serial *serial)
 	return 0;
 }
 
-static void ark3116_release(struct usb_serial *serial)
+static int ark3116_port_remove(struct usb_serial_port *port)
 {
-	struct usb_serial_port *port = serial->port[0];
 	struct ark3116_private *priv = usb_get_serial_port_data(port);
 
 	/* device is closed, so URBs and DMA should be down */
-
-	usb_set_serial_port_data(port, NULL);
-
 	mutex_destroy(&priv->hw_lock);
-
 	kfree(priv);
+
+	return 0;
 }
 
 static void ark3116_init_termios(struct tty_struct *tty)
 {
-	struct ktermios *termios = tty->termios;
+	struct ktermios *termios = &tty->termios;
 	*termios = tty_std_termios;
 	termios->c_cflag = B9600 | CS8
 				      | CREAD | HUPCL | CLOCAL;
@@ -229,7 +222,7 @@ static void ark3116_set_termios(struct tty_struct *tty,
 {
 	struct usb_serial *serial = port->serial;
 	struct ark3116_private *priv = usb_get_serial_port_data(port);
-	struct ktermios *termios = tty->termios;
+	struct ktermios *termios = &tty->termios;
 	unsigned int cflag = termios->c_cflag;
 	int bps = tty_get_baud_rate(tty);
 	int quot;
@@ -265,7 +258,7 @@ static void ark3116_set_termios(struct tty_struct *tty,
 	hcr = (cflag & CRTSCTS) ? 0x03 : 0x00;
 
 	/* calc baudrate */
-	dbg("%s - setting bps to %d", __func__, bps);
+	dev_dbg(&port->dev, "%s - setting bps to %d\n", __func__, bps);
 	eval = 0;
 	switch (bps) {
 	case 0:
@@ -292,8 +285,8 @@ static void ark3116_set_termios(struct tty_struct *tty,
 	/* keep old LCR_SBC bit */
 	lcr |= (priv->lcr & UART_LCR_SBC);
 
-	dbg("%s - setting hcr:0x%02x,lcr:0x%02x,quot:%d",
-	    __func__, hcr, lcr, quot);
+	dev_dbg(&port->dev, "%s - setting hcr:0x%02x,lcr:0x%02x,quot:%d\n",
+		__func__, hcr, lcr, quot);
 
 	/* handshake control */
 	if (priv->hcr != hcr) {
@@ -375,8 +368,9 @@ static int ark3116_open(struct tty_struct *tty, struct usb_serial_port *port)
 
 	result = usb_serial_generic_open(tty, port);
 	if (result) {
-		dbg("%s - usb_serial_generic_open failed: %d",
-		    __func__, result);
+		dev_dbg(&port->dev,
+			"%s - usb_serial_generic_open failed: %d\n",
+			__func__, result);
 		goto err_out;
 	}
 
@@ -460,10 +454,14 @@ static int ark3116_ioctl(struct tty_struct *tty,
 	case TIOCMIWAIT:
 		for (;;) {
 			struct async_icount prev = priv->icount;
-			interruptible_sleep_on(&priv->delta_msr_wait);
+			interruptible_sleep_on(&port->delta_msr_wait);
 			/* see if a signal did it */
 			if (signal_pending(current))
 				return -ERESTARTSYS;
+
+			if (port->serial->disconnected)
+				return -EIO;
+
 			if ((prev.rng == priv->icount.rng) &&
 			    (prev.dsr == priv->icount.dsr) &&
 			    (prev.dcd == priv->icount.dcd) &&
@@ -584,7 +582,7 @@ static void ark3116_update_msr(struct usb_serial_port *port, __u8 msr)
 			priv->icount.dcd++;
 		if (msr & UART_MSR_TERI)
 			priv->icount.rng++;
-		wake_up_interruptible(&priv->delta_msr_wait);
+		wake_up_interruptible(&port->delta_msr_wait);
 	}
 }
 
@@ -622,24 +620,26 @@ static void ark3116_read_int_callback(struct urb *urb)
 	case -ENOENT:
 	case -ESHUTDOWN:
 		/* this urb is terminated, clean up */
-		dbg("%s - urb shutting down with status: %d",
-		    __func__, status);
+		dev_dbg(&port->dev, "%s - urb shutting down with status: %d\n",
+			__func__, status);
 		return;
 	default:
-		dbg("%s - nonzero urb status received: %d",
-		    __func__, status);
+		dev_dbg(&port->dev, "%s - nonzero urb status received: %d\n",
+			__func__, status);
 		break;
 	case 0: /* success */
 		/* discovered this by trail and error... */
 		if ((urb->actual_length == 4) && (data[0] == 0xe8)) {
 			const __u8 id = data[1]&UART_IIR_ID;
-			dbg("%s: iir=%02x", __func__, data[1]);
+			dev_dbg(&port->dev, "%s: iir=%02x\n", __func__, data[1]);
 			if (id == UART_IIR_MSI) {
-				dbg("%s: msr=%02x", __func__, data[3]);
+				dev_dbg(&port->dev, "%s: msr=%02x\n",
+					__func__, data[3]);
 				ark3116_update_msr(port, data[3]);
 				break;
 			} else if (id == UART_IIR_RLSI) {
-				dbg("%s: lsr=%02x", __func__, data[2]);
+				dev_dbg(&port->dev, "%s: lsr=%02x\n",
+					__func__, data[2]);
 				ark3116_update_lsr(port, data[2]);
 				break;
 			}
@@ -647,8 +647,7 @@ static void ark3116_read_int_callback(struct urb *urb)
 		/*
 		 * Not sure what this data meant...
 		 */
-		usb_serial_debug_data(debug, &port->dev,
-				      __func__,
+		usb_serial_debug_data(&port->dev, __func__,
 				      urb->actual_length,
 				      urb->transfer_buffer);
 		break;
@@ -714,24 +713,16 @@ static void ark3116_process_read_urb(struct urb *urb)
 	tty_kref_put(tty);
 }
 
-static struct usb_driver ark3116_driver = {
-	.name =		"ark3116",
-	.probe =	usb_serial_probe,
-	.disconnect =	usb_serial_disconnect,
-	.id_table =	id_table,
-	.no_dynamic_id =	1,
-};
-
 static struct usb_serial_driver ark3116_device = {
 	.driver = {
 		.owner =	THIS_MODULE,
 		.name =		"ark3116",
 	},
 	.id_table =		id_table,
-	.usb_driver =		&ark3116_driver,
 	.num_ports =		1,
 	.attach =		ark3116_attach,
-	.release =		ark3116_release,
+	.port_probe =		ark3116_port_probe,
+	.port_remove =		ark3116_port_remove,
 	.set_termios =		ark3116_set_termios,
 	.init_termios =		ark3116_init_termios,
 	.ioctl =		ark3116_ioctl,
@@ -745,39 +736,16 @@ static struct usb_serial_driver ark3116_device = {
 	.process_read_urb =	ark3116_process_read_urb,
 };
 
-static int __init ark3116_init(void)
-{
-	int retval;
+static struct usb_serial_driver * const serial_drivers[] = {
+	&ark3116_device, NULL
+};
 
-	retval = usb_serial_register(&ark3116_device);
-	if (retval)
-		return retval;
-	retval = usb_register(&ark3116_driver);
-	if (retval == 0) {
-		printk(KERN_INFO "%s:"
-		       DRIVER_VERSION ":"
-		       DRIVER_DESC "\n",
-		       KBUILD_MODNAME);
-	} else
-		usb_serial_deregister(&ark3116_device);
-	return retval;
-}
+module_usb_serial_driver(serial_drivers, id_table);
 
-static void __exit ark3116_exit(void)
-{
-	usb_deregister(&ark3116_driver);
-	usb_serial_deregister(&ark3116_device);
-}
-
-module_init(ark3116_init);
-module_exit(ark3116_exit);
 MODULE_LICENSE("GPL");
 
 MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(DRIVER_DESC);
-
-module_param(debug, bool, S_IRUGO | S_IWUSR);
-MODULE_PARM_DESC(debug, "Enable debug");
 
 /*
  * The following describes what I learned from studying the old

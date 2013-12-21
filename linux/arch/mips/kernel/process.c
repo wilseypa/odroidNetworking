@@ -9,13 +9,13 @@
  * Copyright (C) 2004 Thiemo Seufer
  */
 #include <linux/errno.h>
-#include <linux/module.h>
 #include <linux/sched.h>
 #include <linux/tick.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <linux/stddef.h>
 #include <linux/unistd.h>
+#include <linux/export.h>
 #include <linux/ptrace.h>
 #include <linux/mman.h>
 #include <linux/personality.h>
@@ -32,7 +32,6 @@
 #include <asm/dsp.h>
 #include <asm/fpu.h>
 #include <asm/pgtable.h>
-#include <asm/system.h>
 #include <asm/mipsregs.h>
 #include <asm/processor.h>
 #include <asm/uaccess.h>
@@ -56,7 +55,8 @@ void __noreturn cpu_idle(void)
 
 	/* endless idle loop with no priority at all */
 	while (1) {
-		tick_nohz_stop_sched_tick(1);
+		tick_nohz_idle_enter();
+		rcu_idle_enter();
 		while (!need_resched() && cpu_online(cpu)) {
 #ifdef CONFIG_MIPS_MT_SMTC
 			extern void smtc_idle_loop_hook(void);
@@ -72,19 +72,17 @@ void __noreturn cpu_idle(void)
 			}
 		}
 #ifdef CONFIG_HOTPLUG_CPU
-		if (!cpu_online(cpu) && !cpu_isset(cpu, cpu_callin_map) &&
-		    (system_state == SYSTEM_RUNNING ||
-		     system_state == SYSTEM_BOOTING))
+		if (!cpu_online(cpu) && !cpu_isset(cpu, cpu_callin_map))
 			play_dead();
 #endif
-		tick_nohz_restart_sched_tick();
-		preempt_enable_no_resched();
-		schedule();
-		preempt_disable();
+		rcu_idle_exit();
+		tick_nohz_idle_exit();
+		schedule_preempt_disabled();
 	}
 }
 
 asmlinkage void ret_from_fork(void);
+asmlinkage void ret_from_kernel_thread(void);
 
 void start_thread(struct pt_regs * regs, unsigned long pc, unsigned long sp)
 {
@@ -103,7 +101,6 @@ void start_thread(struct pt_regs * regs, unsigned long pc, unsigned long sp)
 		__init_dsp();
 	regs->cp0_epc = pc;
 	regs->regs[29] = sp;
-	current_thread_info()->addr_limit = USER_DS;
 }
 
 void exit_thread(void)
@@ -115,10 +112,10 @@ void flush_thread(void)
 }
 
 int copy_thread(unsigned long clone_flags, unsigned long usp,
-	unsigned long unused, struct task_struct *p, struct pt_regs *regs)
+	unsigned long arg, struct task_struct *p)
 {
 	struct thread_info *ti = task_thread_info(p);
-	struct pt_regs *childregs;
+	struct pt_regs *childregs, *regs = current_pt_regs();
 	unsigned long childksp;
 	p->set_child_tid = p->clear_child_tid = NULL;
 
@@ -138,19 +135,30 @@ int copy_thread(unsigned long clone_flags, unsigned long usp,
 	childregs = (struct pt_regs *) childksp - 1;
 	/*  Put the stack after the struct pt_regs.  */
 	childksp = (unsigned long) childregs;
+	p->thread.cp0_status = read_c0_status() & ~(ST0_CU2|ST0_CU1);
+	if (unlikely(p->flags & PF_KTHREAD)) {
+		unsigned long status = p->thread.cp0_status;
+		memset(childregs, 0, sizeof(struct pt_regs));
+		ti->addr_limit = KERNEL_DS;
+		p->thread.reg16 = usp; /* fn */
+		p->thread.reg17 = arg;
+		p->thread.reg29 = childksp;
+		p->thread.reg31 = (unsigned long) ret_from_kernel_thread;
+#if defined(CONFIG_CPU_R3000) || defined(CONFIG_CPU_TX39XX)
+		status = (status & ~(ST0_KUP | ST0_IEP | ST0_IEC)) |
+			 ((status & (ST0_KUC | ST0_IEC)) << 2);
+#else
+		status |= ST0_EXL;
+#endif
+		childregs->cp0_status = status;
+		return 0;
+	}
 	*childregs = *regs;
 	childregs->regs[7] = 0;	/* Clear error flag */
-
 	childregs->regs[2] = 0;	/* Child gets zero as return value */
+	childregs->regs[29] = usp;
+	ti->addr_limit = USER_DS;
 
-	if (childregs->cp0_status & ST0_CU0) {
-		childregs->regs[28] = (unsigned long) ti;
-		childregs->regs[29] = childksp;
-		ti->addr_limit = KERNEL_DS;
-	} else {
-		childregs->regs[29] = usp;
-		ti->addr_limit = USER_DS;
-	}
 	p->thread.reg29 = (unsigned long) childregs;
 	p->thread.reg31 = (unsigned long) ret_from_fork;
 
@@ -158,7 +166,6 @@ int copy_thread(unsigned long clone_flags, unsigned long usp,
 	 * New tasks lose permission to use the fpu. This accelerates context
 	 * switching for most programs since they don't use the fpu.
 	 */
-	p->thread.cp0_status = read_c0_status() & ~(ST0_CU2|ST0_CU1);
 	childregs->cp0_status &= ~(ST0_CU2|ST0_CU1);
 
 #ifdef CONFIG_MIPS_MT_SMTC
@@ -221,35 +228,6 @@ int dump_task_fpu(struct task_struct *t, elf_fpregset_t *fpr)
 	memcpy(fpr, &t->thread.fpu, sizeof(current->thread.fpu));
 
 	return 1;
-}
-
-/*
- * Create a kernel thread
- */
-static void __noreturn kernel_thread_helper(void *arg, int (*fn)(void *))
-{
-	do_exit(fn(arg));
-}
-
-long kernel_thread(int (*fn)(void *), void *arg, unsigned long flags)
-{
-	struct pt_regs regs;
-
-	memset(&regs, 0, sizeof(regs));
-
-	regs.regs[4] = (unsigned long) arg;
-	regs.regs[5] = (unsigned long) fn;
-	regs.cp0_epc = (unsigned long) kernel_thread_helper;
-	regs.cp0_status = read_c0_status();
-#if defined(CONFIG_CPU_R3000) || defined(CONFIG_CPU_TX39XX)
-	regs.cp0_status = (regs.cp0_status & ~(ST0_KUP | ST0_IEP | ST0_IEC)) |
-			  ((regs.cp0_status & (ST0_KUC | ST0_IEC)) << 2);
-#else
-	regs.cp0_status |= ST0_EXL;
-#endif
-
-	/* Ok, create the new process.. */
-	return do_fork(flags | CLONE_VM | CLONE_UNTRACED, 0, &regs, 0, NULL, NULL);
 }
 
 /*
@@ -373,18 +351,18 @@ unsigned long thread_saved_pc(struct task_struct *tsk)
 
 
 #ifdef CONFIG_KALLSYMS
-/* used by show_backtrace() */
-unsigned long unwind_stack(struct task_struct *task, unsigned long *sp,
-			   unsigned long pc, unsigned long *ra)
+/* generic stack unwinding function */
+unsigned long notrace unwind_stack_by_address(unsigned long stack_page,
+					      unsigned long *sp,
+					      unsigned long pc,
+					      unsigned long *ra)
 {
-	unsigned long stack_page;
 	struct mips_frame_info info;
 	unsigned long size, ofs;
 	int leaf;
 	extern void ret_from_irq(void);
 	extern void ret_from_exception(void);
 
-	stack_page = (unsigned long)task_stack_page(task);
 	if (!stack_page)
 		return 0;
 
@@ -442,6 +420,15 @@ unsigned long unwind_stack(struct task_struct *task, unsigned long *sp,
 	*sp += info.frame_size;
 	*ra = 0;
 	return __kernel_text_address(pc) ? pc : 0;
+}
+EXPORT_SYMBOL(unwind_stack_by_address);
+
+/* used by show_backtrace() */
+unsigned long unwind_stack(struct task_struct *task, unsigned long *sp,
+			   unsigned long pc, unsigned long *ra)
+{
+	unsigned long stack_page = (unsigned long)task_stack_page(task);
+	return unwind_stack_by_address(stack_page, sp, pc, ra);
 }
 #endif
 

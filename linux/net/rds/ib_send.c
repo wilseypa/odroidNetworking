@@ -34,6 +34,7 @@
 #include <linux/in.h>
 #include <linux/device.h>
 #include <linux/dmapool.h>
+#include <linux/ratelimit.h>
 
 #include "rds.h"
 #include "ib.h"
@@ -207,8 +208,7 @@ static struct rds_message *rds_ib_send_unmap_op(struct rds_ib_connection *ic,
 		}
 		break;
 	default:
-		if (printk_ratelimit())
-			printk(KERN_NOTICE
+		printk_ratelimited(KERN_NOTICE
 			       "RDS/IB: %s: unexpected opcode 0x%x in WR!\n",
 			       __func__, send->s_wr.opcode);
 		break;
@@ -544,7 +544,7 @@ int rds_ib_xmit(struct rds_connection *conn, struct rds_message *rm,
 	int flow_controlled = 0;
 	int nr_sig = 0;
 
-	BUG_ON(off % RDS_FRAG_SIZE);
+	BUG_ON(!conn->c_loopback && off % RDS_FRAG_SIZE);
 	BUG_ON(hdr_off != 0 && hdr_off != sizeof(struct rds_header));
 
 	/* Do not send cong updates to IB loopback */

@@ -31,24 +31,45 @@
 #include <linux/kernel.h>
 #include <linux/string.h>
 
-#include "cvmx-asm.h"
-#include "cvmx-packet.h"
-#include "cvmx-sysinfo.h"
+enum cvmx_mips_space {
+	CVMX_MIPS_SPACE_XKSEG = 3LL,
+	CVMX_MIPS_SPACE_XKPHYS = 2LL,
+	CVMX_MIPS_SPACE_XSSEG = 1LL,
+	CVMX_MIPS_SPACE_XUSEG = 0LL
+};
 
-#include "cvmx-ciu-defs.h"
-#include "cvmx-gpio-defs.h"
-#include "cvmx-iob-defs.h"
-#include "cvmx-ipd-defs.h"
-#include "cvmx-l2c-defs.h"
-#include "cvmx-l2d-defs.h"
-#include "cvmx-l2t-defs.h"
-#include "cvmx-led-defs.h"
-#include "cvmx-mio-defs.h"
-#include "cvmx-pow-defs.h"
+/* These macros for use when using 32 bit pointers. */
+#define CVMX_MIPS32_SPACE_KSEG0 1l
+#define CVMX_ADD_SEG32(segment, add) \
+	(((int32_t)segment << 31) | (int32_t)(add))
 
-#include "cvmx-bootinfo.h"
-#include "cvmx-bootmem.h"
-#include "cvmx-l2c.h"
+#define CVMX_IO_SEG CVMX_MIPS_SPACE_XKPHYS
+
+/* These macros simplify the process of creating common IO addresses */
+#define CVMX_ADD_SEG(segment, add) \
+	((((uint64_t)segment) << 62) | (add))
+#ifndef CVMX_ADD_IO_SEG
+#define CVMX_ADD_IO_SEG(add) CVMX_ADD_SEG(CVMX_IO_SEG, (add))
+#endif
+
+#include <asm/octeon/cvmx-asm.h>
+#include <asm/octeon/cvmx-packet.h>
+#include <asm/octeon/cvmx-sysinfo.h>
+
+#include <asm/octeon/cvmx-ciu-defs.h>
+#include <asm/octeon/cvmx-gpio-defs.h>
+#include <asm/octeon/cvmx-iob-defs.h>
+#include <asm/octeon/cvmx-ipd-defs.h>
+#include <asm/octeon/cvmx-l2c-defs.h>
+#include <asm/octeon/cvmx-l2d-defs.h>
+#include <asm/octeon/cvmx-l2t-defs.h>
+#include <asm/octeon/cvmx-led-defs.h>
+#include <asm/octeon/cvmx-mio-defs.h>
+#include <asm/octeon/cvmx-pow-defs.h>
+
+#include <asm/octeon/cvmx-bootinfo.h>
+#include <asm/octeon/cvmx-bootmem.h>
+#include <asm/octeon/cvmx-l2c.h>
 
 #ifndef CVMX_ENABLE_DEBUG_PRINTS
 #define CVMX_ENABLE_DEBUG_PRINTS 1
@@ -128,27 +149,6 @@ static inline uint64_t cvmx_build_bits(uint64_t high_bit,
 {
 	return (value & cvmx_build_mask(high_bit - low_bit + 1)) << low_bit;
 }
-
-enum cvmx_mips_space {
-	CVMX_MIPS_SPACE_XKSEG = 3LL,
-	CVMX_MIPS_SPACE_XKPHYS = 2LL,
-	CVMX_MIPS_SPACE_XSSEG = 1LL,
-	CVMX_MIPS_SPACE_XUSEG = 0LL
-};
-
-/* These macros for use when using 32 bit pointers. */
-#define CVMX_MIPS32_SPACE_KSEG0 1l
-#define CVMX_ADD_SEG32(segment, add) \
-	(((int32_t)segment << 31) | (int32_t)(add))
-
-#define CVMX_IO_SEG CVMX_MIPS_SPACE_XKPHYS
-
-/* These macros simplify the process of creating common IO addresses */
-#define CVMX_ADD_SEG(segment, add) \
-	((((uint64_t)segment) << 62) | (add))
-#ifndef CVMX_ADD_IO_SEG
-#define CVMX_ADD_IO_SEG(add) CVMX_ADD_SEG(CVMX_IO_SEG, (add))
-#endif
 
 /**
  * Convert a memory pointer (void*) into a hardware compatible

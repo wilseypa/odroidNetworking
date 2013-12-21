@@ -11,6 +11,7 @@
 #include <linux/interrupt.h>
 #include <linux/time.h>
 #include <linux/delay.h>
+#include <linux/platform_device.h>
 #include <linux/swiotlb.h>
 
 #include <asm/time.h>
@@ -58,7 +59,7 @@ union octeon_pci_address {
 	} s;
 };
 
-int __initdata (*octeon_pcibios_map_irq)(const struct pci_dev *dev,
+int __initconst (*octeon_pcibios_map_irq)(const struct pci_dev *dev,
 					 u8 slot, u8 pin);
 enum octeon_dma_bar_type octeon_dma_bar_type = OCTEON_DMA_BAR_TYPE_INVALID;
 
@@ -99,7 +100,7 @@ int pcibios_plat_dev_init(struct pci_dev *dev)
 	 */
 	pci_write_config_byte(dev, PCI_CACHE_LINE_SIZE, 64 / 4);
 	/* Set latency timers for all devices */
-	pci_write_config_byte(dev, PCI_LATENCY_TIMER, 48);
+	pci_write_config_byte(dev, PCI_LATENCY_TIMER, 64);
 
 	/* Enable reporting System errors and parity errors on all devices */
 	/* Enable parity checking and error reporting */
@@ -109,7 +110,7 @@ int pcibios_plat_dev_init(struct pci_dev *dev)
 
 	if (dev->subordinate) {
 		/* Set latency timers on sub bridges */
-		pci_write_config_byte(dev, PCI_SEC_LATENCY_TIMER, 48);
+		pci_write_config_byte(dev, PCI_SEC_LATENCY_TIMER, 64);
 		/* More bridge error detection */
 		pci_read_config_word(dev, PCI_BRIDGE_CONTROL, &config);
 		config |= PCI_BRIDGE_CTL_PARITY | PCI_BRIDGE_CTL_SERR;
@@ -117,20 +118,11 @@ int pcibios_plat_dev_init(struct pci_dev *dev)
 	}
 
 	/* Enable the PCIe normal error reporting */
-	pos = pci_find_capability(dev, PCI_CAP_ID_EXP);
-	if (pos) {
-		/* Update Device Control */
-		pci_read_config_word(dev, pos + PCI_EXP_DEVCTL, &config);
-		/* Correctable Error Reporting */
-		config |= PCI_EXP_DEVCTL_CERE;
-		/* Non-Fatal Error Reporting */
-		config |= PCI_EXP_DEVCTL_NFERE;
-		/* Fatal Error Reporting */
-		config |= PCI_EXP_DEVCTL_FERE;
-		/* Unsupported Request */
-		config |= PCI_EXP_DEVCTL_URRE;
-		pci_write_config_word(dev, pos + PCI_EXP_DEVCTL, config);
-	}
+	config = PCI_EXP_DEVCTL_CERE; /* Correctable Error Reporting */
+	config |= PCI_EXP_DEVCTL_NFERE; /* Non-Fatal Error Reporting */
+	config |= PCI_EXP_DEVCTL_FERE;  /* Fatal Error Reporting */
+	config |= PCI_EXP_DEVCTL_URRE;  /* Unsupported Request */
+	pcie_capability_set_word(dev, PCI_EXP_DEVCTL, config);
 
 	/* Find the Advanced Error Reporting capability */
 	pos = pci_find_ext_capability(dev, PCI_EXT_CAP_ID_ERR);
@@ -712,6 +704,10 @@ static int __init octeon_pci_setup(void)
 	 * was setup properly.
 	 */
 	cvmx_write_csr(CVMX_NPI_PCI_INT_SUM2, -1);
+
+	if (IS_ERR(platform_device_register_simple("octeon_pci_edac",
+						   -1, NULL, 0)))
+		pr_err("Registation of co_pci_edac failed!\n");
 
 	octeon_pci_dma_init();
 

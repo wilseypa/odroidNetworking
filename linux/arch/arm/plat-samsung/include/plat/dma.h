@@ -10,17 +10,15 @@
  * published by the Free Software Foundation.
 */
 
+#ifndef __PLAT_DMA_H
+#define __PLAT_DMA_H
+
+#include <linux/dma-mapping.h>
+
 enum s3c2410_dma_buffresult {
 	S3C2410_RES_OK,
 	S3C2410_RES_ERR,
 	S3C2410_RES_ABORT
-};
-
-enum s3c2410_dmasrc {
-	S3C2410_DMASRC_HW,		/* source is memory */
-	S3C2410_DMASRC_MEM,		/* source is hardware */
-	S3C_DMA_MEM2MEM,
-	S3C_DMA_MEM2MEM_SET,
 };
 
 /* enum s3c2410_chan_op
@@ -98,18 +96,8 @@ extern int s3c2410_dma_free(enum dma_ch channel, struct s3c2410_dma_client *);
  * drained before the buffer is given to the DMA system.
 */
 
-#define s3c2410_dma_enqueue(id, token, addr, size)		\
-			s3c2410_dma_enqueue_ring(id, token, addr, size, 0)
-
-/* s3c2410_dma_enqueue_ring
- *
- * place the given buffer onto the queue of operations for the channel.
- * The buffer must be allocated from dma coherent memory, or the Dcache/WB
- * drained before the buffer is given to the DMA system.
-*/
-
-extern int s3c2410_dma_enqueue_ring(enum dma_ch channel, void *id,
-			       dma_addr_t data, int size, int numofblock);
+extern int s3c2410_dma_enqueue(enum dma_ch channel, void *id,
+			       dma_addr_t data, int size);
 
 /* s3c2410_dma_config
  *
@@ -124,7 +112,7 @@ extern int s3c2410_dma_config(enum dma_ch channel, int xferunit);
 */
 
 extern int s3c2410_dma_devconfig(enum dma_ch channel,
-		enum s3c2410_dmasrc source, unsigned long devaddr);
+		enum dma_data_direction source, unsigned long devaddr);
 
 /* s3c2410_dma_getposition
  *
@@ -137,4 +125,6 @@ extern int s3c2410_dma_getposition(enum dma_ch channel,
 extern int s3c2410_dma_set_opfn(enum dma_ch, s3c2410_dma_opfn_t rtn);
 extern int s3c2410_dma_set_buffdone_fn(enum dma_ch, s3c2410_dma_cbfn_t rtn);
 
+#include <plat/dma-ops.h>
 
+#endif

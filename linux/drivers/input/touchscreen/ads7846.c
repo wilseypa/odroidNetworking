@@ -31,6 +31,7 @@
 #include <linux/spi/spi.h>
 #include <linux/spi/ads7846.h>
 #include <linux/regulator/consumer.h>
+#include <linux/module.h>
 #include <asm/irq.h>
 
 /*
@@ -601,10 +602,12 @@ static ssize_t ads7846_disable_store(struct device *dev,
 				     const char *buf, size_t count)
 {
 	struct ads7846 *ts = dev_get_drvdata(dev);
-	unsigned long i;
+	unsigned int i;
+	int err;
 
-	if (strict_strtoul(buf, 10, &i))
-		return -EINVAL;
+	err = kstrtouint(buf, 10, &i);
+	if (err)
+		return err;
 
 	if (i)
 		ads7846_disable(ts);
@@ -952,7 +955,8 @@ static int ads7846_resume(struct device *dev)
 
 static SIMPLE_DEV_PM_OPS(ads7846_pm, ads7846_suspend, ads7846_resume);
 
-static int __devinit ads7846_setup_pendown(struct spi_device *spi, struct ads7846 *ts)
+static int ads7846_setup_pendown(struct spi_device *spi,
+					   struct ads7846 *ts)
 {
 	struct ads7846_platform_data *pdata = spi->dev.platform_data;
 	int err;
@@ -967,22 +971,20 @@ static int __devinit ads7846_setup_pendown(struct spi_device *spi, struct ads784
 		ts->get_pendown_state = pdata->get_pendown_state;
 	} else if (gpio_is_valid(pdata->gpio_pendown)) {
 
-		err = gpio_request(pdata->gpio_pendown, "ads7846_pendown");
+		err = gpio_request_one(pdata->gpio_pendown, GPIOF_IN,
+				       "ads7846_pendown");
 		if (err) {
-			dev_err(&spi->dev, "failed to request pendown GPIO%d\n",
-				pdata->gpio_pendown);
-			return err;
-		}
-		err = gpio_direction_input(pdata->gpio_pendown);
-		if (err) {
-			dev_err(&spi->dev, "failed to setup pendown GPIO%d\n",
-				pdata->gpio_pendown);
-			gpio_free(pdata->gpio_pendown);
+			dev_err(&spi->dev,
+				"failed to request/setup pendown GPIO%d: %d\n",
+				pdata->gpio_pendown, err);
 			return err;
 		}
 
 		ts->gpio_pendown = pdata->gpio_pendown;
 
+		if (pdata->gpio_pendown_debounce)
+			gpio_set_debounce(pdata->gpio_pendown,
+					  pdata->gpio_pendown_debounce);
 	} else {
 		dev_err(&spi->dev, "no get_pendown_state nor gpio_pendown?\n");
 		return -EINVAL;
@@ -995,7 +997,7 @@ static int __devinit ads7846_setup_pendown(struct spi_device *spi, struct ads784
  * Set up the transfers to read touchscreen state; this assumes we
  * use formula #2 for pressure, not #3.
  */
-static void __devinit ads7846_setup_spi_msg(struct ads7846 *ts,
+static void ads7846_setup_spi_msg(struct ads7846 *ts,
 				const struct ads7846_platform_data *pdata)
 {
 	struct spi_message *m = &ts->msg[0];
@@ -1194,7 +1196,7 @@ static void __devinit ads7846_setup_spi_msg(struct ads7846 *ts,
 	spi_message_add_tail(x, m);
 }
 
-static int __devinit ads7846_probe(struct spi_device *spi)
+static int ads7846_probe(struct spi_device *spi)
 {
 	struct ads7846 *ts;
 	struct ads7846_packet *packet;
@@ -1388,7 +1390,7 @@ static int __devinit ads7846_probe(struct spi_device *spi)
 	return err;
 }
 
-static int __devexit ads7846_remove(struct spi_device *spi)
+static int ads7846_remove(struct spi_device *spi)
 {
 	struct ads7846 *ts = dev_get_drvdata(&spi->dev);
 
@@ -1428,25 +1430,14 @@ static int __devexit ads7846_remove(struct spi_device *spi)
 static struct spi_driver ads7846_driver = {
 	.driver = {
 		.name	= "ads7846",
-		.bus	= &spi_bus_type,
 		.owner	= THIS_MODULE,
 		.pm	= &ads7846_pm,
 	},
 	.probe		= ads7846_probe,
-	.remove		= __devexit_p(ads7846_remove),
+	.remove		= ads7846_remove,
 };
 
-static int __init ads7846_init(void)
-{
-	return spi_register_driver(&ads7846_driver);
-}
-module_init(ads7846_init);
-
-static void __exit ads7846_exit(void)
-{
-	spi_unregister_driver(&ads7846_driver);
-}
-module_exit(ads7846_exit);
+module_spi_driver(ads7846_driver);
 
 MODULE_DESCRIPTION("ADS7846 TouchScreen Driver");
 MODULE_LICENSE("GPL");

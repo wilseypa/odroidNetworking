@@ -1,11 +1,11 @@
 /******************************************************************************
  *
- * Module Name: dsopcode - Dispatcher suport for regions and fields
+ * Module Name: dsopcode - Dispatcher support for regions and fields
  *
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2011, Intel Corp.
+ * Copyright (C) 2000 - 2012, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -286,7 +286,7 @@ acpi_ds_init_buffer_field(u16 aml_opcode,
  * FUNCTION:    acpi_ds_eval_buffer_field_operands
  *
  * PARAMETERS:  walk_state      - Current walk
- *              Op              - A valid buffer_field Op object
+ *              op              - A valid buffer_field Op object
  *
  * RETURN:      Status
  *
@@ -370,7 +370,7 @@ acpi_ds_eval_buffer_field_operands(struct acpi_walk_state *walk_state,
  * FUNCTION:    acpi_ds_eval_region_operands
  *
  * PARAMETERS:  walk_state      - Current walk
- *              Op              - A valid region Op object
+ *              op              - A valid region Op object
  *
  * RETURN:      Status
  *
@@ -397,7 +397,7 @@ acpi_ds_eval_region_operands(struct acpi_walk_state *walk_state,
 	 */
 	node = op->common.node;
 
-	/* next_op points to the op that holds the space_iD */
+	/* next_op points to the op that holds the space_ID */
 
 	next_op = op->common.value.arg;
 
@@ -461,7 +461,7 @@ acpi_ds_eval_region_operands(struct acpi_walk_state *walk_state,
  * FUNCTION:    acpi_ds_eval_table_region_operands
  *
  * PARAMETERS:  walk_state      - Current walk
- *              Op              - A valid region Op object
+ *              op              - A valid region Op object
  *
  * RETURN:      Status
  *
@@ -560,7 +560,7 @@ acpi_ds_eval_table_region_operands(struct acpi_walk_state *walk_state,
  * FUNCTION:    acpi_ds_eval_data_object_operands
  *
  * PARAMETERS:  walk_state      - Current walk
- *              Op              - A valid data_object Op object
+ *              op              - A valid data_object Op object
  *              obj_desc        - data_object
  *
  * RETURN:      Status
@@ -649,7 +649,8 @@ acpi_ds_eval_data_object_operands(struct acpi_walk_state *walk_state,
 		    ((op->common.parent->common.aml_opcode != AML_PACKAGE_OP) &&
 		     (op->common.parent->common.aml_opcode !=
 		      AML_VAR_PACKAGE_OP)
-		     && (op->common.parent->common.aml_opcode != AML_NAME_OP))) {
+		     && (op->common.parent->common.aml_opcode !=
+			 AML_NAME_OP))) {
 			walk_state->result_obj = obj_desc;
 		}
 	}
@@ -662,7 +663,7 @@ acpi_ds_eval_data_object_operands(struct acpi_walk_state *walk_state,
  * FUNCTION:    acpi_ds_eval_bank_field_operands
  *
  * PARAMETERS:  walk_state      - Current walk
- *              Op              - A valid bank_field Op object
+ *              op              - A valid bank_field Op object
  *
  * RETURN:      Status
  *

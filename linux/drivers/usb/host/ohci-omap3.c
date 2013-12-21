@@ -30,7 +30,7 @@
  */
 
 #include <linux/platform_device.h>
-#include <plat/usb.h>
+#include <linux/pm_runtime.h>
 
 /*-------------------------------------------------------------------------*/
 
@@ -124,7 +124,7 @@ static const struct hc_driver ohci_omap3_hc_driver = {
  * then invokes the start() method for the HCD associated with it
  * through the hotplug entry's driver_data.
  */
-static int __devinit ohci_hcd_omap3_probe(struct platform_device *pdev)
+static int ohci_hcd_omap3_probe(struct platform_device *pdev)
 {
 	struct device		*dev = &pdev->dev;
 	struct usb_hcd		*hcd = NULL;
@@ -134,7 +134,7 @@ static int __devinit ohci_hcd_omap3_probe(struct platform_device *pdev)
 	int			irq;
 
 	if (usb_disabled())
-		goto err_end;
+		return -ENODEV;
 
 	if (!dev->parent) {
 		dev_err(dev, "Missing parent device\n");
@@ -149,7 +149,7 @@ static int __devinit ohci_hcd_omap3_probe(struct platform_device *pdev)
 
 	res = platform_get_resource_byname(pdev,
 				IORESOURCE_MEM, "ohci");
-	if (!ret) {
+	if (!res) {
 		dev_err(dev, "UHH OHCI get resource failed\n");
 		return -ENOMEM;
 	}
@@ -172,15 +172,12 @@ static int __devinit ohci_hcd_omap3_probe(struct platform_device *pdev)
 	hcd->rsrc_len = resource_size(res);
 	hcd->regs =  regs;
 
-	ret = omap_usbhs_enable(dev);
-	if (ret) {
-		dev_dbg(dev, "failed to start ohci\n");
-		goto err_end;
-	}
+	pm_runtime_enable(dev);
+	pm_runtime_get_sync(dev);
 
 	ohci_hcd_init(hcd_to_ohci(hcd));
 
-	ret = usb_add_hcd(hcd, irq, IRQF_DISABLED);
+	ret = usb_add_hcd(hcd, irq, 0);
 	if (ret) {
 		dev_dbg(dev, "failed to add hcd with err %d\n", ret);
 		goto err_add_hcd;
@@ -189,9 +186,7 @@ static int __devinit ohci_hcd_omap3_probe(struct platform_device *pdev)
 	return 0;
 
 err_add_hcd:
-	omap_usbhs_disable(dev);
-
-err_end:
+	pm_runtime_put_sync(dev);
 	usb_put_hcd(hcd);
 
 err_io:
@@ -213,16 +208,16 @@ err_io:
  * the HCD's stop() method.  It is always called from a thread
  * context, normally "rmmod", "apmd", or something similar.
  */
-static int __devexit ohci_hcd_omap3_remove(struct platform_device *pdev)
+static int ohci_hcd_omap3_remove(struct platform_device *pdev)
 {
 	struct device *dev	= &pdev->dev;
 	struct usb_hcd *hcd	= dev_get_drvdata(dev);
 
 	iounmap(hcd->regs);
 	usb_remove_hcd(hcd);
-	omap_usbhs_disable(dev);
+	pm_runtime_put_sync(dev);
+	pm_runtime_disable(dev);
 	usb_put_hcd(hcd);
-
 	return 0;
 }
 
@@ -236,7 +231,7 @@ static void ohci_hcd_omap3_shutdown(struct platform_device *pdev)
 
 static struct platform_driver ohci_hcd_omap3_driver = {
 	.probe		= ohci_hcd_omap3_probe,
-	.remove		= __devexit_p(ohci_hcd_omap3_remove),
+	.remove		= ohci_hcd_omap3_remove,
 	.shutdown	= ohci_hcd_omap3_shutdown,
 	.driver		= {
 		.name	= "ohci-omap3",

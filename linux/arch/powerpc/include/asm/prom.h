@@ -18,23 +18,9 @@
  */
 #include <linux/types.h>
 #include <asm/irq.h>
-#include <asm/atomic.h>
+#include <linux/atomic.h>
 
 #define HAVE_ARCH_DEVTREE_FIXUPS
-
-#ifdef CONFIG_PPC32
-/*
- * PCI <-> OF matching functions
- * (XXX should these be here?)
- */
-struct pci_bus;
-struct pci_dev;
-extern int pci_device_from_OF_node(struct device_node *node,
-				   u8* bus, u8* devfn);
-extern struct device_node* pci_busdev_to_OF_node(struct pci_bus *, int);
-extern struct device_node* pci_device_to_OF_node(struct pci_dev *);
-extern void pci_create_OF_bus_map(void);
-#endif
 
 /*
  * OF address retreival & translation
@@ -71,6 +57,22 @@ static inline int of_node_to_nid(struct device_node *device) { return 0; }
 #define of_node_to_nid of_node_to_nid
 
 extern void of_instantiate_rtc(void);
+
+/* The of_drconf_cell struct defines the layout of the LMB array
+ * specified in the device tree property
+ * ibm,dynamic-reconfiguration-memory/ibm,dynamic-memory
+ */
+struct of_drconf_cell {
+	u64	base_addr;
+	u32	drc_index;
+	u32	reserved;
+	u32	aa_index;
+	u32	flags;
+};
+
+#define DRCONF_MEM_ASSIGNED	0x00000008
+#define DRCONF_MEM_AI_INVALID	0x00000040
+#define DRCONF_MEM_RESERVED	0x00000080
 
 /* These includes are put at the bottom because they may contain things
  * that are overridden by this file.  Ideally they shouldn't be included

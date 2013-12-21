@@ -96,7 +96,7 @@ static const struct attribute_group twl4030_madc_group = {
 	.attrs = twl4030_madc_attributes,
 };
 
-static int __devinit twl4030_madc_hwmon_probe(struct platform_device *pdev)
+static int twl4030_madc_hwmon_probe(struct platform_device *pdev)
 {
 	int ret;
 	struct device *hwmon;
@@ -120,7 +120,7 @@ err_sysfs:
 	return ret;
 }
 
-static int __devexit twl4030_madc_hwmon_remove(struct platform_device *pdev)
+static int twl4030_madc_hwmon_remove(struct platform_device *pdev)
 {
 	hwmon_device_unregister(&pdev->dev);
 	sysfs_remove_group(&pdev->dev.kobj, &twl4030_madc_group);
@@ -130,26 +130,14 @@ static int __devexit twl4030_madc_hwmon_remove(struct platform_device *pdev)
 
 static struct platform_driver twl4030_madc_hwmon_driver = {
 	.probe = twl4030_madc_hwmon_probe,
-	.remove = __exit_p(twl4030_madc_hwmon_remove),
+	.remove = twl4030_madc_hwmon_remove,
 	.driver = {
 		   .name = "twl4030_madc_hwmon",
 		   .owner = THIS_MODULE,
 		   },
 };
 
-static int __init twl4030_madc_hwmon_init(void)
-{
-	return platform_driver_register(&twl4030_madc_hwmon_driver);
-}
-
-module_init(twl4030_madc_hwmon_init);
-
-static void __exit twl4030_madc_hwmon_exit(void)
-{
-	platform_driver_unregister(&twl4030_madc_hwmon_driver);
-}
-
-module_exit(twl4030_madc_hwmon_exit);
+module_platform_driver(twl4030_madc_hwmon_driver);
 
 MODULE_DESCRIPTION("TWL4030 ADC Hwmon driver");
 MODULE_LICENSE("GPL");

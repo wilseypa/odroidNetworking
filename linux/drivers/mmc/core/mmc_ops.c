@@ -10,6 +10,7 @@
  */
 
 #include <linux/slab.h>
+#include <linux/export.h>
 #include <linux/types.h>
 #include <linux/scatterlist.h>
 
@@ -17,10 +18,10 @@
 #include <linux/mmc/card.h>
 #include <linux/mmc/mmc.h>
 
-#include <plat/cpu.h>
-
 #include "core.h"
 #include "mmc_ops.h"
+
+#define MMC_OPS_TIMEOUT_MS	(10 * 60 * 1000) /* 10 minute timeout */
 
 static int _mmc_select_card(struct mmc_host *host, struct mmc_card *card)
 {
@@ -231,22 +232,32 @@ mmc_send_cxd_native(struct mmc_host *host, u32 arg, u32 *cxd, int opcode)
 	return 0;
 }
 
+/*
+ * NOTE: void *buf, caller for the buf is required to use DMA-capable
+ * buffer or on-stack buffer (with some overhead in callee).
+ */
 static int
 mmc_send_cxd_data(struct mmc_card *card, struct mmc_host *host,
 		u32 opcode, void *buf, unsigned len)
 {
-	struct mmc_request mrq = {0};
+	struct mmc_request mrq = {NULL};
 	struct mmc_command cmd = {0};
 	struct mmc_data data = {0};
 	struct scatterlist sg;
 	void *data_buf;
+	int is_on_stack;
 
-	/* dma onto stack is unsafe/nonportable, but callers to this
-	 * routine normally provide temporary on-stack buffers ...
-	 */
-	data_buf = kmalloc(len, GFP_KERNEL);
-	if (data_buf == NULL)
-		return -ENOMEM;
+	is_on_stack = object_is_on_stack(buf);
+	if (is_on_stack) {
+		/*
+		 * dma onto stack is unsafe/nonportable, but callers to this
+		 * routine normally provide temporary on-stack buffers ...
+		 */
+		data_buf = kmalloc(len, GFP_KERNEL);
+		if (!data_buf)
+			return -ENOMEM;
+	} else
+		data_buf = buf;
 
 	mrq.cmd = &cmd;
 	mrq.data = &data;
@@ -281,8 +292,10 @@ mmc_send_cxd_data(struct mmc_card *card, struct mmc_host *host,
 
 	mmc_wait_for_req(host, &mrq);
 
-	memcpy(buf, data_buf, len);
-	kfree(data_buf);
+	if (is_on_stack) {
+		memcpy(buf, data_buf, len);
+		kfree(data_buf);
+	}
 
 	if (cmd.error)
 		return cmd.error;
@@ -295,24 +308,32 @@ mmc_send_cxd_data(struct mmc_card *card, struct mmc_host *host,
 int mmc_send_csd(struct mmc_card *card, u32 *csd)
 {
 	int ret, i;
+	u32 *csd_tmp;
 
 	if (!mmc_host_is_spi(card->host))
 		return mmc_send_cxd_native(card->host, card->rca << 16,
 				csd, MMC_SEND_CSD);
 
-	ret = mmc_send_cxd_data(card, card->host, MMC_SEND_CSD, csd, 16);
+	csd_tmp = kmalloc(16, GFP_KERNEL);
+	if (!csd_tmp)
+		return -ENOMEM;
+
+	ret = mmc_send_cxd_data(card, card->host, MMC_SEND_CSD, csd_tmp, 16);
 	if (ret)
-		return ret;
+		goto err;
 
 	for (i = 0;i < 4;i++)
-		csd[i] = be32_to_cpu(csd[i]);
+		csd[i] = be32_to_cpu(csd_tmp[i]);
 
-	return 0;
+err:
+	kfree(csd_tmp);
+	return ret;
 }
 
 int mmc_send_cid(struct mmc_host *host, u32 *cid)
 {
 	int ret, i;
+	u32 *cid_tmp;
 
 	if (!mmc_host_is_spi(host)) {
 		if (!host->card)
@@ -321,14 +342,20 @@ int mmc_send_cid(struct mmc_host *host, u32 *cid)
 				cid, MMC_SEND_CID);
 	}
 
-	ret = mmc_send_cxd_data(NULL, host, MMC_SEND_CID, cid, 16);
+	cid_tmp = kmalloc(16, GFP_KERNEL);
+	if (!cid_tmp)
+		return -ENOMEM;
+
+	ret = mmc_send_cxd_data(NULL, host, MMC_SEND_CID, cid_tmp, 16);
 	if (ret)
-		return ret;
+		goto err;
 
 	for (i = 0;i < 4;i++)
-		cid[i] = be32_to_cpu(cid[i]);
+		cid[i] = be32_to_cpu(cid_tmp[i]);
 
-	return 0;
+err:
+	kfree(cid_tmp);
+	return ret;
 }
 
 int mmc_send_ext_csd(struct mmc_card *card, u8 *ext_csd)
@@ -336,7 +363,6 @@ int mmc_send_ext_csd(struct mmc_card *card, u8 *ext_csd)
 	return mmc_send_cxd_data(card, card->host, MMC_SEND_EXT_CSD,
 			ext_csd, 512);
 }
-EXPORT_SYMBOL_GPL(mmc_send_ext_csd);
 
 int mmc_spi_read_ocr(struct mmc_host *host, int highcap, u32 *ocrp)
 {
@@ -369,21 +395,23 @@ int mmc_spi_set_crc(struct mmc_host *host, int use_crc)
 }
 
 /**
- *	mmc_switch - modify EXT_CSD register
+ *	__mmc_switch - modify EXT_CSD register
  *	@card: the MMC card associated with the data transfer
  *	@set: cmd set values
  *	@index: EXT_CSD register index
  *	@value: value to program into EXT_CSD register
  *	@timeout_ms: timeout (ms) for operation performed by register write,
  *                   timeout of zero implies maximum possible timeout
+ *	@use_busy_signal: use the busy signal as response type
  *
  *	Modifies the EXT_CSD register for selected card.
  */
-int mmc_switch(struct mmc_card *card, u8 set, u8 index, u8 value,
-	       unsigned int timeout_ms)
+int __mmc_switch(struct mmc_card *card, u8 set, u8 index, u8 value,
+	       unsigned int timeout_ms, bool use_busy_signal)
 {
 	int err;
 	struct mmc_command cmd = {0};
+	unsigned long timeout;
 	u32 status;
 
 	BUG_ON(!card);
@@ -394,19 +422,26 @@ int mmc_switch(struct mmc_card *card, u8 set, u8 index, u8 value,
 		  (index << 16) |
 		  (value << 8) |
 		  set;
-	cmd.flags = MMC_RSP_SPI_R1B | MMC_RSP_R1B | MMC_CMD_AC;
+	cmd.flags = MMC_CMD_AC;
+	if (use_busy_signal)
+		cmd.flags |= MMC_RSP_SPI_R1B | MMC_RSP_R1B;
+	else
+		cmd.flags |= MMC_RSP_SPI_R1 | MMC_RSP_R1;
+
+
 	cmd.cmd_timeout_ms = timeout_ms;
 
 	err = mmc_wait_for_cmd(card->host, &cmd, MMC_CMD_RETRIES);
 	if (err)
 		return err;
 
+	/* No need to check card status in case of unblocking command */
+	if (!use_busy_signal)
+		return 0;
+
 	/* Must check status to be sure of no errors */
+	timeout = jiffies + msecs_to_jiffies(MMC_OPS_TIMEOUT_MS);
 	do {
-#if defined(CONFIG_MACH_SMDKC210) || defined(CONFIG_MACH_SMDKV310)
-		/* HACK: in case of smdkc210, smdkv310 has problem at inand */
-		mmc_delay(3);
-#endif
 		err = mmc_send_status(card, &status);
 		if (err)
 			return err;
@@ -414,20 +449,34 @@ int mmc_switch(struct mmc_card *card, u8 set, u8 index, u8 value,
 			break;
 		if (mmc_host_is_spi(card->host))
 			break;
-	} while (R1_CURRENT_STATE(status) == 7);
+
+		/* Timeout if the device never leaves the program state. */
+		if (time_after(jiffies, timeout)) {
+			pr_err("%s: Card stuck in programming state! %s\n",
+				mmc_hostname(card->host), __func__);
+			return -ETIMEDOUT;
+		}
+	} while (R1_CURRENT_STATE(status) == R1_STATE_PRG);
 
 	if (mmc_host_is_spi(card->host)) {
 		if (status & R1_SPI_ILLEGAL_COMMAND)
 			return -EBADMSG;
 	} else {
 		if (status & 0xFDFFA000)
-			printk(KERN_WARNING "%s: unexpected status %#x after "
+			pr_warning("%s: unexpected status %#x after "
 			       "switch", mmc_hostname(card->host), status);
 		if (status & R1_SWITCH_ERROR)
 			return -EBADMSG;
 	}
 
 	return 0;
+}
+EXPORT_SYMBOL_GPL(__mmc_switch);
+
+int mmc_switch(struct mmc_card *card, u8 set, u8 index, u8 value,
+		unsigned int timeout_ms)
+{
+	return __mmc_switch(card, set, index, value, timeout_ms, true);
 }
 EXPORT_SYMBOL_GPL(mmc_switch);
 
@@ -461,7 +510,7 @@ static int
 mmc_send_bus_test(struct mmc_card *card, struct mmc_host *host, u8 opcode,
 		  u8 len)
 {
-	struct mmc_request mrq = {0};
+	struct mmc_request mrq = {NULL};
 	struct mmc_command cmd = {0};
 	struct mmc_data data = {0};
 	struct scatterlist sg;
@@ -483,7 +532,7 @@ mmc_send_bus_test(struct mmc_card *card, struct mmc_host *host, u8 opcode,
 	else if (len == 4)
 		test_buf = testdata_4bit;
 	else {
-		printk(KERN_ERR "%s: Invalid bus_width %d\n",
+		pr_err("%s: Invalid bus_width %d\n",
 		       mmc_hostname(host), len);
 		kfree(data_buf);
 		return -EINVAL;
@@ -555,207 +604,6 @@ int mmc_bus_test(struct mmc_card *card, u8 bus_width)
 	return err;
 }
 
-static int mmc_send_cmd(struct mmc_host *host,
-			u32 opcode, u32 arg, unsigned int flags, u32 *resp)
-{
-	int err;
-	struct mmc_command cmd;
-
-	memset(&cmd, 0, sizeof(struct mmc_command));
-
-	cmd.opcode = opcode;
-	cmd.arg = arg;
-	cmd.flags = flags;
-	*resp = 0;
-
-	err = mmc_wait_for_cmd(host, &cmd, 0);
-	if (!err)
-		*resp = cmd.resp[0];
-	else
-		printk(KERN_ERR "[CMD%d] FAILED!!\n", cmd.opcode);
-
-	return err;
-}
-
-static int mmc_movi_cmd(struct mmc_host *host, u32 arg)
-{
-	int err;
-	u32 resp;
-
-	err = mmc_send_cmd(host, 62, arg,
-			MMC_RSP_R1B | MMC_CMD_AC, &resp);
-	mdelay(10);
-
-	if (!err)
-		do {
-			err = mmc_send_cmd(host, MMC_SEND_STATUS,
-				host->card->rca << 16,
-				MMC_RSP_SPI_R2 | MMC_RSP_R1 | MMC_CMD_AC,
-				&resp);
-			if (err) {
-				printk(KERN_ERR "CMD13(VC) failed\n");
-				break;
-				}
-			/*wait until READY_FOR_DATA*/
-			} while (!(resp & 1<<8));
-
-	return err;
-}
-
-static int mmc_movi_erase_cmd(struct mmc_host *host, u32 arg1, u32 arg2)
-{
-	int err;
-	u32 resp;
-
-	err = mmc_send_cmd(host, MMC_ERASE_GROUP_START, arg1,
-					MMC_RSP_R1 | MMC_CMD_AC, &resp);
-	if (err)
-		return err;
-
-	err = mmc_send_cmd(host, MMC_ERASE_GROUP_END, arg2,
-					MMC_RSP_R1 | MMC_CMD_AC, &resp);
-	if (err)
-		return err;
-
-	err = mmc_send_cmd(host, MMC_ERASE, 0,
-					MMC_RSP_R1B | MMC_CMD_AC, &resp);
-	if (!err)
-		do {
-			err = mmc_send_cmd(host, MMC_SEND_STATUS,
-				host->card->rca << 16,
-				MMC_RSP_SPI_R2 | MMC_RSP_R1 | MMC_CMD_AC,
-				&resp);
-			if (err) {
-				printk(KERN_ERR "CMD13(VC) failed\n");
-				break;
-				}
-			/*wait until READY_FOR_DATA*/
-			} while (!(resp & 1<<8));
-
-	return err;
-}
-
-
-static int mmc_movi_read_req(struct mmc_card *card,
-					void *data_buf, u32 arg, u32 blocks)
-{
-	struct mmc_request mrq = {0};
-	struct mmc_command cmd = {0};
-	struct mmc_data data = {0};
-	struct scatterlist sg;
-
-	/*send request*/
-	mrq.cmd = &cmd;
-	mrq.data = &data;
-
-	if (blocks > 1)
-		cmd.opcode = MMC_READ_MULTIPLE_BLOCK;
-	else
-		cmd.opcode = MMC_READ_SINGLE_BLOCK;
-	cmd.arg = arg;
-
-	cmd.flags = MMC_RSP_SPI_R1 | MMC_RSP_R1 | MMC_CMD_ADTC;
-
-	data.blksz = 512;
-	data.blocks = blocks;
-	data.flags = MMC_DATA_READ;
-	data.sg = &sg;
-	data.sg_len = 1;
-
-	sg_init_one(&sg, data_buf, data.blksz * data.blocks);
-
-	mmc_set_data_timeout(&data, card);
-
-	mmc_wait_for_req(card->host, &mrq);
-
-	if (cmd.error)
-		return cmd.error;
-
-	if (data.error)
-		return data.error;
-
-	return 0;
-}
-
-int mmc_start_movi_smart(struct mmc_card *card)
-{
-	int err;
-	u8 data_buf[512];
-	u32 date = 0;
-
-	err = mmc_movi_cmd(card->host, 0xEFAC62EC);
-	if (err)
-		return err;
-
-	err = mmc_movi_cmd(card->host, 0x0000CCEE);
-	if (err)
-		return err;
-
-	err = mmc_movi_read_req(card, (void *)data_buf, 0x1000, 1);
-	if (err)
-		return err;
-
-	err = mmc_movi_cmd(card->host, 0xEFAC62EC);
-	if (err)
-		return err;
-
-	err = mmc_movi_cmd(card->host, 0x00DECCEE);
-	if (err)
-		return err;
-
-	date = ((data_buf[327] << 24) | (data_buf[326] << 16) |
-				(data_buf[325] << 8) | data_buf[324]);
-
-	if (date !=  0x20120413) {
-		err = -1;
-		return err;
-		}
-
-	return 0x2;
-}
-EXPORT_SYMBOL_GPL(mmc_start_movi_smart);
-
-int mmc_start_movi_operation(struct mmc_card *card)
-{
-	int err = 0;
-
-	err = mmc_movi_cmd(card->host, 0xEFAC62EC);
-	if (err)
-		return err;
-	err = mmc_movi_cmd(card->host, 0x10210000);
-	if (err)
-		return err;
-
-	err = mmc_movi_erase_cmd(card->host, 0x00040300, 0x4A03B510);
-	if (err)
-		return err;
-	err = mmc_movi_erase_cmd(card->host, 0x00040304, 0x28004790);
-	if (err)
-		return err;
-	err = mmc_movi_erase_cmd(card->host, 0x00040308, 0xE7FED100);
-	if (err)
-		return err;
-	err = mmc_movi_erase_cmd(card->host, 0x0004030C, 0x0000BD10);
-	if (err)
-		return err;
-	err = mmc_movi_erase_cmd(card->host, 0x00040310, 0x00059D73);
-	if (err)
-		return err;
-	err = mmc_movi_erase_cmd(card->host, 0x0005C7EA, 0xFD89F7E3);
-	if (err)
-		return err;
-
-	err = mmc_movi_cmd(card->host, 0xEFAC62EC);
-	if (err)
-		return err;
-	err = mmc_movi_cmd(card->host, 0x00DECCEE);
-	if (err)
-		return err;
-
-	return err;
-}
-EXPORT_SYMBOL_GPL(mmc_start_movi_operation);
-
 int mmc_send_hpi_cmd(struct mmc_card *card, u32 *status)
 {
 	struct mmc_command cmd = {0};
@@ -764,7 +612,7 @@ int mmc_send_hpi_cmd(struct mmc_card *card, u32 *status)
 
 	if (!card->ext_csd.hpi) {
 		pr_warning("%s: Card didn't support HPI command\n",
-				mmc_hostname(card->host));
+			   mmc_hostname(card->host));
 		return -EINVAL;
 	}
 
@@ -776,7 +624,6 @@ int mmc_send_hpi_cmd(struct mmc_card *card, u32 *status)
 
 	cmd.opcode = opcode;
 	cmd.arg = card->rca << 16 | 1;
-	cmd.cmd_timeout_ms = card->ext_csd.out_of_int_time;
 
 	err = mmc_wait_for_cmd(card->host, &cmd, 0);
 	if (err) {

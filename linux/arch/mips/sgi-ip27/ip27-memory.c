@@ -12,6 +12,7 @@
  */
 #include <linux/init.h>
 #include <linux/kernel.h>
+#include <linux/memblock.h>
 #include <linux/mm.h>
 #include <linux/mmzone.h>
 #include <linux/module.h>
@@ -381,8 +382,8 @@ static void __init szmem(void)
 				continue;
 			}
 			num_physpages += slot_psize;
-			add_active_range(node, slot_getbasepfn(node, slot),
-					 slot_getbasepfn(node, slot) + slot_psize);
+			memblock_add_node(PFN_PHYS(slot_getbasepfn(node, slot)),
+					  PFN_PHYS(slot_psize), node);
 		}
 	}
 }
@@ -400,6 +401,7 @@ static void __init node_mem_init(cnodeid_t node)
 	 * Allocate the node data structures on the node first.
 	 */
 	__node_data[node] = __va(slot_freepfn << PAGE_SHIFT);
+	memset(__node_data[node], 0, PAGE_SIZE);
 
 	NODE_DATA(node)->bdata = &bootmem_node_data[node];
 	NODE_DATA(node)->node_start_pfn = start_pfn;

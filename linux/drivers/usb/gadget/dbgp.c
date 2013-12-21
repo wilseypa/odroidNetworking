@@ -4,17 +4,14 @@
  * Copyright (C) 2010 Stephane Duverger
  *
  * Released under the GPLv2.
- *
  */
 
 /* verbose messages */
 #include <linux/kernel.h>
 #include <linux/device.h>
+#include <linux/module.h>
 #include <linux/usb/ch9.h>
 #include <linux/usb/gadget.h>
-
-/* See comments in "zero.c" */
-#include "epautoconf.c"
 
 #ifdef CONFIG_USB_G_DBGP_SERIAL
 #include "u_serial.c"
@@ -173,7 +170,9 @@ fail_1:
 
 static int __enable_ep(struct usb_ep *ep, struct usb_endpoint_descriptor *desc)
 {
-	int err = usb_ep_enable(ep, desc);
+	int err;
+	ep->desc = desc;
+	err = usb_ep_enable(ep);
 	ep->driver_data = dbgp.gadget;
 	return err;
 }
@@ -268,8 +267,8 @@ static int __init dbgp_configure_endpoints(struct usb_gadget *gadget)
 	dbgp.serial->in = dbgp.i_ep;
 	dbgp.serial->out = dbgp.o_ep;
 
-	dbgp.serial->in_desc = &i_desc;
-	dbgp.serial->out_desc = &o_desc;
+	dbgp.serial->in->desc = &i_desc;
+	dbgp.serial->out->desc = &o_desc;
 
 	if (gserial_setup(gadget, 1) < 0) {
 		stp = 3;
@@ -290,7 +289,8 @@ fail_1:
 	return -ENODEV;
 }
 
-static int __init dbgp_bind(struct usb_gadget *gadget)
+static int __init dbgp_bind(struct usb_gadget *gadget,
+		struct usb_gadget_driver *driver)
 {
 	int err, stp;
 
@@ -312,7 +312,6 @@ static int __init dbgp_bind(struct usb_gadget *gadget)
 
 	dbgp.req->length = DBGP_REQ_EP0_LEN;
 	gadget->ep0->driver_data = gadget;
-	device_desc.bMaxPacketSize0 = gadget->ep0->maxpacket;
 
 #ifdef CONFIG_USB_G_DBGP_SERIAL
 	dbgp.serial = kzalloc(sizeof(struct gserial), GFP_KERNEL);
@@ -363,6 +362,7 @@ static int dbgp_setup(struct usb_gadget *gadget,
 			dev_dbg(&dbgp.gadget->dev, "setup: desc device\n");
 			len = sizeof device_desc;
 			data = &device_desc;
+			device_desc.bMaxPacketSize0 = gadget->ep0->maxpacket;
 			break;
 		case USB_DT_DEBUG:
 			dev_dbg(&dbgp.gadget->dev, "setup: desc debug\n");
@@ -400,9 +400,10 @@ fail:
 	return err;
 }
 
-static struct usb_gadget_driver dbgp_driver = {
+static __refdata struct usb_gadget_driver dbgp_driver = {
 	.function = "dbgp",
-	.speed = USB_SPEED_HIGH,
+	.max_speed = USB_SPEED_HIGH,
+	.bind = dbgp_bind,
 	.unbind = dbgp_unbind,
 	.setup = dbgp_setup,
 	.disconnect = dbgp_disconnect,
@@ -414,7 +415,7 @@ static struct usb_gadget_driver dbgp_driver = {
 
 static int __init dbgp_init(void)
 {
-	return usb_gadget_probe_driver(&dbgp_driver, dbgp_bind);
+	return usb_gadget_probe_driver(&dbgp_driver);
 }
 
 static void __exit dbgp_exit(void)

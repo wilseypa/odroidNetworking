@@ -342,7 +342,7 @@ static struct rtc_class_ops bfin_rtc_ops = {
 	.alarm_irq_enable = bfin_rtc_alarm_irq_enable,
 };
 
-static int __devinit bfin_rtc_probe(struct platform_device *pdev)
+static int bfin_rtc_probe(struct platform_device *pdev)
 {
 	struct bfin_rtc *rtc;
 	struct device *dev = &pdev->dev;
@@ -388,7 +388,7 @@ err:
 	return ret;
 }
 
-static int __devexit bfin_rtc_remove(struct platform_device *pdev)
+static int bfin_rtc_remove(struct platform_device *pdev)
 {
 	struct bfin_rtc *rtc = platform_get_drvdata(pdev);
 	struct device *dev = &pdev->dev;
@@ -451,23 +451,12 @@ static struct platform_driver bfin_rtc_driver = {
 		.owner	= THIS_MODULE,
 	},
 	.probe		= bfin_rtc_probe,
-	.remove		= __devexit_p(bfin_rtc_remove),
+	.remove		= bfin_rtc_remove,
 	.suspend	= bfin_rtc_suspend,
 	.resume		= bfin_rtc_resume,
 };
 
-static int __init bfin_rtc_init(void)
-{
-	return platform_driver_register(&bfin_rtc_driver);
-}
-
-static void __exit bfin_rtc_exit(void)
-{
-	platform_driver_unregister(&bfin_rtc_driver);
-}
-
-module_init(bfin_rtc_init);
-module_exit(bfin_rtc_exit);
+module_platform_driver(bfin_rtc_driver);
 
 MODULE_DESCRIPTION("Blackfin On-Chip Real Time Clock Driver");
 MODULE_AUTHOR("Mike Frysinger <vapier@gentoo.org>");

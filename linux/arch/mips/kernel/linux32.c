@@ -3,7 +3,6 @@
  *
  * Copyright (C) 2000 Silicon Graphics, Inc.
  * Written by Ulf Carlsson (ulfc@engr.sgi.com)
- * sys32_execve from ia64/ia32 code, Feb 2000, Kanoj Sarcar (kanoj@sgi.com)
  */
 #include <linux/compiler.h>
 #include <linux/mm.h>
@@ -73,26 +72,6 @@ SYSCALL_DEFINE6(32_mmap2, unsigned long, addr, unsigned long, len,
 		goto out;
 	error = sys_mmap_pgoff(addr, len, prot, flags, fd,
 			       pgoff >> (PAGE_SHIFT-12));
-out:
-	return error;
-}
-
-/*
- * sys_execve() executes a new program.
- */
-asmlinkage int sys32_execve(nabi_no_regargs struct pt_regs regs)
-{
-	int error;
-	char * filename;
-
-	filename = getname(compat_ptr(regs.regs[4]));
-	error = PTR_ERR(filename);
-	if (IS_ERR(filename))
-		goto out;
-	error = compat_do_execve(filename, compat_ptr(regs.regs[5]),
-				 compat_ptr(regs.regs[6]), &regs);
-	putname(filename);
-
 out:
 	return error;
 }
@@ -333,7 +312,7 @@ _sys32_clone(nabi_no_regargs struct pt_regs regs)
 	/* Use __dummy4 instead of getting it off the stack, so that
 	   syscall() works.  */
 	child_tidptr = (int __user *) __dummy4;
-	return do_fork(clone_flags, newsp, &regs, 0,
+	return do_fork(clone_flags, newsp, 0,
 	               parent_tidptr, child_tidptr);
 }
 
@@ -348,4 +327,11 @@ SYSCALL_DEFINE6(32_fanotify_mark, int, fanotify_fd, unsigned int, flags,
 {
 	return sys_fanotify_mark(fanotify_fd, flags, merge_64(a3, a4),
 				 dfd, pathname);
+}
+
+SYSCALL_DEFINE6(32_futex, u32 __user *, uaddr, int, op, u32, val,
+		struct compat_timespec __user *, utime, u32 __user *, uaddr2,
+		u32, val3)
+{
+	return compat_sys_futex(uaddr, op, val, utime, uaddr2, val3);
 }

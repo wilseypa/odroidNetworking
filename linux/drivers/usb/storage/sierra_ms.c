@@ -3,6 +3,7 @@
 #include <scsi/scsi_cmnd.h>
 #include <scsi/scsi_device.h>
 #include <linux/usb.h>
+#include <linux/module.h>
 #include <linux/slab.h>
 
 #include "usb.h"
@@ -129,14 +130,13 @@ int sierra_ms_init(struct us_data *us)
 	struct swoc_info *swocInfo;
 	struct usb_device *udev;
 	struct Scsi_Host *sh;
-	struct scsi_device *sd;
 
 	retries = 3;
 	result = 0;
 	udev = us->pusb_dev;
 
 	sh = us_to_host(us);
-	sd = scsi_get_host_dev(sh);
+	scsi_get_host_dev(sh);
 
 	US_DEBUGP("SWIMS: sierra_ms_init called\n");
 

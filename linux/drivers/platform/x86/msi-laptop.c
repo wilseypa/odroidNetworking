@@ -85,11 +85,14 @@
 #define MSI_STANDARD_EC_TOUCHPAD_ADDRESS	0xe4
 #define MSI_STANDARD_EC_TOUCHPAD_MASK		(1 << 4)
 
-static int msi_laptop_resume(struct platform_device *device);
+#ifdef CONFIG_PM_SLEEP
+static int msi_laptop_resume(struct device *device);
+#endif
+static SIMPLE_DEV_PM_OPS(msi_laptop_pm, NULL, msi_laptop_resume);
 
 #define MSI_STANDARD_EC_DEVICES_EXISTS_ADDRESS	0x2f
 
-static int force;
+static bool force;
 module_param(force, bool, 0);
 MODULE_PARM_DESC(force, "Force driver load, ignore DMI data");
 
@@ -437,8 +440,8 @@ static struct platform_driver msipf_driver = {
 	.driver = {
 		.name = "msi-laptop-pf",
 		.owner = THIS_MODULE,
+		.pm = &msi_laptop_pm,
 	},
-	.resume = msi_laptop_resume,
 };
 
 static struct platform_device *msipf_device;
@@ -535,6 +538,15 @@ static struct dmi_system_id __initdata msi_load_scm_models_dmi_table[] = {
 			DMI_MATCH(DMI_SYS_VENDOR,
 				"Micro-Star International"),
 			DMI_MATCH(DMI_PRODUCT_NAME, "CR620"),
+		},
+		.callback = dmi_check_cb
+	},
+	{
+		.ident = "MSI U270",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR,
+				"Micro-Star International Co., Ltd."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "U270 series"),
 		},
 		.callback = dmi_check_cb
 	},
@@ -743,7 +755,8 @@ err_bluetooth:
 	return retval;
 }
 
-static int msi_laptop_resume(struct platform_device *device)
+#ifdef CONFIG_PM_SLEEP
+static int msi_laptop_resume(struct device *device)
 {
 	u8 data;
 	int result;
@@ -763,6 +776,7 @@ static int msi_laptop_resume(struct platform_device *device)
 
 	return 0;
 }
+#endif
 
 static int __init msi_laptop_input_setup(void)
 {
@@ -996,3 +1010,4 @@ MODULE_ALIAS("dmi:*:svnMICRO-STARINTERNATIONAL*:pnMS-N034:*");
 MODULE_ALIAS("dmi:*:svnMICRO-STARINTERNATIONAL*:pnMS-N051:*");
 MODULE_ALIAS("dmi:*:svnMICRO-STARINTERNATIONAL*:pnMS-N014:*");
 MODULE_ALIAS("dmi:*:svnMicro-StarInternational*:pnCR620:*");
+MODULE_ALIAS("dmi:*:svnMicro-StarInternational*:pnU270series:*");

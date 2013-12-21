@@ -6,7 +6,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2011, Intel Corp.
+ * Copyright (C) 2000 - 2012, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -116,7 +116,7 @@ static const char *acpi_rtype_names[] = {
  *
  * FUNCTION:    acpi_ns_check_predefined_names
  *
- * PARAMETERS:  Node            - Namespace node for the method/object
+ * PARAMETERS:  node            - Namespace node for the method/object
  *              user_param_count - Number of parameters actually passed
  *              return_status   - Status from the object evaluation
  *              return_object_ptr - Pointer to the object returned from the
@@ -193,14 +193,20 @@ acpi_ns_check_predefined_names(struct acpi_namespace_node *node,
 	}
 
 	/*
-	 * 1) We have a return value, but if one wasn't expected, just exit, this is
-	 * not a problem. For example, if the "Implicit Return" feature is
-	 * enabled, methods will always return a value.
+	 * Return value validation and possible repair.
 	 *
-	 * 2) If the return value can be of any type, then we cannot perform any
-	 * validation, exit.
+	 * 1) Don't perform return value validation/repair if this feature
+	 * has been disabled via a global option.
+	 *
+	 * 2) We have a return value, but if one wasn't expected, just exit,
+	 * this is not a problem. For example, if the "Implicit Return"
+	 * feature is enabled, methods will always return a value.
+	 *
+	 * 3) If the return value can be of any type, then we cannot perform
+	 * any validation, just exit.
 	 */
-	if ((!predefined->info.expected_btypes) ||
+	if (acpi_gbl_disable_auto_repair ||
+	    (!predefined->info.expected_btypes) ||
 	    (predefined->info.expected_btypes == ACPI_RTYPE_ALL)) {
 		goto cleanup;
 	}
@@ -269,10 +275,10 @@ cleanup:
  *
  * FUNCTION:    acpi_ns_check_parameter_count
  *
- * PARAMETERS:  Pathname        - Full pathname to the node (for error msgs)
- *              Node            - Namespace node for the method/object
+ * PARAMETERS:  pathname        - Full pathname to the node (for error msgs)
+ *              node            - Namespace node for the method/object
  *              user_param_count - Number of args passed in by the caller
- *              Predefined      - Pointer to entry in predefined name table
+ *              predefined      - Pointer to entry in predefined name table
  *
  * RETURN:      None
  *
@@ -358,7 +364,7 @@ acpi_ns_check_parameter_count(char *pathname,
  *
  * FUNCTION:    acpi_ns_check_for_predefined_name
  *
- * PARAMETERS:  Node            - Namespace node for the method/object
+ * PARAMETERS:  node            - Namespace node for the method/object
  *
  * RETURN:      Pointer to entry in predefined table. NULL indicates not found.
  *
@@ -404,7 +410,7 @@ const union acpi_predefined_info *acpi_ns_check_for_predefined_name(struct
  *
  * FUNCTION:    acpi_ns_check_package
  *
- * PARAMETERS:  Data            - Pointer to validation data structure
+ * PARAMETERS:  data            - Pointer to validation data structure
  *              return_object_ptr - Pointer to the object returned from the
  *                                evaluation of a method or object
  *
@@ -614,6 +620,7 @@ acpi_ns_check_package(struct acpi_predefined_data *data,
 	case ACPI_PTYPE2_FIXED:
 	case ACPI_PTYPE2_MIN:
 	case ACPI_PTYPE2_COUNT:
+	case ACPI_PTYPE2_FIX_VAR:
 
 		/*
 		 * These types all return a single Package that consists of a
@@ -631,8 +638,8 @@ acpi_ns_check_package(struct acpi_predefined_data *data,
 			/* Create the new outer package and populate it */
 
 			status =
-			    acpi_ns_repair_package_list(data,
-							return_object_ptr);
+			    acpi_ns_wrap_with_package(data, return_object,
+						      return_object_ptr);
 			if (ACPI_FAILURE(status)) {
 				return (status);
 			}
@@ -678,11 +685,11 @@ package_too_small:
  *
  * FUNCTION:    acpi_ns_check_package_list
  *
- * PARAMETERS:  Data            - Pointer to validation data structure
- *              Package         - Pointer to package-specific info for method
- *              Elements        - Element list of parent package. All elements
+ * PARAMETERS:  data            - Pointer to validation data structure
+ *              package         - Pointer to package-specific info for method
+ *              elements        - Element list of parent package. All elements
  *                                of this list should be of type Package.
- *              Count           - Count of subpackages
+ *              count           - Count of subpackages
  *
  * RETURN:      Status
  *
@@ -748,6 +755,34 @@ acpi_ns_check_package_list(struct acpi_predefined_data *data,
 							   object_type2,
 							   package->ret_info.
 							   count2, 0);
+			if (ACPI_FAILURE(status)) {
+				return (status);
+			}
+			break;
+
+		case ACPI_PTYPE2_FIX_VAR:
+			/*
+			 * Each subpackage has a fixed number of elements and an
+			 * optional element
+			 */
+			expected_count =
+			    package->ret_info.count1 + package->ret_info.count2;
+			if (sub_package->package.count < expected_count) {
+				goto package_too_small;
+			}
+
+			status =
+			    acpi_ns_check_package_elements(data, sub_elements,
+							   package->ret_info.
+							   object_type1,
+							   package->ret_info.
+							   count1,
+							   package->ret_info.
+							   object_type2,
+							   sub_package->package.
+							   count -
+							   package->ret_info.
+							   count1, 0);
 			if (ACPI_FAILURE(status)) {
 				return (status);
 			}
@@ -876,12 +911,12 @@ package_too_small:
  *
  * FUNCTION:    acpi_ns_check_package_elements
  *
- * PARAMETERS:  Data            - Pointer to validation data structure
- *              Elements        - Pointer to the package elements array
- *              Type1           - Object type for first group
- *              Count1          - Count for first group
- *              Type2           - Object type for second group
- *              Count2          - Count for second group
+ * PARAMETERS:  data            - Pointer to validation data structure
+ *              elements        - Pointer to the package elements array
+ *              type1           - Object type for first group
+ *              count1          - Count for first group
+ *              type2           - Object type for second group
+ *              count2          - Count for second group
  *              start_index     - Start of the first group of elements
  *
  * RETURN:      Status
@@ -933,7 +968,7 @@ acpi_ns_check_package_elements(struct acpi_predefined_data *data,
  *
  * FUNCTION:    acpi_ns_check_object_type
  *
- * PARAMETERS:  Data            - Pointer to validation data structure
+ * PARAMETERS:  data            - Pointer to validation data structure
  *              return_object_ptr - Pointer to the object returned from the
  *                                evaluation of a method or object
  *              expected_btypes - Bitmap of expected return type(s)
@@ -1067,7 +1102,7 @@ acpi_ns_check_object_type(struct acpi_predefined_data *data,
  *
  * FUNCTION:    acpi_ns_check_reference
  *
- * PARAMETERS:  Data            - Pointer to validation data structure
+ * PARAMETERS:  data            - Pointer to validation data structure
  *              return_object   - Object returned from the evaluation of a
  *                                method or object
  *
@@ -1105,7 +1140,7 @@ acpi_ns_check_reference(struct acpi_predefined_data *data,
  *
  * FUNCTION:    acpi_ns_get_expected_types
  *
- * PARAMETERS:  Buffer          - Pointer to where the string is returned
+ * PARAMETERS:  buffer          - Pointer to where the string is returned
  *              expected_btypes - Bitmap of expected return type(s)
  *
  * RETURN:      Buffer is populated with type names.

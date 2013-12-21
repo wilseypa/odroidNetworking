@@ -155,7 +155,7 @@ static int parse_audio_format_rates_v1(struct snd_usb_audio *chip, struct audiof
 	if (fmt[0] < offset + 1 + 3 * (nr_rates ? nr_rates : 2)) {
 		snd_printk(KERN_ERR "%d:%u:%d : invalid UAC_FORMAT_TYPE desc\n",
 				   chip->dev->devnum, fp->iface, fp->altsetting);
-		return -1;
+		return -EINVAL;
 	}
 
 	if (nr_rates) {
@@ -167,7 +167,7 @@ static int parse_audio_format_rates_v1(struct snd_usb_audio *chip, struct audiof
 		fp->rate_table = kmalloc(sizeof(int) * nr_rates, GFP_KERNEL);
 		if (fp->rate_table == NULL) {
 			snd_printk(KERN_ERR "cannot malloc\n");
-			return -1;
+			return -ENOMEM;
 		}
 
 		fp->nr_rates = 0;
@@ -198,7 +198,7 @@ static int parse_audio_format_rates_v1(struct snd_usb_audio *chip, struct audiof
 		}
 		if (!fp->nr_rates) {
 			hwc_debug("All rates were zero. Skipping format!\n");
-			return -1;
+			return -EINVAL;
 		}
 	} else {
 		/* continuous rates */
@@ -290,7 +290,7 @@ static int parse_audio_format_rates_v2(struct snd_usb_audio *chip,
 			      USB_TYPE_CLASS | USB_RECIP_INTERFACE | USB_DIR_IN,
 			      UAC2_CS_CONTROL_SAM_FREQ << 8,
 			      snd_usb_ctrl_intf(chip) | (clock << 8),
-			      tmp, sizeof(tmp), 1000);
+			      tmp, sizeof(tmp));
 
 	if (ret < 0) {
 		snd_printk(KERN_ERR "%s(): unable to retrieve number of sample rates (clock %d)\n",
@@ -311,7 +311,7 @@ static int parse_audio_format_rates_v2(struct snd_usb_audio *chip,
 			      USB_TYPE_CLASS | USB_RECIP_INTERFACE | USB_DIR_IN,
 			      UAC2_CS_CONTROL_SAM_FREQ << 8,
 			      snd_usb_ctrl_intf(chip) | (clock << 8),
-			      data, data_size, 1000);
+			      data, data_size);
 
 	if (ret < 0) {
 		snd_printk(KERN_ERR "%s(): unable to retrieve sample rate range (clock %d)\n",
@@ -383,7 +383,7 @@ static int parse_audio_format_i(struct snd_usb_audio *chip,
 		fp->formats = parse_audio_format_i_type(chip, fp, format,
 							fmt, protocol);
 		if (!fp->formats)
-			return -1;
+			return -EINVAL;
 	}
 
 	/* gather possible sample rates */
@@ -409,7 +409,7 @@ static int parse_audio_format_i(struct snd_usb_audio *chip,
 	if (fp->channels < 1) {
 		snd_printk(KERN_ERR "%d:%u:%d : invalid channels %d\n",
 			   chip->dev->devnum, fp->iface, fp->altsetting, fp->channels);
-		return -1;
+		return -EINVAL;
 	}
 
 	return ret;

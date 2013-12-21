@@ -770,7 +770,7 @@ static int nonstatic_find_io(struct pcmcia_socket *s, unsigned int attr,
 							res->end + num);
 			if (!ret) {
 				ret = adjust_resource(s->io[i].res, res->start,
-					       res->end - res->start + num + 1);
+						      resource_size(res) + num);
 				if (ret)
 					continue;
 				*base = try;
@@ -788,8 +788,8 @@ static int nonstatic_find_io(struct pcmcia_socket *s, unsigned int attr,
 							res->end);
 			if (!ret) {
 				ret = adjust_resource(s->io[i].res,
-					       res->start - num,
-					       res->end - res->start + num + 1);
+						      res->start - num,
+						      resource_size(res) + num);
 				if (ret)
 					continue;
 				*base = try;
@@ -1199,7 +1199,7 @@ static const struct attribute_group rsrc_attributes = {
 	.attrs = pccard_rsrc_attributes,
 };
 
-static int __devinit pccard_sysfs_add_rsrc(struct device *dev,
+static int pccard_sysfs_add_rsrc(struct device *dev,
 					   struct class_interface *class_intf)
 {
 	struct pcmcia_socket *s = dev_get_drvdata(dev);
@@ -1209,7 +1209,7 @@ static int __devinit pccard_sysfs_add_rsrc(struct device *dev,
 	return sysfs_create_group(&dev->kobj, &rsrc_attributes);
 }
 
-static void __devexit pccard_sysfs_remove_rsrc(struct device *dev,
+static void pccard_sysfs_remove_rsrc(struct device *dev,
 					       struct class_interface *class_intf)
 {
 	struct pcmcia_socket *s = dev_get_drvdata(dev);
@@ -1222,7 +1222,7 @@ static void __devexit pccard_sysfs_remove_rsrc(struct device *dev,
 static struct class_interface pccard_rsrc_interface __refdata = {
 	.class = &pcmcia_socket_class,
 	.add_dev = &pccard_sysfs_add_rsrc,
-	.remove_dev = __devexit_p(&pccard_sysfs_remove_rsrc),
+	.remove_dev = &pccard_sysfs_remove_rsrc,
 };
 
 static int __init nonstatic_sysfs_init(void)

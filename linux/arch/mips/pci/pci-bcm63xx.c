@@ -10,7 +10,11 @@
 #include <linux/pci.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
+#include <linux/delay.h>
+#include <linux/clk.h>
 #include <asm/bootinfo.h>
+
+#include <bcm63xx_reset.h>
 
 #include "pci-bcm63xx.h"
 
@@ -71,6 +75,26 @@ struct pci_controller bcm63xx_cb_controller = {
 };
 #endif
 
+static struct resource bcm_pcie_mem_resource = {
+	.name   = "bcm63xx PCIe memory space",
+	.start  = BCM_PCIE_MEM_BASE_PA,
+	.end    = BCM_PCIE_MEM_END_PA,
+	.flags  = IORESOURCE_MEM,
+};
+
+static struct resource bcm_pcie_io_resource = {
+	.name   = "bcm63xx PCIe IO space",
+	.start  = 0,
+	.end    = 0,
+	.flags  = 0,
+};
+
+struct pci_controller bcm63xx_pcie_controller = {
+	.pci_ops	= &bcm63xx_pcie_ops,
+	.io_resource	= &bcm_pcie_io_resource,
+	.mem_resource	= &bcm_pcie_mem_resource,
+};
+
 static u32 bcm63xx_int_cfg_readl(u32 reg)
 {
 	u32 tmp;
@@ -94,17 +118,94 @@ static void bcm63xx_int_cfg_writel(u32 val, u32 reg)
 
 void __iomem *pci_iospace_start;
 
-static int __init bcm63xx_pci_init(void)
+static void __init bcm63xx_reset_pcie(void)
+{
+	u32 val;
+
+	/* enable SERDES */
+	val = bcm_misc_readl(MISC_SERDES_CTRL_REG);
+	val |= SERDES_PCIE_EN | SERDES_PCIE_EXD_EN;
+	bcm_misc_writel(val, MISC_SERDES_CTRL_REG);
+
+	/* reset the PCIe core */
+	bcm63xx_core_set_reset(BCM63XX_RESET_PCIE, 1);
+	bcm63xx_core_set_reset(BCM63XX_RESET_PCIE_EXT, 1);
+	mdelay(10);
+
+	bcm63xx_core_set_reset(BCM63XX_RESET_PCIE, 0);
+	mdelay(10);
+
+	bcm63xx_core_set_reset(BCM63XX_RESET_PCIE_EXT, 0);
+	mdelay(200);
+}
+
+static struct clk *pcie_clk;
+
+static int __init bcm63xx_register_pcie(void)
+{
+	u32 val;
+
+	/* enable clock */
+	pcie_clk = clk_get(NULL, "pcie");
+	if (IS_ERR_OR_NULL(pcie_clk))
+		return -ENODEV;
+
+	clk_prepare_enable(pcie_clk);
+
+	bcm63xx_reset_pcie();
+
+	/* configure the PCIe bridge */
+	val = bcm_pcie_readl(PCIE_BRIDGE_OPT1_REG);
+	val |= OPT1_RD_BE_OPT_EN;
+	val |= OPT1_RD_REPLY_BE_FIX_EN;
+	val |= OPT1_PCIE_BRIDGE_HOLE_DET_EN;
+	val |= OPT1_L1_INT_STATUS_MASK_POL;
+	bcm_pcie_writel(val, PCIE_BRIDGE_OPT1_REG);
+
+	/* setup the interrupts */
+	val = bcm_pcie_readl(PCIE_BRIDGE_RC_INT_MASK_REG);
+	val |= PCIE_RC_INT_A | PCIE_RC_INT_B | PCIE_RC_INT_C | PCIE_RC_INT_D;
+	bcm_pcie_writel(val, PCIE_BRIDGE_RC_INT_MASK_REG);
+
+	val = bcm_pcie_readl(PCIE_BRIDGE_OPT2_REG);
+	/* enable credit checking and error checking */
+	val |= OPT2_TX_CREDIT_CHK_EN;
+	val |= OPT2_UBUS_UR_DECODE_DIS;
+
+	/* set device bus/func for the pcie device */
+	val |= (PCIE_BUS_DEVICE << OPT2_CFG_TYPE1_BUS_NO_SHIFT);
+	val |= OPT2_CFG_TYPE1_BD_SEL;
+	bcm_pcie_writel(val, PCIE_BRIDGE_OPT2_REG);
+
+	/* setup class code as bridge */
+	val = bcm_pcie_readl(PCIE_IDVAL3_REG);
+	val &= ~IDVAL3_CLASS_CODE_MASK;
+	val |= (PCI_CLASS_BRIDGE_PCI << IDVAL3_SUBCLASS_SHIFT);
+	bcm_pcie_writel(val, PCIE_IDVAL3_REG);
+
+	/* disable bar1 size */
+	val = bcm_pcie_readl(PCIE_CONFIG2_REG);
+	val &= ~CONFIG2_BAR1_SIZE_MASK;
+	bcm_pcie_writel(val, PCIE_CONFIG2_REG);
+
+	/* set bar0 to little endian */
+	val = (BCM_PCIE_MEM_BASE_PA >> 20) << BASEMASK_BASE_SHIFT;
+	val |= (BCM_PCIE_MEM_BASE_PA >> 20) << BASEMASK_MASK_SHIFT;
+	val |= BASEMASK_REMAP_EN;
+	bcm_pcie_writel(val, PCIE_BRIDGE_BAR0_BASEMASK_REG);
+
+	val = (BCM_PCIE_MEM_BASE_PA >> 20) << REBASE_ADDR_BASE_SHIFT;
+	bcm_pcie_writel(val, PCIE_BRIDGE_BAR0_REBASE_ADDR_REG);
+
+	register_pci_controller(&bcm63xx_pcie_controller);
+
+	return 0;
+}
+
+static int __init bcm63xx_register_pci(void)
 {
 	unsigned int mem_size;
 	u32 val;
-
-	if (!BCMCPU_IS_6348() && !BCMCPU_IS_6358())
-		return -ENODEV;
-
-	if (!bcm63xx_pci_enabled)
-		return -ENODEV;
-
 	/*
 	 * configuration  access are  done through  IO space,  remap 4
 	 * first bytes to access it from CPU.
@@ -159,7 +260,7 @@ static int __init bcm63xx_pci_init(void)
 	/* setup PCI to local bus access, used by PCI device to target
 	 * local RAM while bus mastering */
 	bcm63xx_int_cfg_writel(0, PCI_BASE_ADDRESS_3);
-	if (BCMCPU_IS_6358())
+	if (BCMCPU_IS_6358() || BCMCPU_IS_6368())
 		val = MPI_SP0_REMAP_ENABLE_MASK;
 	else
 		val = 0;
@@ -219,6 +320,24 @@ static int __init bcm63xx_pci_init(void)
 	request_mem_region(BCM_PCI_IO_BASE_PA, BCM_PCI_IO_SIZE,
 			   "bcm63xx PCI IO space");
 	return 0;
+}
+
+
+static int __init bcm63xx_pci_init(void)
+{
+	if (!bcm63xx_pci_enabled)
+		return -ENODEV;
+
+	switch (bcm63xx_get_cpu_id()) {
+	case BCM6328_CPU_ID:
+		return bcm63xx_register_pcie();
+	case BCM6348_CPU_ID:
+	case BCM6358_CPU_ID:
+	case BCM6368_CPU_ID:
+		return bcm63xx_register_pci();
+	default:
+		return -ENODEV;
+	}
 }
 
 arch_initcall(bcm63xx_pci_init);

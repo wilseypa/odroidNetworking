@@ -141,7 +141,7 @@ static const struct rtc_class_ops m48t35_ops = {
 	.set_time	= m48t35_set_time,
 };
 
-static int __devinit m48t35_probe(struct platform_device *pdev)
+static int m48t35_probe(struct platform_device *pdev)
 {
 	struct resource *res;
 	struct m48t35_priv *priv;
@@ -154,7 +154,7 @@ static int __devinit m48t35_probe(struct platform_device *pdev)
 	if (!priv)
 		return -ENOMEM;
 
-	priv->size = res->end - res->start + 1;
+	priv->size = resource_size(res);
 	/*
 	 * kludge: remove the #ifndef after ioc3 resource
 	 * conflicts are resolved
@@ -194,7 +194,7 @@ out:
 	return ret;
 }
 
-static int __devexit m48t35_remove(struct platform_device *pdev)
+static int m48t35_remove(struct platform_device *pdev)
 {
 	struct m48t35_priv *priv = platform_get_drvdata(pdev);
 
@@ -213,24 +213,13 @@ static struct platform_driver m48t35_platform_driver = {
 		.owner	= THIS_MODULE,
 	},
 	.probe		= m48t35_probe,
-	.remove		= __devexit_p(m48t35_remove),
+	.remove		= m48t35_remove,
 };
 
-static int __init m48t35_init(void)
-{
-	return platform_driver_register(&m48t35_platform_driver);
-}
-
-static void __exit m48t35_exit(void)
-{
-	platform_driver_unregister(&m48t35_platform_driver);
-}
+module_platform_driver(m48t35_platform_driver);
 
 MODULE_AUTHOR("Thomas Bogendoerfer <tsbogend@alpha.franken.de>");
 MODULE_DESCRIPTION("M48T35 RTC driver");
 MODULE_LICENSE("GPL");
 MODULE_VERSION(DRV_VERSION);
 MODULE_ALIAS("platform:rtc-m48t35");
-
-module_init(m48t35_init);
-module_exit(m48t35_exit);

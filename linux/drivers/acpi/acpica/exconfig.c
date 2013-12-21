@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2011, Intel Corp.
+ * Copyright (C) 2000 - 2012, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -66,7 +66,7 @@ acpi_ex_region_read(union acpi_operand_object *obj_desc,
  *
  * FUNCTION:    acpi_ex_add_table
  *
- * PARAMETERS:  Table               - Pointer to raw table
+ * PARAMETERS:  table               - Pointer to raw table
  *              parent_node         - Where to load the table (scope)
  *              ddb_handle          - Where to return the table handle.
  *
@@ -276,8 +276,8 @@ acpi_ex_load_table_op(struct acpi_walk_state *walk_state,
  * FUNCTION:    acpi_ex_region_read
  *
  * PARAMETERS:  obj_desc        - Region descriptor
- *              Length          - Number of bytes to read
- *              Buffer          - Pointer to where to put the data
+ *              length          - Number of bytes to read
+ *              buffer          - Pointer to where to put the data
  *
  * RETURN:      Status
  *
@@ -297,9 +297,9 @@ acpi_ex_region_read(union acpi_operand_object *obj_desc, u32 length, u8 *buffer)
 	/* Bytewise reads */
 
 	for (i = 0; i < length; i++) {
-		status = acpi_ev_address_space_dispatch(obj_desc, ACPI_READ,
-							region_offset, 8,
-							&value);
+		status =
+		    acpi_ev_address_space_dispatch(obj_desc, NULL, ACPI_READ,
+						   region_offset, 8, &value);
 		if (ACPI_FAILURE(status)) {
 			return status;
 		}
@@ -318,7 +318,7 @@ acpi_ex_region_read(union acpi_operand_object *obj_desc, u32 length, u8 *buffer)
  *
  * PARAMETERS:  obj_desc        - Region or Buffer/Field where the table will be
  *                                obtained
- *              Target          - Where a handle to the table will be stored
+ *              target          - Where a handle to the table will be stored
  *              walk_state      - Current state
  *
  * RETURN:      Status

@@ -13,7 +13,9 @@ fb-objs                           := $(fb-y)
 
 obj-$(CONFIG_VT)		  += console/
 obj-$(CONFIG_LOGO)		  += logo/
-obj-y				  += backlight/ display/
+obj-y				  += backlight/
+
+obj-$(CONFIG_EXYNOS_VIDEO)     += exynos/
 
 obj-$(CONFIG_FB_CFB_FILLRECT)  += cfbfillrect.o
 obj-$(CONFIG_FB_CFB_COPYAREA)  += cfbcopyarea.o
@@ -33,9 +35,11 @@ obj-$(CONFIG_FB_AMIGA)            += amifb.o c2p_planar.o
 obj-$(CONFIG_FB_ARC)              += arcfb.o
 obj-$(CONFIG_FB_CLPS711X)         += clps711xfb.o
 obj-$(CONFIG_FB_CYBER2000)        += cyber2000fb.o
+obj-$(CONFIG_FB_GRVGA)            += grvga.o
 obj-$(CONFIG_FB_PM2)              += pm2fb.o
 obj-$(CONFIG_FB_PM3)		  += pm3fb.o
 
+obj-$(CONFIG_FB_I740)		  += i740fb.o
 obj-$(CONFIG_FB_MATROX)		  += matrox/
 obj-$(CONFIG_FB_RIVA)		  += riva/
 obj-$(CONFIG_FB_NVIDIA)		  += nvidia/
@@ -90,7 +94,6 @@ obj-$(CONFIG_FB_G364)             += g364fb.o
 obj-$(CONFIG_FB_EP93XX)		  += ep93xx-fb.o
 obj-$(CONFIG_FB_SA1100)           += sa1100fb.o
 obj-$(CONFIG_FB_HIT)              += hitfb.o
-obj-$(CONFIG_FB_EPSON1355)	  += epson1355fb.o
 obj-$(CONFIG_FB_ATMEL)		  += atmel_lcdfb.o
 obj-$(CONFIG_FB_PVR2)             += pvr2fb.o
 obj-$(CONFIG_FB_VOODOO1)          += sstfb.o
@@ -114,23 +117,21 @@ obj-$(CONFIG_FB_PMAGB_B)	  += pmagb-b-fb.o
 obj-$(CONFIG_FB_MAXINE)		  += maxinefb.o
 obj-$(CONFIG_FB_METRONOME)        += metronomefb.o
 obj-$(CONFIG_FB_BROADSHEET)       += broadsheetfb.o
+obj-$(CONFIG_FB_AUO_K190X)	  += auo_k190x.o
+obj-$(CONFIG_FB_AUO_K1900)	  += auo_k1900fb.o
+obj-$(CONFIG_FB_AUO_K1901)	  += auo_k1901fb.o
 obj-$(CONFIG_FB_S1D13XXX)	  += s1d13xxxfb.o
 obj-$(CONFIG_FB_SH7760)		  += sh7760fb.o
 obj-$(CONFIG_FB_IMX)              += imxfb.o
-obj-$(CONFIG_FB_MIPI_DSIM)	  += s5p_mipi_dsi.o s5p_mipi_dsi_lowlevel.o
 obj-$(CONFIG_FB_S3C)		  += s3c-fb.o
-obj-$(CONFIG_ODROID_UMP)	  += hardkernel_ump.o
-obj-$(CONFIG_S5P_DP)		  += s5p-dp.o s5p-dp-reg.o
 obj-$(CONFIG_FB_S3C2410)	  += s3c2410fb.o
-obj-$(CONFIG_FB_S5P)              += samsung/
 obj-$(CONFIG_FB_FSL_DIU)	  += fsl-diu-fb.o
 obj-$(CONFIG_FB_COBALT)           += cobalt_lcdfb.o
-obj-$(CONFIG_FB_PNX4008_DUM)	  += pnx4008/
-obj-$(CONFIG_FB_PNX4008_DUM_RGB)  += pnx4008/
 obj-$(CONFIG_FB_IBM_GXT4500)	  += gxt4500.o
 obj-$(CONFIG_FB_PS3)		  += ps3fb.o
 obj-$(CONFIG_FB_SM501)            += sm501fb.o
 obj-$(CONFIG_FB_UDL)		  += udlfb.o
+obj-$(CONFIG_FB_SMSCUFX)	  += smscufx.o
 obj-$(CONFIG_FB_XILINX)           += xilinxfb.o
 obj-$(CONFIG_SH_MIPI_DSI)	  += sh_mipi_dsi.o
 obj-$(CONFIG_FB_SH_MOBILE_HDMI)	  += sh_mobile_hdmi.o
@@ -160,20 +161,10 @@ obj-$(CONFIG_FB_BFIN_7393)        += bfin_adv7393fb.o
 obj-$(CONFIG_FB_MX3)		  += mx3fb.o
 obj-$(CONFIG_FB_DA8XX)		  += da8xx-fb.o
 obj-$(CONFIG_FB_MXS)		  += mxsfb.o
+obj-$(CONFIG_FB_SSD1307)	  += ssd1307fb.o
 
 # the test framebuffer is last
 obj-$(CONFIG_FB_VIRTUAL)          += vfb.o
 
 #video output switch sysfs driver
 obj-$(CONFIG_VIDEO_OUTPUT_CONTROL) += output.o
-
-ifeq ($(CONFIG_VITHAR),y)
-    EXTRA_CFLAGS += -Idrivers/gpu/vithar
-endif
-
-ifeq ($(CONFIG_ODROID_UMP),y)
-	EXTRA_CFLAGS += -Idrivers/media/video/samsung/ump_r3p2 \
-			-Idrivers/media/video/samsung/mali_r3p2/common \
-			-Idrivers/media/video/samsung/mali_r3p2/linux
-endif
-

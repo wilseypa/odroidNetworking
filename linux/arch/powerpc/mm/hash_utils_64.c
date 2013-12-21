@@ -27,6 +27,7 @@
 #include <linux/proc_fs.h>
 #include <linux/stat.h>
 #include <linux/sysctl.h>
+#include <linux/export.h>
 #include <linux/ctype.h>
 #include <linux/cache.h>
 #include <linux/init.h>
@@ -39,11 +40,9 @@
 #include <asm/mmu_context.h>
 #include <asm/page.h>
 #include <asm/types.h>
-#include <asm/system.h>
 #include <asm/uaccess.h>
 #include <asm/machdep.h>
 #include <asm/prom.h>
-#include <asm/abs_addr.h>
 #include <asm/tlbflush.h>
 #include <asm/io.h>
 #include <asm/eeh.h>
@@ -54,6 +53,8 @@
 #include <asm/spu.h>
 #include <asm/udbg.h>
 #include <asm/code-patching.h>
+#include <asm/fadump.h>
+#include <asm/firmware.h>
 
 #ifdef DEBUG
 #define DBG(fmt...) udbg_printf(fmt)
@@ -105,9 +106,6 @@ int mmu_kernel_ssize = MMU_SEGSIZE_256M;
 int mmu_highuser_ssize = MMU_SEGSIZE_256M;
 u16 mmu_slb_size = 64;
 EXPORT_SYMBOL_GPL(mmu_slb_size);
-#ifdef CONFIG_HUGETLB_PAGE
-unsigned int HPAGE_SHIFT;
-#endif
 #ifdef CONFIG_PPC_64K_PAGES
 int mmu_ci_restrictions;
 #endif
@@ -193,18 +191,23 @@ int htab_bolt_mapping(unsigned long vstart, unsigned long vend,
 	     vaddr += step, paddr += step) {
 		unsigned long hash, hpteg;
 		unsigned long vsid = get_kernel_vsid(vaddr, ssize);
-		unsigned long va = hpt_va(vaddr, vsid, ssize);
+		unsigned long vpn  = hpt_vpn(vaddr, vsid, ssize);
 		unsigned long tprot = prot;
 
+		/*
+		 * If we hit a bad address return error.
+		 */
+		if (!vsid)
+			return -1;
 		/* Make kernel text executable */
 		if (overlaps_kernel_text(vaddr, vaddr + step))
 			tprot &= ~HPTE_R_N;
 
-		hash = hpt_hash(va, shift, ssize);
+		hash = hpt_hash(vpn, shift, ssize);
 		hpteg = ((hash & htab_hash_mask) * HPTES_PER_GROUP);
 
 		BUG_ON(!ppc_md.hpte_insert);
-		ret = ppc_md.hpte_insert(hpteg, va, paddr, tprot,
+		ret = ppc_md.hpte_insert(hpteg, vpn, paddr, tprot,
 					 HPTE_V_BOLTED, psize, ssize);
 
 		if (ret < 0)
@@ -627,6 +630,16 @@ static void __init htab_initialize(void)
 		/* Using a hypervisor which owns the htab */
 		htab_address = NULL;
 		_SDR1 = 0; 
+#ifdef CONFIG_FA_DUMP
+		/*
+		 * If firmware assisted dump is active firmware preserves
+		 * the contents of htab along with entire partition memory.
+		 * Clear the htab if firmware assisted dump is active so
+		 * that we dont end up using old mappings.
+		 */
+		if (is_fadump_active() && ppc_md.hpte_clear_all)
+			ppc_md.hpte_clear_all();
+#endif
 	} else {
 		/* Find storage for the HPT.  Must be contiguous in
 		 * the absolute address space. On cell we want it to be
@@ -642,7 +655,7 @@ static void __init htab_initialize(void)
 		DBG("Hash table allocated at %lx, size: %lx\n", table,
 		    htab_size_bytes);
 
-		htab_address = abs_to_virt(table);
+		htab_address = __va(table);
 
 		/* htab absolute addr + encoded htabsize */
 		_SDR1 = table + __ilog2(pteg_count) - 11;
@@ -747,11 +760,10 @@ void __init early_init_mmu(void)
 	 */
 	htab_initialize();
 
-	/* Initialize stab / SLB management except on iSeries
-	 */
+	/* Initialize stab / SLB management */
 	if (mmu_has_feature(MMU_FTR_SLB))
 		slb_initialize();
-	else if (!firmware_has_feature(FW_FEATURE_ISERIES))
+	else
 		stab_initialize(get_paca()->stab_real);
 }
 
@@ -763,8 +775,7 @@ void __cpuinit early_init_mmu_secondary(void)
 		mtspr(SPRN_SDR1, _SDR1);
 
 	/* Initialize STAB/SLB. We use a virtual address as it works
-	 * in real mode on pSeries and we want a virtual address on
-	 * iSeries anyway
+	 * in real mode on pSeries.
 	 */
 	if (mmu_has_feature(MMU_FTR_SLB))
 		slb_initialize();
@@ -799,16 +810,19 @@ unsigned int hash_page_do_lazy_icache(unsigned int pp, pte_t pte, int trap)
 #ifdef CONFIG_PPC_MM_SLICES
 unsigned int get_paca_psize(unsigned long addr)
 {
-	unsigned long index, slices;
+	u64 lpsizes;
+	unsigned char *hpsizes;
+	unsigned long index, mask_index;
 
 	if (addr < SLICE_LOW_TOP) {
-		slices = get_paca()->context.low_slices_psize;
+		lpsizes = get_paca()->context.low_slices_psize;
 		index = GET_LOW_SLICE_INDEX(addr);
-	} else {
-		slices = get_paca()->context.high_slices_psize;
-		index = GET_HIGH_SLICE_INDEX(addr);
+		return (lpsizes >> (index * 4)) & 0xF;
 	}
-	return (slices >> (index * 4)) & 0xF;
+	hpsizes = get_paca()->context.high_slices_psize;
+	index = GET_HIGH_SLICE_INDEX(addr);
+	mask_index = index & 0x1;
+	return (hpsizes[index >> 1] >> (mask_index * 4)) & 0xF;
 }
 
 #else
@@ -914,11 +928,6 @@ int hash_page(unsigned long ea, unsigned long access, unsigned long trap)
 	DBG_LOW("hash_page(ea=%016lx, access=%lx, trap=%lx\n",
 		ea, access, trap);
 
-	if ((ea & ~REGION_MASK) >= PGTABLE_RANGE) {
-		DBG_LOW(" out of pgtable range !\n");
- 		return 1;
-	}
-
 	/* Get region & vsid */
  	switch (REGION_ID(ea)) {
 	case USER_REGION_ID:
@@ -949,6 +958,11 @@ int hash_page(unsigned long ea, unsigned long access, unsigned long trap)
 	}
 	DBG_LOW(" mm=%p, mm->pgdir=%p, vsid=%016lx\n", mm, mm->pgd, vsid);
 
+	/* Bad address. */
+	if (!vsid) {
+		DBG_LOW("Bad address!\n");
+		return 1;
+	}
 	/* Get pgdir */
 	pgdir = mm->pgd;
 	if (pgdir == NULL)
@@ -1118,6 +1132,8 @@ void hash_preload(struct mm_struct *mm, unsigned long ea,
 	/* Get VSID */
 	ssize = user_segment_size(ea);
 	vsid = get_vsid(mm->context.id, ea, ssize);
+	if (!vsid)
+		return;
 
 	/* Hash doesn't like irqs */
 	local_irq_save(flags);
@@ -1148,21 +1164,21 @@ void hash_preload(struct mm_struct *mm, unsigned long ea,
 /* WARNING: This is called from hash_low_64.S, if you change this prototype,
  *          do not forget to update the assembly call site !
  */
-void flush_hash_page(unsigned long va, real_pte_t pte, int psize, int ssize,
+void flush_hash_page(unsigned long vpn, real_pte_t pte, int psize, int ssize,
 		     int local)
 {
 	unsigned long hash, index, shift, hidx, slot;
 
-	DBG_LOW("flush_hash_page(va=%016lx)\n", va);
-	pte_iterate_hashed_subpages(pte, psize, va, index, shift) {
-		hash = hpt_hash(va, shift, ssize);
+	DBG_LOW("flush_hash_page(vpn=%016lx)\n", vpn);
+	pte_iterate_hashed_subpages(pte, psize, vpn, index, shift) {
+		hash = hpt_hash(vpn, shift, ssize);
 		hidx = __rpte_to_hidx(pte, index);
 		if (hidx & _PTEIDX_SECONDARY)
 			hash = ~hash;
 		slot = (hash & htab_hash_mask) * HPTES_PER_GROUP;
 		slot += hidx & _PTEIDX_GROUP_IX;
 		DBG_LOW(" sub %ld: hash=%lx, hidx=%lx\n", index, slot, hidx);
-		ppc_md.hpte_invalidate(slot, va, psize, ssize, local);
+		ppc_md.hpte_invalidate(slot, vpn, psize, ssize, local);
 	} pte_iterate_hashed_end();
 }
 
@@ -1176,7 +1192,7 @@ void flush_hash_range(unsigned long number, int local)
 			&__get_cpu_var(ppc64_tlb_batch);
 
 		for (i = 0; i < number; i++)
-			flush_hash_page(batch->vaddr[i], batch->pte[i],
+			flush_hash_page(batch->vpn[i], batch->pte[i],
 					batch->psize, batch->ssize, local);
 	}
 }
@@ -1203,14 +1219,17 @@ static void kernel_map_linear_page(unsigned long vaddr, unsigned long lmi)
 {
 	unsigned long hash, hpteg;
 	unsigned long vsid = get_kernel_vsid(vaddr, mmu_kernel_ssize);
-	unsigned long va = hpt_va(vaddr, vsid, mmu_kernel_ssize);
+	unsigned long vpn = hpt_vpn(vaddr, vsid, mmu_kernel_ssize);
 	unsigned long mode = htab_convert_pte_flags(PAGE_KERNEL);
 	int ret;
 
-	hash = hpt_hash(va, PAGE_SHIFT, mmu_kernel_ssize);
+	hash = hpt_hash(vpn, PAGE_SHIFT, mmu_kernel_ssize);
 	hpteg = ((hash & htab_hash_mask) * HPTES_PER_GROUP);
 
-	ret = ppc_md.hpte_insert(hpteg, va, __pa(vaddr),
+	/* Don't create HPTE entries for bad address */
+	if (!vsid)
+		return;
+	ret = ppc_md.hpte_insert(hpteg, vpn, __pa(vaddr),
 				 mode, HPTE_V_BOLTED,
 				 mmu_linear_psize, mmu_kernel_ssize);
 	BUG_ON (ret < 0);
@@ -1224,9 +1243,9 @@ static void kernel_unmap_linear_page(unsigned long vaddr, unsigned long lmi)
 {
 	unsigned long hash, hidx, slot;
 	unsigned long vsid = get_kernel_vsid(vaddr, mmu_kernel_ssize);
-	unsigned long va = hpt_va(vaddr, vsid, mmu_kernel_ssize);
+	unsigned long vpn = hpt_vpn(vaddr, vsid, mmu_kernel_ssize);
 
-	hash = hpt_hash(va, PAGE_SHIFT, mmu_kernel_ssize);
+	hash = hpt_hash(vpn, PAGE_SHIFT, mmu_kernel_ssize);
 	spin_lock(&linear_map_hash_lock);
 	BUG_ON(!(linear_map_hash_slots[lmi] & 0x80));
 	hidx = linear_map_hash_slots[lmi] & 0x7f;
@@ -1236,7 +1255,7 @@ static void kernel_unmap_linear_page(unsigned long vaddr, unsigned long lmi)
 		hash = ~hash;
 	slot = (hash & htab_hash_mask) * HPTES_PER_GROUP;
 	slot += hidx & _PTEIDX_GROUP_IX;
-	ppc_md.hpte_invalidate(slot, va, mmu_linear_psize, mmu_kernel_ssize, 0);
+	ppc_md.hpte_invalidate(slot, vpn, mmu_linear_psize, mmu_kernel_ssize, 0);
 }
 
 void kernel_map_pages(struct page *page, int numpages, int enable)

@@ -69,18 +69,7 @@ stack_done:
 1:	sw	v0, PT_R2(sp)		# result
 
 o32_syscall_exit:
-	local_irq_disable		# make sure need_resched and
-					# signals dont change between
-					# sampling and return
-	lw	a2, TI_FLAGS($28)	# current->work
-	li	t0, _TIF_ALLWORK_MASK
-	and	t0, a2
-	bnez	t0, o32_syscall_exit_work
-
-	j	restore_partial
-
-o32_syscall_exit_work:
-	j	syscall_exit_work_partial
+	j	syscall_exit_partial
 
 /* ------------------------------------------------------------------------ */
 
@@ -424,7 +413,7 @@ einval:	li	v0, -ENOSYS
 	sys	sys_getresuid		3
 	sys	sys_ni_syscall		0	/* was sys_query_module */
 	sys	sys_poll		3
-	sys	sys_nfsservctl		3
+	sys	sys_ni_syscall		0	/* was nfsservctl */
 	sys	sys_setresgid		3	/* 4190 */
 	sys	sys_getresgid		3
 	sys	sys_prctl		5
@@ -496,7 +485,7 @@ einval:	li	v0, -ENOSYS
 	sys	sys_lookup_dcookie	4
 	sys	sys_epoll_create	1
 	sys	sys_epoll_ctl		4
-	sys	sys_epoll_wait		3	/* 4250 */
+	sys	sys_epoll_wait		4	/* 4250 */
 	sys	sys_remap_file_pages	5
 	sys	sys_set_tid_address	1
 	sys	sys_restart_syscall	0
@@ -589,7 +578,12 @@ einval:	li	v0, -ENOSYS
 	sys	sys_open_by_handle_at	3	/* 4340 */
 	sys	sys_clock_adjtime	2
 	sys	sys_syncfs		1
+	sys	sys_sendmmsg		4
 	sys	sys_setns		2
+	sys	sys_process_vm_readv	6	/* 4345 */
+	sys	sys_process_vm_writev	6
+	sys	sys_kcmp		5
+	sys	sys_finit_module	3
 	.endm
 
 	/* We pre-compute the number of _instruction_ bytes needed to

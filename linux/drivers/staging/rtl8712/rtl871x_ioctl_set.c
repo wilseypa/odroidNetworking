@@ -131,10 +131,7 @@ u8 r8712_set_802_11_bssid(struct _adapter *padapter, u8 *bssid)
 	u8 status = true;
 	struct mlme_priv *pmlmepriv = &padapter->mlmepriv;
 
-	if ((bssid[0] == 0x00 && bssid[1] == 0x00 && bssid[2] == 0x00 &&
-	     bssid[3] == 0x00 && bssid[4] == 0x00 && bssid[5] == 0x00) ||
-	    (bssid[0] == 0xFF && bssid[1] == 0xFF && bssid[2] == 0xFF &&
-	     bssid[3] == 0xFF && bssid[4] == 0xFF && bssid[5] == 0xFF)) {
+	if (is_zero_ether_addr(bssid) || is_broadcast_ether_addr(bssid)) {
 		status = false;
 		return status;
 	}
@@ -243,7 +240,7 @@ done:
 	spin_unlock_irqrestore(&pmlmepriv->lock, irqL);
 }
 
-u8 r8712_set_802_11_infrastructure_mode(struct _adapter *padapter,
+void r8712_set_802_11_infrastructure_mode(struct _adapter *padapter,
 	enum NDIS_802_11_NETWORK_INFRASTRUCTURE networktype)
 {
 	unsigned long irqL;
@@ -264,7 +261,7 @@ u8 r8712_set_802_11_infrastructure_mode(struct _adapter *padapter,
 		    (*pold_state == Ndis802_11Infrastructure) ||
 		    (*pold_state == Ndis802_11IBSS)) {
 			/* will clr Linked_state before this function,
-			 * we must have chked whether issue dis-assoc_cmd or
+			 * we must have checked whether issue dis-assoc_cmd or
 			 * not */
 			r8712_ind_disconnect(padapter);
 		}
@@ -290,7 +287,6 @@ u8 r8712_set_802_11_infrastructure_mode(struct _adapter *padapter,
 		}
 		spin_unlock_irqrestore(&pmlmepriv->lock, irqL);
 	}
-	return true;
 }
 
 u8 r8712_set_802_11_disassociate(struct _adapter *padapter)

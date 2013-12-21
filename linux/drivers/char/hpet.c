@@ -36,7 +36,6 @@
 #include <linux/io.h>
 
 #include <asm/current.h>
-#include <asm/system.h>
 #include <asm/irq.h>
 #include <asm/div64.h>
 
@@ -805,7 +804,7 @@ static unsigned long __hpet_calibrate(struct hpets *hpetp)
 
 static unsigned long hpet_calibrate(struct hpets *hpetp)
 {
-	unsigned long ret = -1;
+	unsigned long ret = ~0UL;
 	unsigned long tmp;
 
 	/*
@@ -895,8 +894,8 @@ int hpet_alloc(struct hpet_data *hdp)
 		hpetp->hp_which, hdp->hd_phys_address,
 		hpetp->hp_ntimer > 1 ? "s" : "");
 	for (i = 0; i < hpetp->hp_ntimer; i++)
-		printk("%s %d", i > 0 ? "," : "", hdp->hd_irq[i]);
-	printk("\n");
+		printk(KERN_CONT "%s %d", i > 0 ? "," : "", hdp->hd_irq[i]);
+	printk(KERN_CONT "\n");
 
 	temp = hpetp->hp_tick_freq;
 	remainder = do_div(temp, 1000000);
@@ -940,7 +939,7 @@ int hpet_alloc(struct hpet_data *hdp)
 #ifdef CONFIG_IA64
 	if (!hpet_clocksource) {
 		hpet_mctr = (void __iomem *)&hpetp->hp_hpet->hpet_mc;
-		CLKSRC_FSYS_MMIO_SET(clocksource_hpet.fsys_mmio, hpet_mctr);
+		clocksource_hpet.archdata.fsys_mmio = hpet_mctr;
 		clocksource_register_hz(&clocksource_hpet, hpetp->hp_tick_freq);
 		hpetp->hp_clocksource = &clocksource_hpet;
 		hpet_clocksource = &clocksource_hpet;
@@ -990,6 +989,9 @@ static acpi_status hpet_resources(struct acpi_resource *res, void *data)
 		irqp = &res->data.extended_irq;
 
 		for (i = 0; i < irqp->interrupt_count; i++) {
+			if (hdp->hd_nirqs >= HPET_MAX_TIMERS)
+				break;
+
 			irq = acpi_register_gsi(NULL, irqp->interrupts[i],
 				      irqp->triggering, irqp->polarity);
 			if (irq < 0)

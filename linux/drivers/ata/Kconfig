@@ -58,6 +58,19 @@ config ATA_ACPI
 	  You can disable this at kernel boot time by using the
 	  option libata.noacpi=1
 
+config SATA_ZPODD
+	bool "SATA Zero Power ODD Support"
+	depends on ATA_ACPI
+	default n
+	help
+	  This option adds support for SATA ZPODD. It requires both
+	  ODD and the platform support, and if enabled, will automatically
+	  power on/off the ODD when certain condition is satisfied. This
+	  does not impact user's experience of the ODD, only power is saved
+	  when ODD is not in use(i.e. no disc inside).
+
+	  If unsure, say N.
+
 config SATA_PMP
 	bool "SATA Port Multiplier support"
 	default y
@@ -93,7 +106,7 @@ config SATA_FSL
 	  If unsure, say N.
 
 config SATA_INIC162X
-	tristate "Initio 162x SATA support (Very Experimental)"
+	tristate "Initio 162x SATA support"
 	depends on PCI
 	help
 	  This option enables support for Initio 162x Serial ATA.
@@ -115,7 +128,7 @@ config SATA_SIL24
 	  If unsure, say N.
 
 config ATA_SFF
-	bool "ATA SFF support"
+	bool "ATA SFF support (for legacy IDE and PATA)"
 	default y
 	help
 	  This option adds support for ATA controllers with SFF
@@ -213,6 +226,14 @@ config SATA_DWC_VDEBUG
 	depends on SATA_DWC_DEBUG
 	help
 	  This option enables the taskfile dumping and NCQ debugging.
+
+config SATA_HIGHBANK
+	tristate "Calxeda Highbank SATA support"
+	help
+	  This option enables support for the Calxeda Highbank SoC's
+	  onboard SATA.
+
+	  If unsure, say N.
 
 config SATA_MV
 	tristate "Marvell SATA support"
@@ -313,6 +334,7 @@ config PATA_AMD
 
 config PATA_ARASAN_CF
 	tristate "ARASAN CompactFlash PATA Controller Support"
+	depends on DMADEVICES
 	select DMA_ENGINE
 	help
 	  Say Y here to support the ARASAN CompactFlash PATA controller
@@ -415,6 +437,15 @@ config PATA_EFAR
 
 	  If unsure, say N.
 
+config PATA_EP93XX
+	tristate "Cirrus Logic EP93xx PATA support"
+	depends on ARCH_EP93XX
+	help
+	  This option enables support for the PATA controller in
+	  the Cirrus Logic EP9312 and EP9315 ARM CPU.
+
+	  If unsure, say N.
+
 config PATA_HPT366
 	tristate "HPT 366/368 PATA support"
 	depends on PCI
@@ -466,6 +497,15 @@ config PATA_ICSIDE
 	  On Acorn systems, say Y here if you wish to use the ICS PATA
 	  interface card.  This is not required for ICS partition support.
 	  If you are unsure, say N to this.
+
+config PATA_IMX
+	tristate "PATA support for Freescale iMX"
+	depends on ARCH_MXC
+	help
+	  This option enables support for the PATA host available on Freescale
+          iMX SoCs.
+
+	  If unsure, say N.
 
 config PATA_IT8213
 	tristate "IT8213 PATA support (Experimental)"
@@ -810,7 +850,7 @@ config PATA_PLATFORM
 
 config PATA_OF_PLATFORM
 	tristate "OpenFirmware platform device PATA support"
-	depends on PATA_PLATFORM && PPC_OF
+	depends on PATA_PLATFORM && OF
 	help
 	  This option enables support for generic directly connected ATA
 	  devices commonly found on embedded systems with OpenFirmware
@@ -821,6 +861,7 @@ config PATA_OF_PLATFORM
 config PATA_QDI
 	tristate "QDI VLB PATA support"
 	depends on ISA
+	select PATA_LEGACY
 	help
 	  Support for QDI 6500 and 6580 PATA controllers on VESA local bus.
 

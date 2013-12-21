@@ -1,6 +1,4 @@
 /*
- *  drivers/s390/net/qeth_l2_main.c
- *
  *    Copyright IBM Corp. 2007, 2009
  *    Author(s): Utz Bacher <utz.bacher@de.ibm.com>,
  *		 Frank Pavlic <fpavlic@de.ibm.com>,
@@ -74,6 +72,9 @@ static int qeth_l2_do_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 		else
 			mii_data->val_out = qeth_mdio_read(dev,
 				mii_data->phy_id, mii_data->reg_num);
+		break;
+	case SIOC_QETH_QUERY_OAT:
+		rc = qeth_query_oat_command(card, rq->ifr_ifru.ifru_data);
 		break;
 	default:
 		rc = -EOPNOTSUPP;
@@ -301,21 +302,21 @@ static void qeth_l2_process_vlans(struct qeth_card *card)
 	spin_unlock_bh(&card->vlanlock);
 }
 
-static void qeth_l2_vlan_rx_add_vid(struct net_device *dev, unsigned short vid)
+static int qeth_l2_vlan_rx_add_vid(struct net_device *dev, unsigned short vid)
 {
 	struct qeth_card *card = dev->ml_priv;
 	struct qeth_vlan_vid *id;
 
 	QETH_CARD_TEXT_(card, 4, "aid:%d", vid);
 	if (!vid)
-		return;
+		return 0;
 	if (card->info.type == QETH_CARD_TYPE_OSM) {
 		QETH_CARD_TEXT(card, 3, "aidOSM");
-		return;
+		return 0;
 	}
 	if (qeth_wait_for_threads(card, QETH_RECOVER_THREAD)) {
 		QETH_CARD_TEXT(card, 3, "aidREC");
-		return;
+		return 0;
 	}
 	id = kmalloc(sizeof(struct qeth_vlan_vid), GFP_ATOMIC);
 	if (id) {
@@ -324,10 +325,13 @@ static void qeth_l2_vlan_rx_add_vid(struct net_device *dev, unsigned short vid)
 		spin_lock_bh(&card->vlanlock);
 		list_add_tail(&id->list, &card->vid_list);
 		spin_unlock_bh(&card->vlanlock);
+	} else {
+		return -ENOMEM;
 	}
+	return 0;
 }
 
-static void qeth_l2_vlan_rx_kill_vid(struct net_device *dev, unsigned short vid)
+static int qeth_l2_vlan_rx_kill_vid(struct net_device *dev, unsigned short vid)
 {
 	struct qeth_vlan_vid *id, *tmpid = NULL;
 	struct qeth_card *card = dev->ml_priv;
@@ -335,11 +339,11 @@ static void qeth_l2_vlan_rx_kill_vid(struct net_device *dev, unsigned short vid)
 	QETH_CARD_TEXT_(card, 4, "kid:%d", vid);
 	if (card->info.type == QETH_CARD_TYPE_OSM) {
 		QETH_CARD_TEXT(card, 3, "kidOSM");
-		return;
+		return 0;
 	}
 	if (qeth_wait_for_threads(card, QETH_RECOVER_THREAD)) {
 		QETH_CARD_TEXT(card, 3, "kidREC");
-		return;
+		return 0;
 	}
 	spin_lock_bh(&card->vlanlock);
 	list_for_each_entry(id, &card->vid_list, list) {
@@ -355,6 +359,7 @@ static void qeth_l2_vlan_rx_kill_vid(struct net_device *dev, unsigned short vid)
 		kfree(tmpid);
 	}
 	qeth_l2_set_multicast_list(card->dev);
+	return 0;
 }
 
 static int qeth_l2_stop_card(struct qeth_card *card, int recovery_mode)
@@ -406,10 +411,10 @@ static int qeth_l2_process_inbound_buffer(struct qeth_card *card,
 	unsigned int len;
 
 	*done = 0;
-	BUG_ON(!budget);
+	WARN_ON_ONCE(!budget);
 	while (budget) {
 		skb = qeth_core_get_next_skb(card,
-			card->qdio.in_q->bufs[card->rx.b_index].buffer,
+			&card->qdio.in_q->bufs[card->rx.b_index],
 			&card->rx.b_element, &card->rx.e_offset, &hdr);
 		if (!skb) {
 			*done = 1;
@@ -569,7 +574,6 @@ static int qeth_l2_send_setmac_cb(struct qeth_card *card,
 		default:
 			break;
 		}
-		cmd->hdr.return_code = -EIO;
 	} else {
 		card->info.mac_bits |= QETH_LAYER2_MAC_REGISTERED;
 		memcpy(card->dev->dev_addr, cmd->data.setdelmac.mac,
@@ -598,7 +602,6 @@ static int qeth_l2_send_delmac_cb(struct qeth_card *card,
 	cmd = (struct qeth_ipa_cmd *) data;
 	if (cmd->hdr.return_code) {
 		QETH_CARD_TEXT_(card, 2, "err%d", cmd->hdr.return_code);
-		cmd->hdr.return_code = -EIO;
 		return 0;
 	}
 	card->info.mac_bits &= ~QETH_LAYER2_MAC_REGISTERED;
@@ -623,10 +626,13 @@ static int qeth_l2_request_initial_mac(struct qeth_card *card)
 	QETH_DBF_TEXT(SETUP, 2, "doL2init");
 	QETH_DBF_TEXT_(SETUP, 2, "doL2%s", CARD_BUS_ID(card));
 
-	rc = qeth_query_setadapterparms(card);
-	if (rc) {
-		QETH_DBF_MESSAGE(2, "could not query adapter parameters on "
-			"device %s: x%x\n", CARD_BUS_ID(card), rc);
+	if (qeth_is_supported(card, IPA_SETADAPTERPARMS)) {
+		rc = qeth_query_setadapterparms(card);
+		if (rc) {
+			QETH_DBF_MESSAGE(2, "could not query adapter "
+				"parameters on device %s: x%x\n",
+				CARD_BUS_ID(card), rc);
+		}
 	}
 
 	if (card->info.type == QETH_CARD_TYPE_IQD ||
@@ -642,7 +648,7 @@ static int qeth_l2_request_initial_mac(struct qeth_card *card)
 		}
 		QETH_DBF_HEX(SETUP, 2, card->dev->dev_addr, OSA_ADDR_LEN);
 	} else {
-		random_ether_addr(card->dev->dev_addr);
+		eth_random_addr(card->dev->dev_addr);
 		memcpy(card->dev->dev_addr, vendor_pre, 3);
 	}
 	return 0;
@@ -673,9 +679,9 @@ static int qeth_l2_set_mac_address(struct net_device *dev, void *p)
 		return -ERESTARTSYS;
 	}
 	rc = qeth_l2_send_delmac(card, &card->dev->dev_addr[0]);
-	if (!rc)
+	if (!rc || (rc == IPA_RC_L2_MAC_NOT_FOUND))
 		rc = qeth_l2_send_setmac(card, addr->sa_data);
-	return rc;
+	return rc ? -EINVAL : 0;
 }
 
 static void qeth_l2_set_multicast_list(struct net_device *dev)
@@ -877,12 +883,6 @@ static int qeth_l2_probe_device(struct ccwgroup_device *gdev)
 	INIT_LIST_HEAD(&card->mc_list);
 	card->options.layer2 = 1;
 	card->info.hwtrap = 0;
-	card->discipline.start_poll = qeth_qdio_start_poll;
-	card->discipline.input_handler = (qdio_handler_t *)
-		qeth_qdio_input_handler;
-	card->discipline.output_handler = (qdio_handler_t *)
-		qeth_qdio_output_handler;
-	card->discipline.recover = qeth_l2_recover;
 	return 0;
 }
 
@@ -925,7 +925,7 @@ static const struct net_device_ops qeth_l2_netdev_ops = {
 	.ndo_get_stats		= qeth_get_stats,
 	.ndo_start_xmit		= qeth_l2_hard_start_xmit,
 	.ndo_validate_addr	= eth_validate_addr,
-	.ndo_set_multicast_list = qeth_l2_set_multicast_list,
+	.ndo_set_rx_mode	= qeth_l2_set_multicast_list,
 	.ndo_do_ioctl	   	= qeth_l2_do_ioctl,
 	.ndo_set_mac_address    = qeth_l2_set_mac_address,
 	.ndo_change_mtu	   	= qeth_change_mtu,
@@ -973,7 +973,6 @@ static int __qeth_l2_set_online(struct ccwgroup_device *gdev, int recovery_mode)
 	int rc = 0;
 	enum qeth_card_states recover_flag;
 
-	BUG_ON(!card);
 	mutex_lock(&card->discipline_mutex);
 	mutex_lock(&card->conf_mutex);
 	QETH_DBF_TEXT(SETUP, 2, "setonlin");
@@ -986,6 +985,7 @@ static int __qeth_l2_set_online(struct ccwgroup_device *gdev, int recovery_mode)
 		rc = -ENODEV;
 		goto out_remove;
 	}
+	qeth_trace_features(card);
 
 	if (!card->dev && qeth_l2_setup_netdev(card)) {
 		rc = -ENODEV;
@@ -1144,11 +1144,12 @@ static int qeth_l2_recover(void *ptr)
 		dev_info(&card->gdev->dev,
 			"Device successfully recovered!\n");
 	else {
-		rtnl_lock();
-		dev_close(card->dev);
-		rtnl_unlock();
-		dev_warn(&card->gdev->dev, "The qeth device driver "
-			"failed to recover an error on the device\n");
+		if (rtnl_trylock()) {
+			dev_close(card->dev);
+			rtnl_unlock();
+			dev_warn(&card->gdev->dev, "The qeth device driver "
+				"failed to recover an error on the device\n");
+		}
 	}
 	qeth_clear_thread_start_bit(card, QETH_RECOVER_THREAD);
 	qeth_clear_thread_running_bit(card, QETH_RECOVER_THREAD);
@@ -1169,6 +1170,7 @@ static void __exit qeth_l2_exit(void)
 static void qeth_l2_shutdown(struct ccwgroup_device *gdev)
 {
 	struct qeth_card *card = dev_get_drvdata(&gdev->dev);
+	qeth_set_allowed_threads(card, 0, 1);
 	if ((gdev->state == CCWGROUP_ONLINE) && card->info.hwtrap)
 		qeth_hw_trap(card, QETH_DIAGS_TRAP_DISARM);
 	qeth_qdio_clear_card(card, 0);
@@ -1221,8 +1223,12 @@ out:
 	return rc;
 }
 
-struct ccwgroup_driver qeth_l2_ccwgroup_driver = {
-	.probe = qeth_l2_probe_device,
+struct qeth_discipline qeth_l2_discipline = {
+	.start_poll = qeth_qdio_start_poll,
+	.input_handler = (qdio_handler_t *) qeth_qdio_input_handler,
+	.output_handler = (qdio_handler_t *) qeth_qdio_output_handler,
+	.recover = qeth_l2_recover,
+	.setup = qeth_l2_probe_device,
 	.remove = qeth_l2_remove_device,
 	.set_online = qeth_l2_set_online,
 	.set_offline = qeth_l2_set_offline,
@@ -1231,7 +1237,7 @@ struct ccwgroup_driver qeth_l2_ccwgroup_driver = {
 	.thaw = qeth_l2_pm_resume,
 	.restore = qeth_l2_pm_resume,
 };
-EXPORT_SYMBOL_GPL(qeth_l2_ccwgroup_driver);
+EXPORT_SYMBOL_GPL(qeth_l2_discipline);
 
 static int qeth_osn_send_control_data(struct qeth_card *card, int len,
 			   struct qeth_cmd_buffer *iob)

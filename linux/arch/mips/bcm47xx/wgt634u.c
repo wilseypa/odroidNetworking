@@ -11,6 +11,7 @@
 #include <linux/leds.h>
 #include <linux/mtd/physmap.h>
 #include <linux/ssb/ssb.h>
+#include <linux/ssb/ssb_embedded.h>
 #include <linux/interrupt.h>
 #include <linux/reboot.h>
 #include <linux/gpio.h>
@@ -108,7 +109,7 @@ static irqreturn_t gpio_interrupt(int irq, void *ignored)
 
 	/* Interrupts are shared, check if the current one is
 	   a GPIO interrupt. */
-	if (!ssb_chipco_irq_status(&ssb_bcm47xx.chipco,
+	if (!ssb_chipco_irq_status(&bcm47xx_bus.ssb.chipco,
 				   SSB_CHIPCO_IRQ_GPIO))
 		return IRQ_NONE;
 
@@ -116,7 +117,8 @@ static irqreturn_t gpio_interrupt(int irq, void *ignored)
 
 	/* Interrupt are level triggered, revert the interrupt polarity
 	   to clear the interrupt. */
-	gpio_polarity(WGT634U_GPIO_RESET, state);
+	ssb_gpio_polarity(&bcm47xx_bus.ssb, 1 << WGT634U_GPIO_RESET,
+			  state ? 1 << WGT634U_GPIO_RESET : 0);
 
 	if (!state) {
 		printk(KERN_INFO "Reset button pressed");
@@ -132,30 +134,36 @@ static int __init wgt634u_init(void)
 	 * machine. Use the MAC address as an heuristic. Netgear Inc. has
 	 * been allocated ranges 00:09:5b:xx:xx:xx and 00:0f:b5:xx:xx:xx.
 	 */
+	u8 *et0mac;
 
-	u8 *et0mac = ssb_bcm47xx.sprom.et0mac;
+	if (bcm47xx_bus_type != BCM47XX_BUS_TYPE_SSB)
+		return -ENODEV;
+
+	et0mac = bcm47xx_bus.ssb.sprom.et0mac;
 
 	if (et0mac[0] == 0x00 &&
 	    ((et0mac[1] == 0x09 && et0mac[2] == 0x5b) ||
 	     (et0mac[1] == 0x0f && et0mac[2] == 0xb5))) {
-		struct ssb_mipscore *mcore = &ssb_bcm47xx.mipscore;
+		struct ssb_mipscore *mcore = &bcm47xx_bus.ssb.mipscore;
 
 		printk(KERN_INFO "WGT634U machine detected.\n");
 
 		if (!request_irq(gpio_to_irq(WGT634U_GPIO_RESET),
 				 gpio_interrupt, IRQF_SHARED,
-				 "WGT634U GPIO", &ssb_bcm47xx.chipco)) {
+				 "WGT634U GPIO", &bcm47xx_bus.ssb.chipco)) {
 			gpio_direction_input(WGT634U_GPIO_RESET);
-			gpio_intmask(WGT634U_GPIO_RESET, 1);
-			ssb_chipco_irq_mask(&ssb_bcm47xx.chipco,
+			ssb_gpio_intmask(&bcm47xx_bus.ssb,
+					 1 << WGT634U_GPIO_RESET,
+					 1 << WGT634U_GPIO_RESET);
+			ssb_chipco_irq_mask(&bcm47xx_bus.ssb.chipco,
 					    SSB_CHIPCO_IRQ_GPIO,
 					    SSB_CHIPCO_IRQ_GPIO);
 		}
 
-		wgt634u_flash_data.width = mcore->flash_buswidth;
-		wgt634u_flash_resource.start = mcore->flash_window;
-		wgt634u_flash_resource.end = mcore->flash_window
-					   + mcore->flash_window_size
+		wgt634u_flash_data.width = mcore->pflash.buswidth;
+		wgt634u_flash_resource.start = mcore->pflash.window;
+		wgt634u_flash_resource.end = mcore->pflash.window
+					   + mcore->pflash.window_size
 					   - 1;
 		return platform_add_devices(wgt634u_devices,
 					    ARRAY_SIZE(wgt634u_devices));

@@ -21,10 +21,12 @@
 /*
  * flags format
  *
- * 0x000000BA
+ * 0x00000CBA
  *
  * A:  inversion
  * B:  format mode
+ * C:  chip specific
+ * D:  clock selecter if master mode
  */
 
 /* A: clock inversion */
@@ -39,6 +41,14 @@
 #define SH_FSI_FMT_DAI		(0 << 4)
 #define SH_FSI_FMT_SPDIF	(1 << 4)
 
+/* C: chip specific */
+#define SH_FSI_OPTION_MASK	0x00000F00
+#define SH_FSI_ENABLE_STREAM_MODE	(1 << 8) /* for 16bit data */
+
+/* D:  clock selecter if master mode */
+#define SH_FSI_CLK_MASK		0x0000F000
+#define SH_FSI_CLK_EXTERNAL	(0 << 12)
+#define SH_FSI_CLK_CPG		(1 << 12) /* FSIxCK + FSI-DIV */
 
 /*
  * set_rate return value
@@ -72,10 +82,16 @@
 #define SH_FSI_BPFMD_32		(5 << 4)
 #define SH_FSI_BPFMD_16		(6 << 4)
 
+struct sh_fsi_port_info {
+	unsigned long flags;
+	int tx_id;
+	int rx_id;
+	int (*set_rate)(struct device *dev, int rate, int enable);
+};
+
 struct sh_fsi_platform_info {
-	unsigned long porta_flags;
-	unsigned long portb_flags;
-	int (*set_rate)(struct device *dev, int is_porta, int rate, int enable);
+	struct sh_fsi_port_info port_a;
+	struct sh_fsi_port_info port_b;
 };
 
 #endif /* __SOUND_FSI_H */

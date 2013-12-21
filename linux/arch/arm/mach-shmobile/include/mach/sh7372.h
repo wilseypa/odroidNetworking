@@ -12,6 +12,8 @@
 #define __ASM_SH7372_H__
 
 #include <linux/sh_clk.h>
+#include <linux/pm_domain.h>
+#include <mach/pm-rmobile.h>
 
 /*
  * Pin Function Controller:
@@ -450,14 +452,24 @@ enum {
 	SHDMA_SLAVE_SCIF5_RX,
 	SHDMA_SLAVE_SCIF6_TX,
 	SHDMA_SLAVE_SCIF6_RX,
+	SHDMA_SLAVE_FLCTL0_TX,
+	SHDMA_SLAVE_FLCTL0_RX,
+	SHDMA_SLAVE_FLCTL1_TX,
+	SHDMA_SLAVE_FLCTL1_RX,
 	SHDMA_SLAVE_SDHI0_RX,
 	SHDMA_SLAVE_SDHI0_TX,
 	SHDMA_SLAVE_SDHI1_RX,
 	SHDMA_SLAVE_SDHI1_TX,
 	SHDMA_SLAVE_SDHI2_RX,
 	SHDMA_SLAVE_SDHI2_TX,
+	SHDMA_SLAVE_FSIA_RX,
+	SHDMA_SLAVE_FSIA_TX,
 	SHDMA_SLAVE_MMCIF_RX,
 	SHDMA_SLAVE_MMCIF_TX,
+	SHDMA_SLAVE_USB0_TX,
+	SHDMA_SLAVE_USB0_RX,
+	SHDMA_SLAVE_USB1_TX,
+	SHDMA_SLAVE_USB1_RX,
 };
 
 extern struct clk sh7372_extal1_clk;
@@ -465,9 +477,18 @@ extern struct clk sh7372_extal2_clk;
 extern struct clk sh7372_dv_clki_clk;
 extern struct clk sh7372_dv_clki_div2_clk;
 extern struct clk sh7372_pllc2_clk;
-extern struct clk sh7372_fsiack_clk;
-extern struct clk sh7372_fsibck_clk;
-extern struct clk sh7372_fsidiva_clk;
-extern struct clk sh7372_fsidivb_clk;
+
+extern void sh7372_intcs_suspend(void);
+extern void sh7372_intcs_resume(void);
+extern void sh7372_intca_suspend(void);
+extern void sh7372_intca_resume(void);
+
+#ifdef CONFIG_PM
+extern void __init sh7372_init_pm_domains(void);
+#else
+static inline void sh7372_init_pm_domains(void) {}
+#endif
+
+extern void __init sh7372_pm_init_late(void);
 
 #endif /* __ASM_SH7372_H__ */

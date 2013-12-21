@@ -21,6 +21,7 @@
  */
 
 #include <linux/types.h>
+#include <linux/gpio.h>
 #include <linux/init.h>
 #include <linux/mm.h>
 #include <linux/module.h>
@@ -43,10 +44,10 @@
 #include <asm/mach/irq.h>
 
 #include <mach/hardware.h>
-#include <mach/board.h>
-#include <mach/gpio.h>
 #include <mach/at91sam9_smc.h>
 
+#include "at91_aic.h"
+#include "board.h"
 #include "sam9_smc.h"
 #include "generic.h"
 
@@ -54,23 +55,8 @@
 static void __init neocore926_init_early(void)
 {
 	/* Initialize processor: 20 MHz crystal */
-	at91sam9263_initialize(20000000);
-
-	/* DBGU on ttyS0. (Rx & Tx only) */
-	at91_register_uart(0, 0, 0);
-
-	/* USART0 on ttyS1. (Rx, Tx, RTS, CTS) */
-	at91_register_uart(AT91SAM9263_ID_US0, 1, ATMEL_UART_CTS | ATMEL_UART_RTS);
-
-	/* set serial console to ttyS0 (ie, DBGU) */
-	at91_set_serial_console(0);
+	at91_initialize(20000000);
 }
-
-static void __init neocore926_init_irq(void)
-{
-	at91sam9263_init_interrupts(NULL);
-}
-
 
 /*
  * USB Host port
@@ -78,6 +64,7 @@ static void __init neocore926_init_irq(void)
 static struct at91_usbh_data __initdata neocore926_usbh_data = {
 	.ports		= 2,
 	.vbus_pin	= { AT91_PIN_PA24, AT91_PIN_PA21 },
+	.overcurrent_pin= {-EINVAL, -EINVAL},
 };
 
 /*
@@ -85,7 +72,7 @@ static struct at91_usbh_data __initdata neocore926_usbh_data = {
  */
 static struct at91_udc_data __initdata neocore926_udc_data = {
 	.vbus_pin	= AT91_PIN_PA25,
-	.pullup_pin	= 0,		/* pull-up driven by UDC */
+	.pullup_pin	= -EINVAL,		/* pull-up driven by UDC */
 };
 
 
@@ -142,7 +129,7 @@ static struct spi_board_info neocore926_spi_devices[] = {
 		.max_speed_hz	= 125000 * 16,
 		.bus_num	= 0,
 		.platform_data	= &ads_info,
-		.irq		= AT91SAM9263_ID_IRQ1,
+		.irq		= NR_IRQS_LEGACY + AT91SAM9263_ID_IRQ1,
 	},
 #endif
 };
@@ -151,17 +138,19 @@ static struct spi_board_info neocore926_spi_devices[] = {
 /*
  * MCI (SD/MMC)
  */
-static struct at91_mmc_data __initdata neocore926_mmc_data = {
-	.wire4		= 1,
-	.det_pin	= AT91_PIN_PE18,
-	.wp_pin		= AT91_PIN_PE19,
+static struct mci_platform_data __initdata neocore926_mci0_data = {
+	.slot[0] = {
+		.bus_width	= 4,
+		.detect_pin	= AT91_PIN_PE18,
+		.wp_pin		= AT91_PIN_PE19,
+	},
 };
 
 
 /*
  * MACB Ethernet device
  */
-static struct at91_eth_data __initdata neocore926_macb_data = {
+static struct macb_platform_data __initdata neocore926_macb_data = {
 	.phy_irq_pin	= AT91_PIN_PE31,
 	.is_rmii	= 1,
 };
@@ -188,19 +177,16 @@ static struct mtd_partition __initdata neocore926_nand_partition[] = {
 	},
 };
 
-static struct mtd_partition * __init nand_partitions(int size, int *num_partitions)
-{
-	*num_partitions = ARRAY_SIZE(neocore926_nand_partition);
-	return neocore926_nand_partition;
-}
-
 static struct atmel_nand_data __initdata neocore926_nand_data = {
 	.ale			= 21,
 	.cle			= 22,
 	.rdy_pin		= AT91_PIN_PB19,
 	.rdy_pin_active_low	= 1,
 	.enable_pin		= AT91_PIN_PD15,
-	.partition_info		= nand_partitions,
+	.ecc_mode		= NAND_ECC_SOFT,
+	.parts			= neocore926_nand_partition,
+	.num_parts		= ARRAY_SIZE(neocore926_nand_partition),
+	.det_pin		= -EINVAL,
 };
 
 static struct sam9_smc_config __initdata neocore926_nand_smc_config = {
@@ -224,7 +210,7 @@ static struct sam9_smc_config __initdata neocore926_nand_smc_config = {
 static void __init neocore926_add_device_nand(void)
 {
 	/* configure chip-select 3 (NAND) */
-	sam9_smc_configure(3, &neocore926_nand_smc_config);
+	sam9_smc_configure(0, 3, &neocore926_nand_smc_config);
 
 	at91_add_device_nand(&neocore926_nand_data);
 }
@@ -348,6 +334,11 @@ static struct ac97c_platform_data neocore926_ac97_data = {
 static void __init neocore926_board_init(void)
 {
 	/* Serial */
+	/* DBGU on ttyS0. (Rx & Tx only) */
+	at91_register_uart(0, 0, 0);
+
+	/* USART0 on ttyS1. (Rx, Tx, RTS, CTS) */
+	at91_register_uart(AT91SAM9263_ID_US0, 1, ATMEL_UART_CTS | ATMEL_UART_RTS);
 	at91_add_device_serial();
 
 	/* USB Host */
@@ -364,7 +355,7 @@ static void __init neocore926_board_init(void)
 	neocore926_add_device_ts();
 
 	/* MMC */
-	at91_add_device_mmc(1, &neocore926_mmc_data);
+	at91_add_device_mci(0, &neocore926_mci0_data);
 
 	/* Ethernet */
 	at91_add_device_eth(&neocore926_macb_data);
@@ -388,8 +379,9 @@ static void __init neocore926_board_init(void)
 MACHINE_START(NEOCORE926, "ADENEO NEOCORE 926")
 	/* Maintainer: ADENEO */
 	.timer		= &at91sam926x_timer,
-	.map_io		= at91sam9263_map_io,
+	.map_io		= at91_map_io,
+	.handle_irq	= at91_aic_handle_irq,
 	.init_early	= neocore926_init_early,
-	.init_irq	= neocore926_init_irq,
+	.init_irq	= at91_init_irq_default,
 	.init_machine	= neocore926_board_init,
 MACHINE_END

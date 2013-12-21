@@ -44,6 +44,12 @@ static struct omap_video_timings sharp_ls_timings = {
 	.vsw		= 1,
 	.vfp		= 1,
 	.vbp		= 1,
+
+	.vsync_level	= OMAPDSS_SIG_ACTIVE_LOW,
+	.hsync_level	= OMAPDSS_SIG_ACTIVE_LOW,
+	.data_pclk_edge	= OMAPDSS_DRIVE_SIG_RISING_EDGE,
+	.de_level	= OMAPDSS_SIG_ACTIVE_HIGH,
+	.sync_pclk_edge	= OMAPDSS_DRIVE_SIG_OPPOSITE_EDGES,
 };
 
 static int sharp_ls_bl_update_status(struct backlight_device *bl)
@@ -86,9 +92,6 @@ static int sharp_ls_panel_probe(struct omap_dss_device *dssdev)
 	struct sharp_data *sd;
 	int r;
 
-	dssdev->panel.config = OMAP_DSS_LCD_TFT | OMAP_DSS_LCD_IVS |
-		OMAP_DSS_LCD_IHS;
-	dssdev->panel.acb = 0x28;
 	dssdev->panel.timings = sharp_ls_timings;
 
 	sd = kzalloc(sizeof(*sd), GFP_KERNEL);
@@ -139,6 +142,9 @@ static int sharp_ls_power_on(struct omap_dss_device *dssdev)
 	if (dssdev->state == OMAP_DSS_DISPLAY_ACTIVE)
 		return 0;
 
+	omapdss_dpi_set_timings(dssdev, &dssdev->panel.timings);
+	omapdss_dpi_set_data_lines(dssdev, dssdev->phy.dpi.data_lines);
+
 	r = omapdss_dpi_display_enable(dssdev);
 	if (r)
 		goto err0;
@@ -188,29 +194,12 @@ static void sharp_ls_panel_disable(struct omap_dss_device *dssdev)
 	dssdev->state = OMAP_DSS_DISPLAY_DISABLED;
 }
 
-static int sharp_ls_panel_suspend(struct omap_dss_device *dssdev)
-{
-	sharp_ls_power_off(dssdev);
-	dssdev->state = OMAP_DSS_DISPLAY_SUSPENDED;
-	return 0;
-}
-
-static int sharp_ls_panel_resume(struct omap_dss_device *dssdev)
-{
-	int r;
-	r = sharp_ls_power_on(dssdev);
-	dssdev->state = OMAP_DSS_DISPLAY_ACTIVE;
-	return r;
-}
-
 static struct omap_dss_driver sharp_ls_driver = {
 	.probe		= sharp_ls_panel_probe,
 	.remove		= __exit_p(sharp_ls_panel_remove),
 
 	.enable		= sharp_ls_panel_enable,
 	.disable	= sharp_ls_panel_disable,
-	.suspend	= sharp_ls_panel_suspend,
-	.resume		= sharp_ls_panel_resume,
 
 	.driver         = {
 		.name   = "sharp_ls_panel",

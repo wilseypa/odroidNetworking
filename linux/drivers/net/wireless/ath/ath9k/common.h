@@ -23,17 +23,9 @@
 
 /* Common header for Atheros 802.11n base driver cores */
 
-#define WME_NUM_TID             16
 #define WME_BA_BMP_SIZE         64
 #define WME_MAX_BA              WME_BA_BMP_SIZE
 #define ATH_TID_MAX_BUFS        (2 * WME_MAX_BA)
-
-/* These must match mac80211 skb queue mapping numbers */
-#define WME_AC_VO   0
-#define WME_AC_VI   1
-#define WME_AC_BE   2
-#define WME_AC_BK   3
-#define WME_NUM_AC  4
 
 #define ATH_RSSI_DUMMY_MARKER   127
 #define ATH_RSSI_LPF_LEN 		10
@@ -62,3 +54,4 @@ void ath9k_cmn_btcoex_bt_stomp(struct ath_common *common,
 				  enum ath_stomp_type stomp_type);
 void ath9k_cmn_update_txpow(struct ath_hw *ah, u16 cur_txpow,
 			    u16 new_txpow, u16 *txpower);
+void ath9k_cmn_init_crypto(struct ath_hw *ah);

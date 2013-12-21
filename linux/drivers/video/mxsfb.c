@@ -39,12 +39,16 @@
  * the required value in the imx_fb_videomode structure.
  */
 
+#include <linux/module.h>
 #include <linux/kernel.h>
+#include <linux/of_device.h>
+#include <linux/of_gpio.h>
 #include <linux/platform_device.h>
 #include <linux/clk.h>
 #include <linux/dma-mapping.h>
 #include <linux/io.h>
-#include <mach/mxsfb.h>
+#include <linux/pinctrl/consumer.h>
+#include <linux/mxsfb.h>
 
 #define REG_SET	4
 #define REG_CLR	8
@@ -327,7 +331,7 @@ static void mxsfb_enable_controller(struct fb_info *fb_info)
 
 	dev_dbg(&host->pdev->dev, "%s\n", __func__);
 
-	clk_enable(host->clk);
+	clk_prepare_enable(host->clk);
 	clk_set_rate(host->clk, PICOS2KHZ(fb_info->var.pixclock) * 1000U);
 
 	/* if it was disabled, re-enable the mode again */
@@ -368,7 +372,7 @@ static void mxsfb_disable_controller(struct fb_info *fb_info)
 	reg = readl(host->base + LCDC_VDCTRL4);
 	writel(reg & ~VDCTRL4_SYNC_SIGNALS_ON, host->base + LCDC_VDCTRL4);
 
-	clk_disable(host->clk);
+	clk_disable_unprepare(host->clk);
 
 	host->enabled = 0;
 }
@@ -583,7 +587,7 @@ static struct fb_ops mxsfb_ops = {
 	.fb_imageblit = cfb_imageblit,
 };
 
-static int __devinit mxsfb_restore_mode(struct mxsfb_info *host)
+static int mxsfb_restore_mode(struct mxsfb_info *host)
 {
 	struct fb_info *fb_info = &host->fb_info;
 	unsigned line_count;
@@ -668,13 +672,13 @@ static int __devinit mxsfb_restore_mode(struct mxsfb_info *host)
 	line_count = fb_info->fix.smem_len / fb_info->fix.line_length;
 	fb_info->fix.ypanstep = 1;
 
-	clk_enable(host->clk);
+	clk_prepare_enable(host->clk);
 	host->enabled = 1;
 
 	return 0;
 }
 
-static int __devinit mxsfb_init_fbinfo(struct mxsfb_info *host)
+static int mxsfb_init_fbinfo(struct mxsfb_info *host)
 {
 	struct fb_info *fb_info = &host->fb_info;
 	struct fb_var_screeninfo *var = &fb_info->var;
@@ -736,7 +740,7 @@ static int __devinit mxsfb_init_fbinfo(struct mxsfb_info *host)
 	return 0;
 }
 
-static void __devexit mxsfb_free_videomem(struct mxsfb_info *host)
+static void mxsfb_free_videomem(struct mxsfb_info *host)
 {
 	struct fb_info *fb_info = &host->fb_info;
 
@@ -749,14 +753,42 @@ static void __devexit mxsfb_free_videomem(struct mxsfb_info *host)
 	}
 }
 
-static int __devinit mxsfb_probe(struct platform_device *pdev)
+static struct platform_device_id mxsfb_devtype[] = {
+	{
+		.name = "imx23-fb",
+		.driver_data = MXSFB_V3,
+	}, {
+		.name = "imx28-fb",
+		.driver_data = MXSFB_V4,
+	}, {
+		/* sentinel */
+	}
+};
+MODULE_DEVICE_TABLE(platform, mxsfb_devtype);
+
+static const struct of_device_id mxsfb_dt_ids[] = {
+	{ .compatible = "fsl,imx23-lcdif", .data = &mxsfb_devtype[0], },
+	{ .compatible = "fsl,imx28-lcdif", .data = &mxsfb_devtype[1], },
+	{ /* sentinel */ }
+};
+MODULE_DEVICE_TABLE(of, mxsfb_dt_ids);
+
+static int mxsfb_probe(struct platform_device *pdev)
 {
+	const struct of_device_id *of_id =
+			of_match_device(mxsfb_dt_ids, &pdev->dev);
 	struct mxsfb_platform_data *pdata = pdev->dev.platform_data;
 	struct resource *res;
 	struct mxsfb_info *host;
 	struct fb_info *fb_info;
 	struct fb_modelist *modelist;
+	struct pinctrl *pinctrl;
+	int panel_enable;
+	enum of_gpio_flags flags;
 	int i, ret;
+
+	if (of_id)
+		pdev->id_entry = of_id->data;
 
 	if (!pdata) {
 		dev_err(&pdev->dev, "No platformdata. Giving up\n");
@@ -793,10 +825,32 @@ static int __devinit mxsfb_probe(struct platform_device *pdev)
 
 	host->devdata = &mxsfb_devdata[pdev->id_entry->driver_data];
 
+	pinctrl = devm_pinctrl_get_select_default(&pdev->dev);
+	if (IS_ERR(pinctrl)) {
+		ret = PTR_ERR(pinctrl);
+		goto error_getpin;
+	}
+
 	host->clk = clk_get(&host->pdev->dev, NULL);
 	if (IS_ERR(host->clk)) {
 		ret = PTR_ERR(host->clk);
 		goto error_getclock;
+	}
+
+	panel_enable = of_get_named_gpio_flags(pdev->dev.of_node,
+					       "panel-enable-gpios", 0, &flags);
+	if (gpio_is_valid(panel_enable)) {
+		unsigned long f = GPIOF_OUT_INIT_HIGH;
+		if (flags == OF_GPIO_ACTIVE_LOW)
+			f = GPIOF_OUT_INIT_LOW;
+		ret = devm_gpio_request_one(&pdev->dev, panel_enable,
+					    f, "panel-enable");
+		if (ret) {
+			dev_err(&pdev->dev,
+				"failed to request gpio %d: %d\n",
+				panel_enable, ret);
+			goto error_panel_enable;
+		}
 	}
 
 	fb_info->pseudo_palette = kmalloc(sizeof(u32) * 16, GFP_KERNEL);
@@ -841,13 +895,15 @@ static int __devinit mxsfb_probe(struct platform_device *pdev)
 
 error_register:
 	if (host->enabled)
-		clk_disable(host->clk);
+		clk_disable_unprepare(host->clk);
 	fb_destroy_modelist(&fb_info->modelist);
 error_init_fb:
 	kfree(fb_info->pseudo_palette);
 error_pseudo_pallette:
+error_panel_enable:
 	clk_put(host->clk);
 error_getclock:
+error_getpin:
 	iounmap(host->base);
 error_ioremap:
 	framebuffer_release(fb_info);
@@ -857,7 +913,7 @@ error_alloc_info:
 	return ret;
 }
 
-static int __devexit mxsfb_remove(struct platform_device *pdev)
+static int mxsfb_remove(struct platform_device *pdev)
 {
 	struct fb_info *fb_info = platform_get_drvdata(pdev);
 	struct mxsfb_info *host = to_imxfb_host(fb_info);
@@ -880,40 +936,30 @@ static int __devexit mxsfb_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static struct platform_device_id mxsfb_devtype[] = {
-	{
-		.name = "imx23-fb",
-		.driver_data = MXSFB_V3,
-	}, {
-		.name = "imx28-fb",
-		.driver_data = MXSFB_V4,
-	}, {
-		/* sentinel */
-	}
-};
-MODULE_DEVICE_TABLE(platform, mxsfb_devtype);
+static void mxsfb_shutdown(struct platform_device *pdev)
+{
+	struct fb_info *fb_info = platform_get_drvdata(pdev);
+	struct mxsfb_info *host = to_imxfb_host(fb_info);
+
+	/*
+	 * Force stop the LCD controller as keeping it running during reboot
+	 * might interfere with the BootROM's boot mode pads sampling.
+	 */
+	writel(CTRL_RUN, host->base + LCDC_CTRL + REG_CLR);
+}
 
 static struct platform_driver mxsfb_driver = {
 	.probe = mxsfb_probe,
-	.remove = __devexit_p(mxsfb_remove),
+	.remove = mxsfb_remove,
+	.shutdown = mxsfb_shutdown,
 	.id_table = mxsfb_devtype,
 	.driver = {
 		   .name = DRIVER_NAME,
+		   .of_match_table = mxsfb_dt_ids,
 	},
 };
 
-static int __init mxsfb_init(void)
-{
-	return platform_driver_register(&mxsfb_driver);
-}
-
-static void __exit mxsfb_exit(void)
-{
-	platform_driver_unregister(&mxsfb_driver);
-}
-
-module_init(mxsfb_init);
-module_exit(mxsfb_exit);
+module_platform_driver(mxsfb_driver);
 
 MODULE_DESCRIPTION("Freescale mxs framebuffer driver");
 MODULE_AUTHOR("Sascha Hauer, Pengutronix");

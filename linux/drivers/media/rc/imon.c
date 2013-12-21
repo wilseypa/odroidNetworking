@@ -34,6 +34,7 @@
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
+#include <linux/ratelimit.h>
 
 #include <linux/input.h>
 #include <linux/usb.h>
@@ -46,7 +47,7 @@
 #define MOD_AUTHOR	"Jarod Wilson <jarod@wilsonet.com>"
 #define MOD_DESC	"Driver for SoundGraph iMON MultiMedia IR/Display"
 #define MOD_NAME	"imon"
-#define MOD_VERSION	"0.9.3"
+#define MOD_VERSION	"0.9.4"
 
 #define DISPLAY_MINOR_BASE	144
 #define DEVICE_NAME	"lcd%d"
@@ -516,19 +517,19 @@ static int send_packet(struct imon_context *ictx)
 	if (retval) {
 		ictx->tx.busy = false;
 		smp_rmb(); /* ensure later readers know we're not busy */
-		pr_err("error submitting urb(%d)\n", retval);
+		pr_err_ratelimited("error submitting urb(%d)\n", retval);
 	} else {
 		/* Wait for transmission to complete (or abort) */
 		mutex_unlock(&ictx->lock);
 		retval = wait_for_completion_interruptible(
 				&ictx->tx.finished);
 		if (retval)
-			pr_err("task interrupted\n");
+			pr_err_ratelimited("task interrupted\n");
 		mutex_lock(&ictx->lock);
 
 		retval = ictx->tx.status;
 		if (retval)
-			pr_err("packet tx failed (%d)\n", retval);
+			pr_err_ratelimited("packet tx failed (%d)\n", retval);
 	}
 
 	kfree(control_req);
@@ -830,20 +831,20 @@ static ssize_t vfd_write(struct file *file, const char *buf,
 
 	ictx = file->private_data;
 	if (!ictx) {
-		pr_err("no context for device\n");
+		pr_err_ratelimited("no context for device\n");
 		return -ENODEV;
 	}
 
 	mutex_lock(&ictx->lock);
 
 	if (!ictx->dev_present_intf0) {
-		pr_err("no iMON device present\n");
+		pr_err_ratelimited("no iMON device present\n");
 		retval = -ENODEV;
 		goto exit;
 	}
 
 	if (n_bytes <= 0 || n_bytes > 32) {
-		pr_err("invalid payload size\n");
+		pr_err_ratelimited("invalid payload size\n");
 		retval = -EINVAL;
 		goto exit;
 	}
@@ -869,7 +870,7 @@ static ssize_t vfd_write(struct file *file, const char *buf,
 
 		retval = send_packet(ictx);
 		if (retval) {
-			pr_err("send packet failed for packet #%d\n", seq / 2);
+			pr_err_ratelimited("send packet #%d failed\n", seq / 2);
 			goto exit;
 		} else {
 			seq += 2;
@@ -883,7 +884,7 @@ static ssize_t vfd_write(struct file *file, const char *buf,
 	ictx->usb_tx_buf[7] = (unsigned char) seq;
 	retval = send_packet(ictx);
 	if (retval)
-		pr_err("send packet failed for packet #%d\n", seq / 2);
+		pr_err_ratelimited("send packet #%d failed\n", seq / 2);
 
 exit:
 	mutex_unlock(&ictx->lock);
@@ -912,20 +913,21 @@ static ssize_t lcd_write(struct file *file, const char *buf,
 
 	ictx = file->private_data;
 	if (!ictx) {
-		pr_err("no context for device\n");
+		pr_err_ratelimited("no context for device\n");
 		return -ENODEV;
 	}
 
 	mutex_lock(&ictx->lock);
 
 	if (!ictx->display_supported) {
-		pr_err("no iMON display present\n");
+		pr_err_ratelimited("no iMON display present\n");
 		retval = -ENODEV;
 		goto exit;
 	}
 
 	if (n_bytes != 8) {
-		pr_err("invalid payload size: %d (expected 8)\n", (int)n_bytes);
+		pr_err_ratelimited("invalid payload size: %d (expected 8)\n",
+				   (int)n_bytes);
 		retval = -EINVAL;
 		goto exit;
 	}
@@ -937,7 +939,7 @@ static ssize_t lcd_write(struct file *file, const char *buf,
 
 	retval = send_packet(ictx);
 	if (retval) {
-		pr_err("send packet failed!\n");
+		pr_err_ratelimited("send packet failed!\n");
 		goto exit;
 	} else {
 		dev_dbg(ictx->dev, "%s: write %d bytes to LCD\n",
@@ -999,7 +1001,7 @@ static void imon_touch_display_timeout(unsigned long data)
  * it is not, so we must acquire it prior to calling send_packet, which
  * requires that the lock is held.
  */
-static int imon_ir_change_protocol(struct rc_dev *rc, u64 rc_type)
+static int imon_ir_change_protocol(struct rc_dev *rc, u64 *rc_type)
 {
 	int retval;
 	struct imon_context *ictx = rc->priv;
@@ -1008,31 +1010,27 @@ static int imon_ir_change_protocol(struct rc_dev *rc, u64 rc_type)
 	unsigned char ir_proto_packet[] = {
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x86 };
 
-	if (rc_type && !(rc_type & rc->allowed_protos))
+	if (*rc_type && !(*rc_type & rc->allowed_protos))
 		dev_warn(dev, "Looks like you're trying to use an IR protocol "
 			 "this device does not support\n");
 
-	switch (rc_type) {
-	case RC_TYPE_RC6:
+	if (*rc_type & RC_BIT_RC6_MCE) {
 		dev_dbg(dev, "Configuring IR receiver for MCE protocol\n");
 		ir_proto_packet[0] = 0x01;
-		break;
-	case RC_TYPE_UNKNOWN:
-	case RC_TYPE_OTHER:
+		*rc_type = RC_BIT_RC6_MCE;
+	} else if (*rc_type & RC_BIT_OTHER) {
 		dev_dbg(dev, "Configuring IR receiver for iMON protocol\n");
 		if (!pad_stabilize)
 			dev_dbg(dev, "PAD stabilize functionality disabled\n");
 		/* ir_proto_packet[0] = 0x00; // already the default */
-		rc_type = RC_TYPE_OTHER;
-		break;
-	default:
+		*rc_type = RC_BIT_OTHER;
+	} else {
 		dev_warn(dev, "Unsupported IR protocol specified, overriding "
 			 "to iMON IR protocol\n");
 		if (!pad_stabilize)
 			dev_dbg(dev, "PAD stabilize functionality disabled\n");
 		/* ir_proto_packet[0] = 0x00; // already the default */
-		rc_type = RC_TYPE_OTHER;
-		break;
+		*rc_type = RC_BIT_OTHER;
 	}
 
 	memcpy(ictx->usb_tx_buf, &ir_proto_packet, sizeof(ir_proto_packet));
@@ -1046,7 +1044,7 @@ static int imon_ir_change_protocol(struct rc_dev *rc, u64 rc_type)
 	if (retval)
 		goto out;
 
-	ictx->rc_type = rc_type;
+	ictx->rc_type = *rc_type;
 	ictx->pad_mouse = false;
 
 out:
@@ -1321,7 +1319,7 @@ static void imon_pad_to_keys(struct imon_context *ictx, unsigned char *buf)
 		rel_x = buf[2];
 		rel_y = buf[3];
 
-		if (ictx->rc_type == RC_TYPE_OTHER && pad_stabilize) {
+		if (ictx->rc_type == RC_BIT_OTHER && pad_stabilize) {
 			if ((buf[1] == 0) && ((rel_x != 0) || (rel_y != 0))) {
 				dir = stabilize((int)rel_x, (int)rel_y,
 						timeout, threshold);
@@ -1388,7 +1386,7 @@ static void imon_pad_to_keys(struct imon_context *ictx, unsigned char *buf)
 		buf[0] = 0x01;
 		buf[1] = buf[4] = buf[5] = buf[6] = buf[7] = 0;
 
-		if (ictx->rc_type == RC_TYPE_OTHER && pad_stabilize) {
+		if (ictx->rc_type == RC_BIT_OTHER && pad_stabilize) {
 			dir = stabilize((int)rel_x, (int)rel_y,
 					timeout, threshold);
 			if (!dir) {
@@ -1509,7 +1507,7 @@ static void imon_incoming_packet(struct imon_context *ictx,
 		kc = imon_panel_key_lookup(scancode);
 	} else {
 		scancode = be32_to_cpu(*((u32 *)buf));
-		if (ictx->rc_type == RC_TYPE_RC6) {
+		if (ictx->rc_type == RC_BIT_RC6_MCE) {
 			ktype = IMON_KEY_IMON;
 			if (buf[0] == 0x80)
 				ktype = IMON_KEY_MCE;
@@ -1659,6 +1657,14 @@ static void usb_rx_callback_intf0(struct urb *urb)
 	if (!ictx)
 		return;
 
+	/*
+	 * if we get a callback before we're done configuring the hardware, we
+	 * can't yet process the data, as there's nowhere to send it, but we
+	 * still need to submit a new rx URB to avoid wedging the hardware
+	 */
+	if (!ictx->dev_present_intf0)
+		goto out;
+
 	switch (urb->status) {
 	case -ENOENT:		/* usbcore unlink successful! */
 		return;
@@ -1676,6 +1682,7 @@ static void usb_rx_callback_intf0(struct urb *urb)
 		break;
 	}
 
+out:
 	usb_submit_urb(ictx->rx_urb_intf0, GFP_ATOMIC);
 }
 
@@ -1691,6 +1698,14 @@ static void usb_rx_callback_intf1(struct urb *urb)
 	if (!ictx)
 		return;
 
+	/*
+	 * if we get a callback before we're done configuring the hardware, we
+	 * can't yet process the data, as there's nowhere to send it, but we
+	 * still need to submit a new rx URB to avoid wedging the hardware
+	 */
+	if (!ictx->dev_present_intf1)
+		goto out;
+
 	switch (urb->status) {
 	case -ENOENT:		/* usbcore unlink successful! */
 		return;
@@ -1708,6 +1723,7 @@ static void usb_rx_callback_intf1(struct urb *urb)
 		break;
 	}
 
+out:
 	usb_submit_urb(ictx->rx_urb_intf1, GFP_ATOMIC);
 }
 
@@ -1724,7 +1740,7 @@ static void imon_get_ffdc_type(struct imon_context *ictx)
 {
 	u8 ffdc_cfg_byte = ictx->usb_rx_buf[6];
 	u8 detected_display_type = IMON_DISPLAY_TYPE_NONE;
-	u64 allowed_protos = RC_TYPE_OTHER;
+	u64 allowed_protos = RC_BIT_OTHER;
 
 	switch (ffdc_cfg_byte) {
 	/* iMON Knob, no display, iMON IR + vol knob */
@@ -1755,13 +1771,13 @@ static void imon_get_ffdc_type(struct imon_context *ictx)
 	case 0x9e:
 		dev_info(ictx->dev, "0xffdc iMON VFD, MCE IR");
 		detected_display_type = IMON_DISPLAY_TYPE_VFD;
-		allowed_protos = RC_TYPE_RC6;
+		allowed_protos = RC_BIT_RC6_MCE;
 		break;
 	/* iMON LCD, MCE IR */
 	case 0x9f:
 		dev_info(ictx->dev, "0xffdc iMON LCD, MCE IR");
 		detected_display_type = IMON_DISPLAY_TYPE_LCD;
-		allowed_protos = RC_TYPE_RC6;
+		allowed_protos = RC_BIT_RC6_MCE;
 		break;
 	default:
 		dev_info(ictx->dev, "Unknown 0xffdc device, "
@@ -1769,7 +1785,7 @@ static void imon_get_ffdc_type(struct imon_context *ictx)
 		detected_display_type = IMON_DISPLAY_TYPE_VFD;
 		/* We don't know which one it is, allow user to set the
 		 * RC6 one from userspace if OTHER wasn't correct. */
-		allowed_protos |= RC_TYPE_RC6;
+		allowed_protos |= RC_BIT_RC6_MCE;
 		break;
 	}
 
@@ -1855,7 +1871,7 @@ static struct rc_dev *imon_init_rdev(struct imon_context *ictx)
 
 	rdev->priv = ictx;
 	rdev->driver_type = RC_DRIVER_SCANCODE;
-	rdev->allowed_protos = RC_TYPE_OTHER | RC_TYPE_RC6; /* iMON PAD or MCE */
+	rdev->allowed_protos = RC_BIT_OTHER | RC_BIT_RC6_MCE; /* iMON PAD or MCE */
 	rdev->change_protocol = imon_ir_change_protocol;
 	rdev->driver_name = MOD_NAME;
 
@@ -1873,7 +1889,7 @@ static struct rc_dev *imon_init_rdev(struct imon_context *ictx)
 
 	imon_set_display_type(ictx);
 
-	if (ictx->rc_type == RC_TYPE_RC6)
+	if (ictx->rc_type == RC_BIT_RC6_MCE)
 		rdev->map_name = RC_MAP_IMON_MCE;
 	else
 		rdev->map_name = RC_MAP_IMON_PAD;
@@ -2116,7 +2132,6 @@ static struct imon_context *imon_init_intf0(struct usb_interface *intf)
 
 	ictx->dev = dev;
 	ictx->usbdev_intf0 = usb_get_dev(interface_to_usbdev(intf));
-	ictx->dev_present_intf0 = true;
 	ictx->rx_urb_intf0 = rx_urb;
 	ictx->tx_urb = tx_urb;
 	ictx->rf_device = false;
@@ -2154,6 +2169,8 @@ static struct imon_context *imon_init_intf0(struct usb_interface *intf)
 		dev_err(dev, "%s: rc device setup failed\n", __func__);
 		goto rdev_setup_failed;
 	}
+
+	ictx->dev_present_intf0 = true;
 
 	mutex_unlock(&ictx->lock);
 	return ictx;
@@ -2198,7 +2215,6 @@ static struct imon_context *imon_init_intf1(struct usb_interface *intf,
 	}
 
 	ictx->usbdev_intf1 = usb_get_dev(interface_to_usbdev(intf));
-	ictx->dev_present_intf1 = true;
 	ictx->rx_urb_intf1 = rx_urb;
 
 	ret = -ENODEV;
@@ -2227,6 +2243,8 @@ static struct imon_context *imon_init_intf1(struct usb_interface *intf,
 		goto urb_submit_failed;
 	}
 
+	ictx->dev_present_intf1 = true;
+
 	mutex_unlock(&ictx->lock);
 	return ictx;
 
@@ -2238,7 +2256,7 @@ find_endpoint_failed:
 	mutex_unlock(&ictx->lock);
 	usb_free_urb(rx_urb);
 rx_urb_alloc_failed:
-	dev_err(ictx->dev, "unable to initialize intf0, err %d\n", ret);
+	dev_err(ictx->dev, "unable to initialize intf1, err %d\n", ret);
 
 	return NULL;
 }
@@ -2270,8 +2288,8 @@ static void imon_init_display(struct imon_context *ictx,
 /**
  * Callback function for USB core API: Probe
  */
-static int __devinit imon_probe(struct usb_interface *interface,
-				const struct usb_device_id *id)
+static int imon_probe(struct usb_interface *interface,
+		      const struct usb_device_id *id)
 {
 	struct usb_device *usbdev = NULL;
 	struct usb_host_interface *iface_desc = NULL;
@@ -2354,7 +2372,7 @@ fail:
 /**
  * Callback function for USB core API: disconnect
  */
-static void __devexit imon_disconnect(struct usb_interface *interface)
+static void imon_disconnect(struct usb_interface *interface)
 {
 	struct imon_context *ictx;
 	struct device *dev;
@@ -2454,23 +2472,4 @@ static int imon_resume(struct usb_interface *intf)
 	return rc;
 }
 
-static int __init imon_init(void)
-{
-	int rc;
-
-	rc = usb_register(&imon_driver);
-	if (rc) {
-		pr_err("usb register failed(%d)\n", rc);
-		rc = -ENODEV;
-	}
-
-	return rc;
-}
-
-static void __exit imon_exit(void)
-{
-	usb_deregister(&imon_driver);
-}
-
-module_init(imon_init);
-module_exit(imon_exit);
+module_usb_driver(imon_driver);

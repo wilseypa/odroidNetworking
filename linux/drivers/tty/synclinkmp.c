@@ -58,7 +58,6 @@
 #include <linux/delay.h>
 #include <linux/ioctl.h>
 
-#include <asm/system.h>
 #include <asm/io.h>
 #include <asm/irq.h>
 #include <asm/dma.h>
@@ -456,7 +455,7 @@ static int synclinkmp_device_count = 0;
  * .text section address and breakpoint on module load.
  * This is useful for use with gdb and add-symbol-file command.
  */
-static int break_on_load = 0;
+static bool break_on_load = 0;
 
 /*
  * Driver major number, defaults to zero to get auto
@@ -493,7 +492,7 @@ static struct pci_driver synclinkmp_pci_driver = {
 	.name		= "synclinkmp",
 	.id_table	= synclinkmp_pci_tbl,
 	.probe		= synclinkmp_init_one,
-	.remove		= __devexit_p(synclinkmp_remove_one),
+	.remove		= synclinkmp_remove_one,
 };
 
 
@@ -712,33 +711,42 @@ static void ldisc_receive_buf(struct tty_struct *tty,
 
 /* tty callbacks */
 
-/* Called when a port is opened.  Init and enable port.
- */
-static int open(struct tty_struct *tty, struct file *filp)
+static int install(struct tty_driver *driver, struct tty_struct *tty)
 {
 	SLMP_INFO *info;
-	int retval, line;
-	unsigned long flags;
+	int line = tty->index;
 
-	line = tty->index;
-	if ((line < 0) || (line >= synclinkmp_device_count)) {
+	if (line >= synclinkmp_device_count) {
 		printk("%s(%d): open with invalid line #%d.\n",
 			__FILE__,__LINE__,line);
 		return -ENODEV;
 	}
 
 	info = synclinkmp_device_list;
-	while(info && info->line != line)
+	while (info && info->line != line)
 		info = info->next_device;
 	if (sanity_check(info, tty->name, "open"))
 		return -ENODEV;
-	if ( info->init_error ) {
+	if (info->init_error) {
 		printk("%s(%d):%s device is not allocated, init error=%d\n",
-			__FILE__,__LINE__,info->device_name,info->init_error);
+			__FILE__, __LINE__, info->device_name,
+			info->init_error);
 		return -ENODEV;
 	}
 
 	tty->driver_data = info;
+
+	return tty_port_install(&info->port, driver, tty);
+}
+
+/* Called when a port is opened.  Init and enable port.
+ */
+static int open(struct tty_struct *tty, struct file *filp)
+{
+	SLMP_INFO *info = tty->driver_data;
+	unsigned long flags;
+	int retval;
+
 	info->port.tty = tty;
 
 	if (debug_level >= DEBUG_LEVEL_INFO)
@@ -874,7 +882,7 @@ static void set_termios(struct tty_struct *tty, struct ktermios *old_termios)
 
 	/* Handle transition to B0 status */
 	if (old_termios->c_cflag & CBAUD &&
-	    !(tty->termios->c_cflag & CBAUD)) {
+	    !(tty->termios.c_cflag & CBAUD)) {
 		info->serial_signals &= ~(SerialSignal_RTS + SerialSignal_DTR);
 		spin_lock_irqsave(&info->lock,flags);
 	 	set_signals(info);
@@ -883,9 +891,9 @@ static void set_termios(struct tty_struct *tty, struct ktermios *old_termios)
 
 	/* Handle transition away from B0 status */
 	if (!(old_termios->c_cflag & CBAUD) &&
-	    tty->termios->c_cflag & CBAUD) {
+	    tty->termios.c_cflag & CBAUD) {
 		info->serial_signals |= SerialSignal_DTR;
- 		if (!(tty->termios->c_cflag & CRTSCTS) ||
+ 		if (!(tty->termios.c_cflag & CRTSCTS) ||
  		    !test_bit(TTY_THROTTLED, &tty->flags)) {
 			info->serial_signals |= SerialSignal_RTS;
  		}
@@ -896,7 +904,7 @@ static void set_termios(struct tty_struct *tty, struct ktermios *old_termios)
 
 	/* Handle turning off CRTSCTS */
 	if (old_termios->c_cflag & CRTSCTS &&
-	    !(tty->termios->c_cflag & CRTSCTS)) {
+	    !(tty->termios.c_cflag & CRTSCTS)) {
 		tty->hw_stopped = 0;
 		tx_release(tty);
 	}
@@ -1474,7 +1482,7 @@ static void throttle(struct tty_struct * tty)
 	if (I_IXOFF(tty))
 		send_xchar(tty, STOP_CHAR(tty));
 
- 	if (tty->termios->c_cflag & CRTSCTS) {
+ 	if (tty->termios.c_cflag & CRTSCTS) {
 		spin_lock_irqsave(&info->lock,flags);
 		info->serial_signals &= ~SerialSignal_RTS;
 	 	set_signals(info);
@@ -1503,7 +1511,7 @@ static void unthrottle(struct tty_struct * tty)
 			send_xchar(tty, START_CHAR(tty));
 	}
 
- 	if (tty->termios->c_cflag & CRTSCTS) {
+ 	if (tty->termios.c_cflag & CRTSCTS) {
 		spin_lock_irqsave(&info->lock,flags);
 		info->serial_signals |= SerialSignal_RTS;
 	 	set_signals(info);
@@ -2492,7 +2500,7 @@ static void isr_io_pin( SLMP_INFO *info, u16 status )
 			}
 		}
 
-		if ( (info->port.flags & ASYNC_CTS_FLOW) &&
+		if (tty_port_cts_enabled(&info->port) &&
 		     (status & MISCSTATUS_CTS_LATCHED) ) {
 			if ( info->port.tty ) {
 				if (info->port.tty->hw_stopped) {
@@ -2709,7 +2717,7 @@ static void shutdown(SLMP_INFO * info)
 
 	reset_port(info);
 
- 	if (!info->port.tty || info->port.tty->termios->c_cflag & HUPCL) {
+ 	if (!info->port.tty || info->port.tty->termios.c_cflag & HUPCL) {
  		info->serial_signals &= ~(SerialSignal_DTR + SerialSignal_RTS);
 		set_signals(info);
 	}
@@ -2750,7 +2758,7 @@ static void program_hw(SLMP_INFO *info)
 
 	get_signals(info);
 
-	if (info->netcount || (info->port.tty && info->port.tty->termios->c_cflag & CREAD) )
+	if (info->netcount || (info->port.tty && info->port.tty->termios.c_cflag & CREAD) )
 		rx_start(info);
 
 	spin_unlock_irqrestore(&info->lock,flags);
@@ -2763,14 +2771,14 @@ static void change_params(SLMP_INFO *info)
 	unsigned cflag;
 	int bits_per_char;
 
-	if (!info->port.tty || !info->port.tty->termios)
+	if (!info->port.tty)
 		return;
 
 	if (debug_level >= DEBUG_LEVEL_INFO)
 		printk("%s(%d):%s change_params()\n",
 			 __FILE__,__LINE__, info->device_name );
 
-	cflag = info->port.tty->termios->c_cflag;
+	cflag = info->port.tty->termios.c_cflag;
 
 	/* if B0 rate (hangup) specified then negate DTR and RTS */
 	/* otherwise assert DTR and RTS */
@@ -3307,7 +3315,7 @@ static int block_til_ready(struct tty_struct *tty, struct file *filp,
 		return 0;
 	}
 
-	if (tty->termios->c_cflag & CLOCAL)
+	if (tty->termios.c_cflag & CLOCAL)
 		do_clocal = true;
 
 	/* Wait for carrier detect and the line to become
@@ -3333,7 +3341,7 @@ static int block_til_ready(struct tty_struct *tty, struct file *filp,
 	port->blocked_open++;
 
 	while (1) {
-		if (tty->termios->c_cflag & CBAUD)
+		if (tty->termios.c_cflag & CBAUD)
 			tty_port_raise_dtr_rts(port);
 
 		set_current_state(TASK_INTERRUPTIBLE);
@@ -3358,9 +3366,9 @@ static int block_til_ready(struct tty_struct *tty, struct file *filp,
 			printk("%s(%d):%s block_til_ready() count=%d\n",
 				 __FILE__,__LINE__, tty->driver->name, port->count );
 
-		tty_unlock();
+		tty_unlock(tty);
 		schedule();
-		tty_lock();
+		tty_lock(tty);
 	}
 
 	set_current_state(TASK_RUNNING);
@@ -3835,8 +3843,10 @@ static void device_init(int adapter_num, struct pci_dev *pdev)
 	for ( port = 0; port < SCA_MAX_PORTS; ++port ) {
 		port_array[port] = alloc_dev(adapter_num,port,pdev);
 		if( port_array[port] == NULL ) {
-			for ( --port; port >= 0; --port )
+			for (--port; port >= 0; --port) {
+				tty_port_destroy(&port_array[port]->port);
 				kfree(port_array[port]);
+			}
 			return;
 		}
 	}
@@ -3882,6 +3892,7 @@ static void device_init(int adapter_num, struct pci_dev *pdev)
 }
 
 static const struct tty_operations ops = {
+	.install = install,
 	.open = open,
 	.close = close,
 	.write = write,
@@ -3944,6 +3955,7 @@ static void synclinkmp_cleanup(void)
 		}
 		tmp = info;
 		info = info->next_device;
+		tty_port_destroy(&tmp->port);
 		kfree(tmp);
 	}
 
@@ -3977,7 +3989,6 @@ static int __init synclinkmp_init(void)
 
 	/* Initialize the tty_driver structure */
 
-	serial_driver->owner = THIS_MODULE;
 	serial_driver->driver_name = "synclinkmp";
 	serial_driver->name = "ttySLM";
 	serial_driver->major = ttymajor;
@@ -4950,7 +4961,7 @@ CheckAgain:
 
 	if ( debug_level >= DEBUG_LEVEL_DATA )
 		trace_block(info,info->rx_buf_list_ex[StartIndex].virt_addr,
-			min_t(int, framesize,SCABUFSIZE),0);
+			min_t(unsigned int, framesize, SCABUFSIZE), 0);
 
 	if (framesize) {
 		if (framesize > info->max_frame_size)
@@ -5015,14 +5026,14 @@ static void tx_load_dma_buffer(SLMP_INFO *info, const char *buf, unsigned int co
 	SCADESC_EX *desc_ex;
 
 	if ( debug_level >= DEBUG_LEVEL_DATA )
-		trace_block(info,buf, min_t(int, count,SCABUFSIZE), 1);
+		trace_block(info, buf, min_t(unsigned int, count, SCABUFSIZE), 1);
 
 	/* Copy source buffer to one or more DMA buffers, starting with
 	 * the first transmit dma buffer.
 	 */
 	for(i=0;;)
 	{
-		copy_count = min_t(unsigned short,count,SCABUFSIZE);
+		copy_count = min_t(unsigned int, count, SCABUFSIZE);
 
 		desc = &info->tx_buf_list[i];
 		desc_ex = &info->tx_buf_list_ex[i];
@@ -5584,7 +5595,7 @@ static void write_control_reg(SLMP_INFO * info)
 }
 
 
-static int __devinit synclinkmp_init_one (struct pci_dev *dev,
+static int synclinkmp_init_one (struct pci_dev *dev,
 					  const struct pci_device_id *ent)
 {
 	if (pci_enable_device(dev)) {
@@ -5595,6 +5606,6 @@ static int __devinit synclinkmp_init_one (struct pci_dev *dev,
 	return 0;
 }
 
-static void __devexit synclinkmp_remove_one (struct pci_dev *dev)
+static void synclinkmp_remove_one (struct pci_dev *dev)
 {
 }

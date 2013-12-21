@@ -24,8 +24,9 @@
 
 */
 
-#define __NO_VERSION__
 #include <linux/uaccess.h>
+#include <linux/compat.h>
+#include <linux/fs.h>
 #include "comedi.h"
 #include "comedi_compat32.h"
 

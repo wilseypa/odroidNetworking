@@ -31,12 +31,42 @@ extern const char *parent_pattern;
 extern const char default_sort_order[];
 extern int sort__need_collapse;
 extern int sort__has_parent;
-extern char *field_sep;
+extern int sort__has_sym;
+extern int sort__branch_mode;
 extern struct sort_entry sort_comm;
 extern struct sort_entry sort_dso;
 extern struct sort_entry sort_sym;
 extern struct sort_entry sort_parent;
+extern struct sort_entry sort_dso_from;
+extern struct sort_entry sort_dso_to;
+extern struct sort_entry sort_sym_from;
+extern struct sort_entry sort_sym_to;
 extern enum sort_type sort__first_dimension;
+
+struct he_stat {
+	u64			period;
+	u64			period_sys;
+	u64			period_us;
+	u64			period_guest_sys;
+	u64			period_guest_us;
+	u32			nr_events;
+};
+
+struct hist_entry_diff {
+	bool	computed;
+
+	/* PERF_HPP__DISPL */
+	int	displacement;
+
+	/* PERF_HPP__DELTA */
+	double	period_ratio_delta;
+
+	/* PERF_HPP__RATIO */
+	double	period_ratio;
+
+	/* HISTC_WEIGHTED_DIFF */
+	s64	wdiff;
+};
 
 /**
  * struct hist_entry - histogram entry
@@ -45,17 +75,19 @@ extern enum sort_type sort__first_dimension;
  * @nr_rows - rows expanded in callchain, recalculated on folding/unfolding
  */
 struct hist_entry {
+	struct rb_node		rb_node_in;
 	struct rb_node		rb_node;
-	u64			period;
-	u64			period_sys;
-	u64			period_us;
-	u64			period_guest_sys;
-	u64			period_guest_us;
+	union {
+		struct list_head node;
+		struct list_head head;
+	} pairs;
+	struct he_stat		stat;
 	struct map_symbol	ms;
 	struct thread		*thread;
 	u64			ip;
 	s32			cpu;
-	u32			nr_events;
+
+	struct hist_entry_diff	diff;
 
 	/* XXX These two should move to some tree widget lib */
 	u16			row_offset;
@@ -63,15 +95,34 @@ struct hist_entry {
 
 	bool			init_have_children;
 	char			level;
+	bool			used;
 	u8			filtered;
+	char			*srcline;
 	struct symbol		*parent;
-	union {
-		unsigned long	  position;
-		struct hist_entry *pair;
-		struct rb_root	  sorted_chain;
-	};
+	unsigned long		position;
+	struct rb_root		sorted_chain;
+	struct branch_info	*branch_info;
+	struct hists		*hists;
 	struct callchain_root	callchain[0];
 };
+
+static inline bool hist_entry__has_pairs(struct hist_entry *he)
+{
+	return !list_empty(&he->pairs.node);
+}
+
+static inline struct hist_entry *hist_entry__next_pair(struct hist_entry *he)
+{
+	if (hist_entry__has_pairs(he))
+		return list_entry(he->pairs.node.next, struct hist_entry, pairs.node);
+	return NULL;
+}
+
+static inline void hist__entry_add_pair(struct hist_entry *he,
+					struct hist_entry *pair)
+{
+	list_add_tail(&he->pairs.head, &pair->pairs.node);
+}
 
 enum sort_type {
 	SORT_PID,
@@ -80,6 +131,12 @@ enum sort_type {
 	SORT_SYM,
 	SORT_PARENT,
 	SORT_CPU,
+	SORT_DSO_FROM,
+	SORT_DSO_TO,
+	SORT_SYM_FROM,
+	SORT_SYM_TO,
+	SORT_MISPREDICT,
+	SORT_SRCLINE,
 };
 
 /*
@@ -103,20 +160,6 @@ extern struct sort_entry sort_thread;
 extern struct list_head hist_entry__sort_list;
 
 void setup_sorting(const char * const usagestr[], const struct option *opts);
-
-extern size_t sort__thread_print(FILE *, struct hist_entry *, unsigned int);
-extern size_t sort__comm_print(FILE *, struct hist_entry *, unsigned int);
-extern size_t sort__dso_print(FILE *, struct hist_entry *, unsigned int);
-extern size_t sort__sym_print(FILE *, struct hist_entry *, unsigned int __used);
-extern int64_t cmp_null(void *, void *);
-extern int64_t sort__thread_cmp(struct hist_entry *, struct hist_entry *);
-extern int64_t sort__comm_cmp(struct hist_entry *, struct hist_entry *);
-extern int64_t sort__comm_collapse(struct hist_entry *, struct hist_entry *);
-extern int64_t sort__dso_cmp(struct hist_entry *, struct hist_entry *);
-extern int64_t sort__sym_cmp(struct hist_entry *, struct hist_entry *);
-extern int64_t sort__parent_cmp(struct hist_entry *, struct hist_entry *);
-int64_t sort__cpu_cmp(struct hist_entry *left, struct hist_entry *right);
-extern size_t sort__parent_print(FILE *, struct hist_entry *, unsigned int);
 extern int sort_dimension__add(const char *);
 void sort_entry__setup_elide(struct sort_entry *self, struct strlist *list,
 			     const char *list_name, FILE *fp);

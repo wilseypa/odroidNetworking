@@ -26,11 +26,11 @@
 #include <linux/list.h>
 #include <linux/string.h>
 #include <linux/bug.h>
-
+#include <linux/kernel.h>
 
 #include <asm/unaligned.h>
-#include <asm/system.h>
 #include <asm/io.h>
+#include <asm/barrier.h>
 
 #ifdef CONFIG_MTD_MAP_BANK_WIDTH_1
 #define map_bankwidth(map) 1
@@ -214,6 +214,7 @@ struct map_info {
 	void __iomem *virt;
 	void *cached;
 
+	int swap; /* this mapping's byte-swapping requirement */
 	int bankwidth; /* in octets. This isn't necessarily the width
 		       of actual bus cycles -- it's the repeat interval
 		      in bytes, before you are talking to the first chip again.
@@ -327,7 +328,7 @@ static inline int map_word_bitsset(struct map_info *map, map_word val1, map_word
 
 static inline map_word map_word_load(struct map_info *map, const void *ptr)
 {
-	map_word r;
+	map_word r = {{0} };
 
 	if (map_bankwidth_is_1(map))
 		r.x[0] = *(unsigned char *)ptr;
@@ -390,7 +391,7 @@ static inline map_word map_word_ff(struct map_info *map)
 
 static inline map_word inline_map_read(struct map_info *map, unsigned long ofs)
 {
-	map_word r;
+	map_word uninitialized_var(r);
 
 	if (map_bankwidth_is_1(map))
 		r.x[0] = __raw_readb(map->virt + ofs);

@@ -22,6 +22,7 @@
 
 #include <linux/init.h>
 #include <linux/slab.h>
+#include <linux/export.h>
 #include <sound/core.h>
 #include "hda_codec.h"
 #include "hda_local.h"
@@ -69,7 +70,7 @@ struct hda_gspec {
 
 	struct list_head nid_list;	/* list of widgets */
 
-#ifdef CONFIG_SND_HDA_POWER_SAVE
+#ifdef CONFIG_PM
 #define MAX_LOOPBACK_AMPS	7
 	struct hda_loopback_check loopback;
 	int num_loopbacks;
@@ -653,7 +654,7 @@ static int parse_input(struct hda_codec *codec)
 	return 0;
 }
 
-#ifdef CONFIG_SND_HDA_POWER_SAVE
+#ifdef CONFIG_PM
 static void add_input_loopback(struct hda_codec *codec, hda_nid_t nid,
 			       int dir, int idx)
 {
@@ -1027,7 +1028,7 @@ static int build_generic_pcms(struct hda_codec *codec)
 	return 0;
 }
 
-#ifdef CONFIG_SND_HDA_POWER_SAVE
+#ifdef CONFIG_PM
 static int generic_check_power_status(struct hda_codec *codec, hda_nid_t nid)
 {
 	struct hda_gspec *spec = codec->spec;
@@ -1042,7 +1043,7 @@ static struct hda_codec_ops generic_patch_ops = {
 	.build_controls = build_generic_controls,
 	.build_pcms = build_generic_pcms,
 	.free = snd_hda_generic_free,
-#ifdef CONFIG_SND_HDA_POWER_SAVE
+#ifdef CONFIG_PM
 	.check_power_status = generic_check_power_status,
 #endif
 };

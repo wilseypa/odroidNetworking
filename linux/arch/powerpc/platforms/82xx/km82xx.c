@@ -49,6 +49,9 @@ struct cpm_pin {
 };
 
 static __initdata struct cpm_pin km82xx_pins[] = {
+	/* SMC1 */
+	{2, 4, CPM_PIN_INPUT | CPM_PIN_PRIMARY},
+	{2, 5, CPM_PIN_OUTPUT | CPM_PIN_PRIMARY},
 
 	/* SMC2 */
 	{0, 8, CPM_PIN_INPUT | CPM_PIN_PRIMARY},
@@ -125,6 +128,11 @@ static __initdata struct cpm_pin km82xx_pins[] = {
 	{3, 23, CPM_PIN_OUTPUT | CPM_PIN_PRIMARY}, /* TXP */
 	{3, 24, CPM_PIN_OUTPUT | CPM_PIN_PRIMARY}, /* TXN */
 	{3, 25, CPM_PIN_INPUT  | CPM_PIN_PRIMARY}, /* RXD */
+
+	/* SPI */
+	{3, 16, CPM_PIN_INPUT | CPM_PIN_SECONDARY},/* SPI_MISO PD16 */
+	{3, 17, CPM_PIN_INPUT | CPM_PIN_SECONDARY},/* SPI_MOSI PD17 */
+	{3, 18, CPM_PIN_INPUT | CPM_PIN_SECONDARY},/* SPI_CLK PD18 */
 };
 
 static void __init init_ioports(void)
@@ -137,6 +145,7 @@ static void __init init_ioports(void)
 	}
 
 	cpm2_smc_clk_setup(CPM_CLK_SMC2, CPM_BRG8);
+	cpm2_smc_clk_setup(CPM_CLK_SMC1, CPM_BRG7);
 	cpm2_clk_setup(CPM_CLK_SCC1, CPM_CLK11, CPM_CLK_RX);
 	cpm2_clk_setup(CPM_CLK_SCC1, CPM_CLK11, CPM_CLK_TX);
 	cpm2_clk_setup(CPM_CLK_SCC3, CPM_CLK5, CPM_CLK_RTX);

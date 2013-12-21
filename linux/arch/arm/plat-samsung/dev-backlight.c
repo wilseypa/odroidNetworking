@@ -12,6 +12,7 @@
 
 #include <linux/gpio.h>
 #include <linux/platform_device.h>
+#include <linux/slab.h>
 #include <linux/io.h>
 #include <linux/pwm_backlight.h>
 
@@ -59,19 +60,15 @@ static void samsung_bl_exit(struct device *dev)
  * for their specific boards
  */
 
-static struct platform_pwm_backlight_data samsung_dfl_bl_data = {
+static struct platform_pwm_backlight_data samsung_dfl_bl_data __initdata = {
 	.max_brightness = 255,
-#if defined(CONFIG_BOARD_ODROID_X)||defined(CONFIG_BOARD_ODROID_X2)||defined(CONFIG_BOARD_ODROID_U)||defined(CONFIG_BOARD_ODROID_U2)
 	.dft_brightness = 255,
-#else	
-	.dft_brightness = 128,
-#endif	
-	.pwm_period_ns  = 20972,
+	.pwm_period_ns  = 78770,
 	.init           = samsung_bl_init,
 	.exit           = samsung_bl_exit,
 };
 
-static struct platform_device samsung_dfl_bl_device = {
+static struct platform_device samsung_dfl_bl_device __initdata = {
 	.name		= "pwm-backlight",
 };
 
@@ -80,7 +77,7 @@ static struct platform_device samsung_dfl_bl_device = {
  * @gpio_info:	structure containing GPIO info for PWM timer
  * @bl_data:	structure containing Backlight control data
  */
-void samsung_bl_set(struct samsung_bl_gpio_info *gpio_info,
+void __init samsung_bl_set(struct samsung_bl_gpio_info *gpio_info,
 	struct platform_pwm_backlight_data *bl_data)
 {
 	int ret = 0;
@@ -118,6 +115,8 @@ void samsung_bl_set(struct samsung_bl_gpio_info *gpio_info,
 		samsung_bl_data->init = bl_data->init;
 	if (bl_data->notify)
 		samsung_bl_data->notify = bl_data->notify;
+	if (bl_data->notify_after)
+		samsung_bl_data->notify_after = bl_data->notify_after;
 	if (bl_data->exit)
 		samsung_bl_data->exit = bl_data->exit;
 	if (bl_data->check_fb)

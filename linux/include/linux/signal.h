@@ -1,11 +1,8 @@
 #ifndef _LINUX_SIGNAL_H
 #define _LINUX_SIGNAL_H
 
-#include <asm/signal.h>
-#include <asm/siginfo.h>
-
-#ifdef __KERNEL__
 #include <linux/list.h>
+#include <uapi/linux/signal.h>
 
 struct task_struct;
 
@@ -250,10 +247,13 @@ extern long do_sigpending(void __user *, unsigned long);
 extern int do_sigtimedwait(const sigset_t *, siginfo_t *,
 				const struct timespec *);
 extern int sigprocmask(int, sigset_t *, sigset_t *);
-extern void set_current_blocked(const sigset_t *);
+extern void set_current_blocked(sigset_t *);
+extern void __set_current_blocked(const sigset_t *);
 extern int show_unhandled_signals;
+extern int sigsuspend(sigset_t *);
 
 extern int get_signal_to_deliver(siginfo_t *info, struct k_sigaction *return_ka, struct pt_regs *regs, void *cookie);
+extern void signal_delivered(int sig, siginfo_t *info, struct k_sigaction *ka, struct pt_regs *regs, int stepping);
 extern void exit_signals(struct task_struct *tsk);
 
 extern struct kmem_cache *sighand_cachep;
@@ -385,6 +385,15 @@ int unhandled_signal(struct task_struct *tsk, int sig);
 
 void signals_init(void);
 
-#endif /* __KERNEL__ */
+int restore_altstack(const stack_t __user *);
+int __save_altstack(stack_t __user *, unsigned long);
+
+#define save_altstack_ex(uss, sp) do { \
+	stack_t __user *__uss = uss; \
+	struct task_struct *t = current; \
+	put_user_ex((void __user *)t->sas_ss_sp, &__uss->ss_sp); \
+	put_user_ex(sas_ss_flags(sp), &__uss->ss_flags); \
+	put_user_ex(t->sas_ss_size, &__uss->ss_size); \
+} while (0);
 
 #endif /* _LINUX_SIGNAL_H */

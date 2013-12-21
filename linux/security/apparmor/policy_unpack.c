@@ -70,13 +70,13 @@ struct aa_ext {
 static void audit_cb(struct audit_buffer *ab, void *va)
 {
 	struct common_audit_data *sa = va;
-	if (sa->aad.iface.target) {
-		struct aa_profile *name = sa->aad.iface.target;
+	if (sa->aad->iface.target) {
+		struct aa_profile *name = sa->aad->iface.target;
 		audit_log_format(ab, " name=");
 		audit_log_untrustedstring(ab, name->base.hname);
 	}
-	if (sa->aad.iface.pos)
-		audit_log_format(ab, " offset=%ld", sa->aad.iface.pos);
+	if (sa->aad->iface.pos)
+		audit_log_format(ab, " offset=%ld", sa->aad->iface.pos);
 }
 
 /**
@@ -84,7 +84,7 @@ static void audit_cb(struct audit_buffer *ab, void *va)
  * @new: profile if it has been allocated (MAYBE NULL)
  * @name: name of the profile being manipulated (MAYBE NULL)
  * @info: any extra info about the failure (MAYBE NULL)
- * @e: buffer position info (NOT NULL)
+ * @e: buffer position info
  * @error: error code
  *
  * Returns: %0 or error
@@ -94,12 +94,15 @@ static int audit_iface(struct aa_profile *new, const char *name,
 {
 	struct aa_profile *profile = __aa_current_profile();
 	struct common_audit_data sa;
-	COMMON_AUDIT_DATA_INIT(&sa, NONE);
-	sa.aad.iface.pos = e->pos - e->start;
-	sa.aad.iface.target = new;
-	sa.aad.name = name;
-	sa.aad.info = info;
-	sa.aad.error = error;
+	struct apparmor_audit_data aad = {0,};
+	sa.type = LSM_AUDIT_DATA_NONE;
+	sa.aad = &aad;
+	if (e)
+		aad.iface.pos = e->pos - e->start;
+	aad.iface.target = new;
+	aad.name = name;
+	aad.info = info;
+	aad.error = error;
 
 	return aa_audit(AUDIT_APPARMOR_STATUS, profile, GFP_KERNEL, &sa,
 			audit_cb);
@@ -187,6 +190,19 @@ static bool unpack_nameX(struct aa_ext *e, enum aa_code code, const char *name)
 
 fail:
 	e->pos = pos;
+	return 0;
+}
+
+static bool unpack_u16(struct aa_ext *e, u16 *data, const char *name)
+{
+	if (unpack_nameX(e, AA_U16, name)) {
+		if (!inbounds(e, sizeof(u16)))
+			return 0;
+		if (data)
+			*data = le16_to_cpu(get_unaligned((u16 *) e->pos));
+		e->pos += sizeof(u16);
+		return 1;
+	}
 	return 0;
 }
 
@@ -381,11 +397,11 @@ static bool unpack_trans_table(struct aa_ext *e, struct aa_profile *profile)
 		profile->file.trans.size = size;
 		for (i = 0; i < size; i++) {
 			char *str;
-			int c, j, size = unpack_strdup(e, &str, NULL);
+			int c, j, size2 = unpack_strdup(e, &str, NULL);
 			/* unpack_strdup verifies that the last character is
 			 * null termination byte.
 			 */
-			if (!size)
+			if (!size2)
 				goto fail;
 			profile->file.trans.table[i] = str;
 			/* verify that name doesn't start with space */
@@ -393,7 +409,7 @@ static bool unpack_trans_table(struct aa_ext *e, struct aa_profile *profile)
 				goto fail;
 
 			/* count internal #  of internal \0 */
-			for (c = j = 0; j < size - 2; j++) {
+			for (c = j = 0; j < size2 - 2; j++) {
 				if (!str[j])
 					c++;
 			}
@@ -440,11 +456,11 @@ static bool unpack_rlimits(struct aa_ext *e, struct aa_profile *profile)
 		if (size > RLIM_NLIMITS)
 			goto fail;
 		for (i = 0; i < size; i++) {
-			u64 tmp = 0;
+			u64 tmp2 = 0;
 			int a = aa_map_resource(i);
-			if (!unpack_u64(e, &tmp, NULL))
+			if (!unpack_u64(e, &tmp2, NULL))
 				goto fail;
-			profile->rlimits.limits[a].rlim_max = tmp;
+			profile->rlimits.limits[a].rlim_max = tmp2;
 		}
 		if (!unpack_nameX(e, AA_ARRAYEND, NULL))
 			goto fail;
@@ -468,7 +484,8 @@ static struct aa_profile *unpack_profile(struct aa_ext *e)
 {
 	struct aa_profile *profile = NULL;
 	const char *name = NULL;
-	int error = -EPROTO;
+	size_t size = 0;
+	int i, error = -EPROTO;
 	kernel_cap_t tmpcap;
 	u32 tmp;
 
@@ -554,10 +571,66 @@ static struct aa_profile *unpack_profile(struct aa_ext *e)
 			goto fail;
 		if (!unpack_u32(e, &(profile->caps.extended.cap[1]), NULL))
 			goto fail;
+		if (!unpack_nameX(e, AA_STRUCTEND, NULL))
+			goto fail;
 	}
 
 	if (!unpack_rlimits(e, profile))
 		goto fail;
+
+	size = unpack_array(e, "net_allowed_af");
+	if (size) {
+
+		for (i = 0; i < size; i++) {
+			/* discard extraneous rules that this kernel will
+			 * never request
+			 */
+			if (i >= AF_MAX) {
+				u16 tmp;
+				if (!unpack_u16(e, &tmp, NULL) ||
+				    !unpack_u16(e, &tmp, NULL) ||
+				    !unpack_u16(e, &tmp, NULL))
+					goto fail;
+				continue;
+			}
+			if (!unpack_u16(e, &profile->net.allow[i], NULL))
+				goto fail;
+			if (!unpack_u16(e, &profile->net.audit[i], NULL))
+				goto fail;
+			if (!unpack_u16(e, &profile->net.quiet[i], NULL))
+				goto fail;
+		}
+		if (!unpack_nameX(e, AA_ARRAYEND, NULL))
+			goto fail;
+	}
+	/*
+	 * allow unix domain and netlink sockets they are handled
+	 * by IPC
+	 */
+	profile->net.allow[AF_UNIX] = 0xffff;
+	profile->net.allow[AF_NETLINK] = 0xffff;
+
+	if (unpack_nameX(e, AA_STRUCT, "policydb")) {
+		/* generic policy dfa - optional and may be NULL */
+		profile->policy.dfa = unpack_dfa(e);
+		if (IS_ERR(profile->policy.dfa)) {
+			error = PTR_ERR(profile->policy.dfa);
+			profile->policy.dfa = NULL;
+			goto fail;
+		}
+		if (!unpack_u32(e, &profile->policy.start[0], "start"))
+			/* default start state */
+			profile->policy.start[0] = DFA_START;
+		/* setup class index */
+		for (i = AA_CLASS_FILE; i <= AA_CLASS_LAST; i++) {
+			profile->policy.start[i] =
+				aa_dfa_next(profile->policy.dfa,
+					    profile->policy.start[0],
+					    i);
+		}
+		if (!unpack_nameX(e, AA_STRUCTEND, NULL))
+			goto fail;
+	}
 
 	/* get file rules */
 	profile->file.dfa = unpack_dfa(e);

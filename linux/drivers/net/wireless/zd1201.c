@@ -98,9 +98,11 @@ static int zd1201_fw_upload(struct usb_device *dev, int apfw)
 		goto exit;
 
 	err = usb_control_msg(dev, usb_rcvctrlpipe(dev, 0), 0x4,
-	    USB_DIR_IN | 0x40, 0,0, &ret, sizeof(ret), ZD1201_FW_TIMEOUT);
+	    USB_DIR_IN | 0x40, 0, 0, buf, sizeof(ret), ZD1201_FW_TIMEOUT);
 	if (err < 0)
 		goto exit;
+
+	memcpy(&ret, buf, sizeof(ret));
 
 	if (ret & 0x80) {
 		err = -EIO;
@@ -1722,7 +1724,7 @@ static const struct net_device_ops zd1201_netdev_ops = {
 	.ndo_stop		= zd1201_net_stop,
 	.ndo_start_xmit		= zd1201_hard_start_xmit,
 	.ndo_tx_timeout		= zd1201_tx_timeout,
-	.ndo_set_multicast_list = zd1201_set_multicast,
+	.ndo_set_rx_mode	= zd1201_set_multicast,
 	.ndo_set_mac_address	= zd1201_set_mac_address,
 	.ndo_change_mtu		= eth_change_mtu,
 	.ndo_validate_addr	= eth_validate_addr,
@@ -1905,17 +1907,7 @@ static struct usb_driver zd1201_usb = {
 	.id_table = zd1201_table,
 	.suspend = zd1201_suspend,
 	.resume = zd1201_resume,
+	.disable_hub_initiated_lpm = 1,
 };
 
-static int __init zd1201_init(void)
-{
-	return usb_register(&zd1201_usb);
-}
-
-static void __exit zd1201_cleanup(void)
-{
-	usb_deregister(&zd1201_usb);
-}
-
-module_init(zd1201_init);
-module_exit(zd1201_cleanup);
+module_usb_driver(zd1201_usb);

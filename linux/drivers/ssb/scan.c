@@ -2,7 +2,7 @@
  * Sonics Silicon Backplane
  * Bus scanning
  *
- * Copyright (C) 2005-2007 Michael Buesch <mb@bu3sch.de>
+ * Copyright (C) 2005-2007 Michael Buesch <m@bues.ch>
  * Copyright (C) 2005 Martin Langer <martin-langer@gmx.de>
  * Copyright (C) 2005 Stefano Brivio <st3@riseup.net>
  * Copyright (C) 2005 Danny van Dyk <kugelfang@gentoo.org>
@@ -90,6 +90,8 @@ const char *ssb_core_name(u16 coreid)
 		return "ARM 1176";
 	case SSB_DEV_ARM_7TDMI:
 		return "ARM 7TDMI";
+	case SSB_DEV_ARM_CM3:
+		return "ARM Cortex M3";
 	}
 	return "UNKNOWN";
 }
@@ -310,8 +312,7 @@ int ssb_bus_scan(struct ssb_bus *bus,
 	} else {
 		if (bus->bustype == SSB_BUSTYPE_PCI) {
 			bus->chip_id = pcidev_to_chipid(bus->host_pci);
-			pci_read_config_byte(bus->host_pci, PCI_REVISION_ID,
-					     &bus->chip_rev);
+			bus->chip_rev = bus->host_pci->revision;
 			bus->chip_package = 0;
 		} else {
 			bus->chip_id = 0x4710;
@@ -319,6 +320,9 @@ int ssb_bus_scan(struct ssb_bus *bus,
 			bus->chip_package = 0;
 		}
 	}
+	ssb_printk(KERN_INFO PFX "Found chip with id 0x%04X, rev 0x%02X and "
+		   "package 0x%02X\n", bus->chip_id, bus->chip_rev,
+		   bus->chip_package);
 	if (!bus->nr_devices)
 		bus->nr_devices = chipid_to_nrcores(bus->chip_id);
 	if (bus->nr_devices > ARRAY_SIZE(bus->devices)) {

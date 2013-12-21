@@ -1,4 +1,4 @@
-/* linux/arch/arm/mach-exynos/dev-ahci.c
+/* linux/arch/arm/mach-exynos4/dev-ahci.c
  *
  * Copyright (c) 2011 Samsung Electronics Co., Ltd.
  *		http://www.samsung.com
@@ -236,16 +236,8 @@ static struct ahci_platform_data exynos4_ahci_pdata = {
 };
 
 static struct resource exynos4_ahci_resource[] = {
-	[0] = {
-		.start	= EXYNOS4_PA_SATA,
-		.end	= EXYNOS4_PA_SATA + SZ_64K - 1,
-		.flags	= IORESOURCE_MEM,
-	},
-	[1] = {
-		.start	= IRQ_SATA,
-		.end	= IRQ_SATA,
-		.flags	= IORESOURCE_IRQ,
-	},
+	[0] = DEFINE_RES_MEM(EXYNOS4_PA_SATA, SZ_64K),
+	[1] = DEFINE_RES_IRQ(EXYNOS4_IRQ_SATA),
 };
 
 static u64 exynos4_ahci_dmamask = DMA_BIT_MASK(32);

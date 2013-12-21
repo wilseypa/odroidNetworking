@@ -24,10 +24,11 @@
 #include <linux/mm.h>
 #include <linux/slab.h>
 #include <linux/string.h>
+#include <linux/module.h>
 #include <sound/core.h>
 #include <sound/minors.h>
 #include <sound/info.h>
-#include <sound/version.h>
+#include <linux/utsname.h>
 #include <linux/proc_fs.h>
 #include <linux/mutex.h>
 #include <stdarg.h>
@@ -531,7 +532,7 @@ int __init snd_info_init(void)
 {
 	struct proc_dir_entry *p;
 
-	p = create_proc_entry("asound", S_IFDIR | S_IRUGO | S_IXUGO, NULL);
+	p = proc_mkdir("asound", NULL);
 	if (p == NULL)
 		return -ENOMEM;
 	snd_proc_root = p;
@@ -985,9 +986,8 @@ static struct snd_info_entry *snd_info_version_entry;
 static void snd_info_version_read(struct snd_info_entry *entry, struct snd_info_buffer *buffer)
 {
 	snd_iprintf(buffer,
-		    "Advanced Linux Sound Architecture Driver Version "
-		    CONFIG_SND_VERSION CONFIG_SND_DATE ".\n"
-		   );
+		    "Advanced Linux Sound Architecture Driver Version k%s.\n",
+		    init_utsname()->release);
 }
 
 static int __init snd_info_version_init(void)

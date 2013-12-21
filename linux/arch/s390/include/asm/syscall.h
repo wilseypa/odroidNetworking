@@ -12,7 +12,9 @@
 #ifndef _ASM_SYSCALL_H
 #define _ASM_SYSCALL_H	1
 
+#include <linux/audit.h>
 #include <linux/sched.h>
+#include <linux/err.h>
 #include <asm/ptrace.h>
 
 /*
@@ -25,7 +27,8 @@ extern const unsigned int sys_call_table[];
 static inline long syscall_get_nr(struct task_struct *task,
 				  struct pt_regs *regs)
 {
-	return regs->svcnr ? regs->svcnr : -1;
+	return test_tsk_thread_flag(task, TIF_SYSCALL) ?
+		(regs->int_code & 0xffff) : -1;
 }
 
 static inline void syscall_rollback(struct task_struct *task,
@@ -37,7 +40,7 @@ static inline void syscall_rollback(struct task_struct *task,
 static inline long syscall_get_error(struct task_struct *task,
 				     struct pt_regs *regs)
 {
-	return (regs->gprs[2] >= -4096UL) ? -regs->gprs[2] : 0;
+	return IS_ERR_VALUE(regs->gprs[2]) ? regs->gprs[2] : 0;
 }
 
 static inline long syscall_get_return_value(struct task_struct *task,
@@ -85,4 +88,13 @@ static inline void syscall_set_arguments(struct task_struct *task,
 		regs->orig_gpr2 = args[0];
 }
 
+static inline int syscall_get_arch(struct task_struct *task,
+				   struct pt_regs *regs)
+{
+#ifdef CONFIG_COMPAT
+	if (test_tsk_thread_flag(task, TIF_31BIT))
+		return AUDIT_ARCH_S390;
+#endif
+	return sizeof(long) == 8 ? AUDIT_ARCH_S390X : AUDIT_ARCH_S390;
+}
 #endif	/* _ASM_SYSCALL_H */

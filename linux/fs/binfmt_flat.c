@@ -15,7 +15,7 @@
  *	JAN/99 -- coded full program relocation (gerg@snapgear.com)
  */
 
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/mm.h>
@@ -37,7 +37,6 @@
 #include <linux/syscalls.h>
 
 #include <asm/byteorder.h>
-#include <asm/system.h>
 #include <asm/uaccess.h>
 #include <asm/unaligned.h>
 #include <asm/cacheflush.h>
@@ -89,7 +88,7 @@ struct lib_info {
 static int load_flat_shared_library(int id, struct lib_info *p);
 #endif
 
-static int load_flat_binary(struct linux_binprm *, struct pt_regs * regs);
+static int load_flat_binary(struct linux_binprm *);
 static int flat_core_dump(struct coredump_params *cprm);
 
 static struct linux_binfmt flat_format = {
@@ -108,7 +107,7 @@ static struct linux_binfmt flat_format = {
 static int flat_core_dump(struct coredump_params *cprm)
 {
 	printk("Process %s:%d received signr %d and should have core dumped\n",
-			current->comm, current->pid, (int) cprm->signr);
+			current->comm, current->pid, (int) cprm->siginfo->si_signo);
 	return(1);
 }
 
@@ -543,10 +542,8 @@ static int load_flat_file(struct linux_binprm * bprm,
 		 */
 		DBG_FLT("BINFMT_FLAT: ROM mapping of file (we hope)\n");
 
-		down_write(&current->mm->mmap_sem);
-		textpos = do_mmap(bprm->file, 0, text_len, PROT_READ|PROT_EXEC,
+		textpos = vm_mmap(bprm->file, 0, text_len, PROT_READ|PROT_EXEC,
 				  MAP_PRIVATE|MAP_EXECUTABLE, 0);
-		up_write(&current->mm->mmap_sem);
 		if (!textpos || IS_ERR_VALUE(textpos)) {
 			if (!textpos)
 				textpos = (unsigned long) -ENOMEM;
@@ -557,17 +554,15 @@ static int load_flat_file(struct linux_binprm * bprm,
 
 		len = data_len + extra + MAX_SHARED_LIBS * sizeof(unsigned long);
 		len = PAGE_ALIGN(len);
-		down_write(&current->mm->mmap_sem);
-		realdatastart = do_mmap(0, 0, len,
+		realdatastart = vm_mmap(0, 0, len,
 			PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE, 0);
-		up_write(&current->mm->mmap_sem);
 
 		if (realdatastart == 0 || IS_ERR_VALUE(realdatastart)) {
 			if (!realdatastart)
 				realdatastart = (unsigned long) -ENOMEM;
 			printk("Unable to allocate RAM for process data, errno %d\n",
 					(int)-realdatastart);
-			do_munmap(current->mm, textpos, text_len);
+			vm_munmap(textpos, text_len);
 			ret = realdatastart;
 			goto err;
 		}
@@ -591,8 +586,8 @@ static int load_flat_file(struct linux_binprm * bprm,
 		}
 		if (IS_ERR_VALUE(result)) {
 			printk("Unable to read data+bss, errno %d\n", (int)-result);
-			do_munmap(current->mm, textpos, text_len);
-			do_munmap(current->mm, realdatastart, len);
+			vm_munmap(textpos, text_len);
+			vm_munmap(realdatastart, len);
 			ret = result;
 			goto err;
 		}
@@ -604,10 +599,8 @@ static int load_flat_file(struct linux_binprm * bprm,
 
 		len = text_len + data_len + extra + MAX_SHARED_LIBS * sizeof(unsigned long);
 		len = PAGE_ALIGN(len);
-		down_write(&current->mm->mmap_sem);
-		textpos = do_mmap(0, 0, len,
+		textpos = vm_mmap(0, 0, len,
 			PROT_READ | PROT_EXEC | PROT_WRITE, MAP_PRIVATE, 0);
-		up_write(&current->mm->mmap_sem);
 
 		if (!textpos || IS_ERR_VALUE(textpos)) {
 			if (!textpos)
@@ -661,7 +654,7 @@ static int load_flat_file(struct linux_binprm * bprm,
 		}
 		if (IS_ERR_VALUE(result)) {
 			printk("Unable to read code+data+bss, errno %d\n",(int)-result);
-			do_munmap(current->mm, textpos, text_len + data_len + extra +
+			vm_munmap(textpos, text_len + data_len + extra +
 				MAX_SHARED_LIBS * sizeof(unsigned long));
 			ret = result;
 			goto err;
@@ -865,9 +858,10 @@ out:
  * libraries.  There is no binary dependent code anywhere else.
  */
 
-static int load_flat_binary(struct linux_binprm * bprm, struct pt_regs * regs)
+static int load_flat_binary(struct linux_binprm * bprm)
 {
 	struct lib_info libinfo;
+	struct pt_regs *regs = current_pt_regs();
 	unsigned long p = bprm->p;
 	unsigned long stack_len;
 	unsigned long start_addr;
@@ -902,7 +896,6 @@ static int load_flat_binary(struct linux_binprm * bprm, struct pt_regs * regs)
 						libinfo.lib_list[j].start_data:UNLOADED_LIB;
 
 	install_exec_creds(bprm);
- 	current->flags &= ~PF_FORKNOEXEC;
 
 	set_binfmt(&flat_format);
 
@@ -950,7 +943,8 @@ static int load_flat_binary(struct linux_binprm * bprm, struct pt_regs * regs)
 
 static int __init init_flat_binfmt(void)
 {
-	return register_binfmt(&flat_format);
+	register_binfmt(&flat_format);
+	return 0;
 }
 
 /****************************************************************************/

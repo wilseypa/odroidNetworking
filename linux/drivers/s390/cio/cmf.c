@@ -1,9 +1,7 @@
 /*
- * linux/drivers/s390/cio/cmf.c
- *
  * Linux on zSeries Channel Measurement Facility support
  *
- * Copyright 2000,2006 IBM Corporation
+ * Copyright IBM Corp. 2000, 2006
  *
  * Authors: Arnd Bergmann <arndb@de.ibm.com>
  *	    Cornelia Huck <cornelia.huck@de.ibm.com>
@@ -98,7 +96,7 @@ enum cmb_format {
  * enum cmb_format.
  */
 static int format = CMF_AUTODETECT;
-module_param(format, bool, 0444);
+module_param(format, bint, 0444);
 
 /**
  * struct cmb_operations - functions to use depending on cmb_format
@@ -1341,7 +1339,7 @@ module_init(init_cmf);
 MODULE_AUTHOR("Arnd Bergmann <arndb@de.ibm.com>");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("channel measurement facility base driver\n"
-		   "Copyright 2003 IBM Corporation\n");
+		   "Copyright IBM Corp. 2003\n");
 
 EXPORT_SYMBOL_GPL(enable_cmf);
 EXPORT_SYMBOL_GPL(disable_cmf);

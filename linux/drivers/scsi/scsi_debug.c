@@ -101,6 +101,7 @@ static const char * scsi_debug_version_date = "20100324";
 #define DEF_LBPU 0
 #define DEF_LBPWS 0
 #define DEF_LBPWS10 0
+#define DEF_LBPRZ 1
 #define DEF_LOWEST_ALIGNED 0
 #define DEF_NO_LUN_0   0
 #define DEF_NUM_PARTS   0
@@ -108,6 +109,7 @@ static const char * scsi_debug_version_date = "20100324";
 #define DEF_OPT_BLKS 64
 #define DEF_PHYSBLK_EXP 0
 #define DEF_PTYPE   0
+#define DEF_REMOVABLE false
 #define DEF_SCSI_LEVEL   5    /* INQUIRY, byte2 [5->SPC-3] */
 #define DEF_SECTOR_SIZE 512
 #define DEF_UNMAP_ALIGNMENT 0
@@ -126,6 +128,7 @@ static const char * scsi_debug_version_date = "20100324";
 #define SCSI_DEBUG_OPT_TRANSPORT_ERR   16
 #define SCSI_DEBUG_OPT_DIF_ERR   32
 #define SCSI_DEBUG_OPT_DIX_ERR   64
+#define SCSI_DEBUG_OPT_MAC_TIMEOUT  128
 /* When "every_nth" > 0 then modulo "every_nth" commands:
  *   - a no response is simulated if SCSI_DEBUG_OPT_TIMEOUT is set
  *   - a RECOVERED_ERROR is simulated on successful read and write
@@ -185,16 +188,17 @@ static int scsi_debug_vpd_use_hostno = DEF_VPD_USE_HOSTNO;
 static unsigned int scsi_debug_lbpu = DEF_LBPU;
 static unsigned int scsi_debug_lbpws = DEF_LBPWS;
 static unsigned int scsi_debug_lbpws10 = DEF_LBPWS10;
+static unsigned int scsi_debug_lbprz = DEF_LBPRZ;
 static unsigned int scsi_debug_unmap_alignment = DEF_UNMAP_ALIGNMENT;
 static unsigned int scsi_debug_unmap_granularity = DEF_UNMAP_GRANULARITY;
 static unsigned int scsi_debug_unmap_max_blocks = DEF_UNMAP_MAX_BLOCKS;
 static unsigned int scsi_debug_unmap_max_desc = DEF_UNMAP_MAX_DESC;
 static unsigned int scsi_debug_write_same_length = DEF_WRITESAME_LENGTH;
+static bool scsi_debug_removable = DEF_REMOVABLE;
 
 static int scsi_debug_cmnd_count = 0;
 
 #define DEV_READONLY(TGT)      (0)
-#define DEV_REMOVEABLE(TGT)    (0)
 
 static unsigned int sdebug_store_sectors;
 static sector_t sdebug_capacity;	/* in sectors */
@@ -774,10 +778,10 @@ static int inquiry_evpd_b1(unsigned char *arr)
 	return 0x3c;
 }
 
-/* Thin provisioning VPD page (SBC-3) */
+/* Logical block provisioning VPD page (SBC-3) */
 static int inquiry_evpd_b2(unsigned char *arr)
 {
-	memset(arr, 0, 0x8);
+	memset(arr, 0, 0x4);
 	arr[0] = 0;			/* threshold exponent */
 
 	if (scsi_debug_lbpu)
@@ -789,7 +793,10 @@ static int inquiry_evpd_b2(unsigned char *arr)
 	if (scsi_debug_lbpws10)
 		arr[1] |= 1 << 5;
 
-	return 0x8;
+	if (scsi_debug_lbprz)
+		arr[1] |= 1 << 2;
+
+	return 0x4;
 }
 
 #define SDEBUG_LONG_INQ_SZ 96
@@ -913,7 +920,7 @@ static int resp_inquiry(struct scsi_cmnd * scp, int target,
 		return ret;
 	}
 	/* drops through here for a standard inquiry */
-	arr[1] = DEV_REMOVEABLE(target) ? 0x80 : 0;	/* Removable disk */
+	arr[1] = scsi_debug_removable ? 0x80 : 0;	/* Removable disk */
 	arr[2] = scsi_debug_scsi_level;
 	arr[3] = 2;    /* response_data_format==2 */
 	arr[4] = SDEBUG_LONG_INQ_SZ - 5;
@@ -1070,8 +1077,11 @@ static int resp_readcap16(struct scsi_cmnd * scp,
 	arr[13] = scsi_debug_physblk_exp & 0xf;
 	arr[14] = (scsi_debug_lowest_aligned >> 8) & 0x3f;
 
-	if (scsi_debug_lbp())
+	if (scsi_debug_lbp()) {
 		arr[14] |= 0x80; /* LBPME */
+		if (scsi_debug_lbprz)
+			arr[14] |= 0x40; /* LBPRZ */
+	}
 
 	arr[15] = scsi_debug_lowest_aligned & 0xff;
 
@@ -1202,7 +1212,7 @@ static int resp_format_pg(unsigned char * p, int pcontrol, int target)
 	p[11] = sdebug_sectors_per & 0xff;
 	p[12] = (scsi_debug_sector_size >> 8) & 0xff;
 	p[13] = scsi_debug_sector_size & 0xff;
-	if (DEV_REMOVEABLE(target))
+	if (scsi_debug_removable)
 		p[20] |= 0x20; /* should agree with INQUIRY */
 	if (1 == pcontrol)
 		memset(p + 2, 0, sizeof(format_pg) - 2);
@@ -1778,7 +1788,7 @@ static int prot_verify_read(struct scsi_cmnd *SCpnt, sector_t start_sec,
 	scsi_for_each_prot_sg(SCpnt, psgl, scsi_prot_sg_count(SCpnt), i) {
 		int len = min(psgl->length, resid);
 
-		paddr = kmap_atomic(sg_page(psgl), KM_IRQ0) + psgl->offset;
+		paddr = kmap_atomic(sg_page(psgl)) + psgl->offset;
 		memcpy(paddr, dif_storep + dif_offset(sector), len);
 
 		sector += len >> 3;
@@ -1788,7 +1798,7 @@ static int prot_verify_read(struct scsi_cmnd *SCpnt, sector_t start_sec,
 			sector = do_div(tmp_sec, sdebug_store_sectors);
 		}
 		resid -= len;
-		kunmap_atomic(paddr, KM_IRQ0);
+		kunmap_atomic(paddr);
 	}
 
 	dix_reads++;
@@ -1881,12 +1891,12 @@ static int prot_verify_write(struct scsi_cmnd *SCpnt, sector_t start_sec,
 	BUG_ON(scsi_sg_count(SCpnt) == 0);
 	BUG_ON(scsi_prot_sg_count(SCpnt) == 0);
 
-	paddr = kmap_atomic(sg_page(psgl), KM_IRQ1) + psgl->offset;
+	paddr = kmap_atomic(sg_page(psgl)) + psgl->offset;
 	ppage_offset = 0;
 
 	/* For each data page */
 	scsi_for_each_sg(SCpnt, dsgl, scsi_sg_count(SCpnt), i) {
-		daddr = kmap_atomic(sg_page(dsgl), KM_IRQ0) + dsgl->offset;
+		daddr = kmap_atomic(sg_page(dsgl)) + dsgl->offset;
 
 		/* For each sector-sized chunk in data page */
 		for (j = 0 ; j < dsgl->length ; j += scsi_debug_sector_size) {
@@ -1895,10 +1905,10 @@ static int prot_verify_write(struct scsi_cmnd *SCpnt, sector_t start_sec,
 			 * protection page advance to the next one
 			 */
 			if (ppage_offset >= psgl->length) {
-				kunmap_atomic(paddr, KM_IRQ1);
+				kunmap_atomic(paddr);
 				psgl = sg_next(psgl);
 				BUG_ON(psgl == NULL);
-				paddr = kmap_atomic(sg_page(psgl), KM_IRQ1)
+				paddr = kmap_atomic(sg_page(psgl))
 					+ psgl->offset;
 				ppage_offset = 0;
 			}
@@ -1971,10 +1981,10 @@ static int prot_verify_write(struct scsi_cmnd *SCpnt, sector_t start_sec,
 			ppage_offset += sizeof(struct sd_dif_tuple);
 		}
 
-		kunmap_atomic(daddr, KM_IRQ0);
+		kunmap_atomic(daddr);
 	}
 
-	kunmap_atomic(paddr, KM_IRQ1);
+	kunmap_atomic(paddr);
 
 	dix_writes++;
 
@@ -1982,8 +1992,8 @@ static int prot_verify_write(struct scsi_cmnd *SCpnt, sector_t start_sec,
 
 out:
 	dif_errors++;
-	kunmap_atomic(daddr, KM_IRQ0);
-	kunmap_atomic(paddr, KM_IRQ1);
+	kunmap_atomic(daddr);
+	kunmap_atomic(paddr);
 	return ret;
 }
 
@@ -2045,10 +2055,13 @@ static void unmap_region(sector_t lba, unsigned int len)
 		block = lba + alignment;
 		rem = do_div(block, granularity);
 
-		if (rem == 0 && lba + granularity <= end &&
-		    block < map_size)
+		if (rem == 0 && lba + granularity < end && block < map_size) {
 			clear_bit(block, map_storep);
-
+			if (scsi_debug_lbprz)
+				memset(fake_storep +
+				       block * scsi_debug_sector_size, 0,
+				       scsi_debug_sector_size);
+		}
 		lba += granularity - rem;
 	}
 }
@@ -2220,7 +2233,7 @@ static int resp_get_lba_status(struct scsi_cmnd * scmd,
 	mapped = map_state(lba, &num);
 
 	memset(arr, 0, SDEBUG_GET_LBA_STATUS_LEN);
-	put_unaligned_be32(16, &arr[0]);	/* Parameter Data Length */
+	put_unaligned_be32(20, &arr[0]);	/* Parameter Data Length */
 	put_unaligned_be64(lba, &arr[8]);	/* LBA */
 	put_unaligned_be32(num, &arr[16]);	/* Number of blocks */
 	arr[20] = !mapped;			/* mapped = 0, unmapped = 1 */
@@ -2303,7 +2316,7 @@ static int resp_xdwriteread(struct scsi_cmnd *scp, unsigned long long lba,
 
 	offset = 0;
 	for_each_sg(sdb->table.sgl, sg, sdb->table.nents, i) {
-		kaddr = (unsigned char *)kmap_atomic(sg_page(sg), KM_USER0);
+		kaddr = (unsigned char *)kmap_atomic(sg_page(sg));
 		if (!kaddr)
 			goto out;
 
@@ -2311,7 +2324,7 @@ static int resp_xdwriteread(struct scsi_cmnd *scp, unsigned long long lba,
 			*(kaddr + sg->offset + j) ^= *(buf + offset + j);
 
 		offset += sg->length;
-		kunmap_atomic(kaddr, KM_USER0);
+		kunmap_atomic(kaddr);
 	}
 	ret = 0;
 out:
@@ -2730,6 +2743,7 @@ module_param_named(guard, scsi_debug_guard, int, S_IRUGO);
 module_param_named(lbpu, scsi_debug_lbpu, int, S_IRUGO);
 module_param_named(lbpws, scsi_debug_lbpws, int, S_IRUGO);
 module_param_named(lbpws10, scsi_debug_lbpws10, int, S_IRUGO);
+module_param_named(lbprz, scsi_debug_lbprz, int, S_IRUGO);
 module_param_named(lowest_aligned, scsi_debug_lowest_aligned, int, S_IRUGO);
 module_param_named(max_luns, scsi_debug_max_luns, int, S_IRUGO | S_IWUSR);
 module_param_named(max_queue, scsi_debug_max_queue, int, S_IRUGO | S_IWUSR);
@@ -2741,6 +2755,7 @@ module_param_named(opt_blks, scsi_debug_opt_blks, int, S_IRUGO);
 module_param_named(opts, scsi_debug_opts, int, S_IRUGO | S_IWUSR);
 module_param_named(physblk_exp, scsi_debug_physblk_exp, int, S_IRUGO);
 module_param_named(ptype, scsi_debug_ptype, int, S_IRUGO | S_IWUSR);
+module_param_named(removable, scsi_debug_removable, bool, S_IRUGO | S_IWUSR);
 module_param_named(scsi_level, scsi_debug_scsi_level, int, S_IRUGO);
 module_param_named(sector_size, scsi_debug_sector_size, int, S_IRUGO);
 module_param_named(unmap_alignment, scsi_debug_unmap_alignment, int, S_IRUGO);
@@ -2771,6 +2786,7 @@ MODULE_PARM_DESC(guard, "protection checksum: 0=crc, 1=ip (def=0)");
 MODULE_PARM_DESC(lbpu, "enable LBP, support UNMAP command (def=0)");
 MODULE_PARM_DESC(lbpws, "enable LBP, support WRITE SAME(16) with UNMAP bit (def=0)");
 MODULE_PARM_DESC(lbpws10, "enable LBP, support WRITE SAME(10) with UNMAP bit (def=0)");
+MODULE_PARM_DESC(lbprz, "unmapped blocks return 0 on read (def=1)");
 MODULE_PARM_DESC(lowest_aligned, "lowest aligned lba (def=0)");
 MODULE_PARM_DESC(max_luns, "number of LUNs per target to simulate(def=1)");
 MODULE_PARM_DESC(max_queue, "max number of queued commands (1 to 255(def))");
@@ -2782,6 +2798,7 @@ MODULE_PARM_DESC(opt_blks, "optimal transfer length in block (def=64)");
 MODULE_PARM_DESC(opts, "1->noise, 2->medium_err, 4->timeout, 8->recovered_err... (def=0)");
 MODULE_PARM_DESC(physblk_exp, "physical block exponent (def=0)");
 MODULE_PARM_DESC(ptype, "SCSI peripheral type(def=0[disk])");
+MODULE_PARM_DESC(removable, "claim to have removable media (def=0)");
 MODULE_PARM_DESC(scsi_level, "SCSI level to simulate(def=5[SPC-3])");
 MODULE_PARM_DESC(sector_size, "logical block size in bytes (def=512)");
 MODULE_PARM_DESC(unmap_alignment, "lowest aligned thin provisioning lba (def=0)");
@@ -3191,6 +3208,25 @@ static ssize_t sdebug_map_show(struct device_driver *ddp, char *buf)
 }
 DRIVER_ATTR(map, S_IRUGO, sdebug_map_show, NULL);
 
+static ssize_t sdebug_removable_show(struct device_driver *ddp,
+				     char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%d\n", scsi_debug_removable ? 1 : 0);
+}
+static ssize_t sdebug_removable_store(struct device_driver *ddp,
+				      const char *buf, size_t count)
+{
+	int n;
+
+	if ((count > 0) && (1 == sscanf(buf, "%d", &n)) && (n >= 0)) {
+		scsi_debug_removable = (n > 0);
+		return count;
+	}
+	return -EINVAL;
+}
+DRIVER_ATTR(removable, S_IRUGO | S_IWUSR, sdebug_removable_show,
+	    sdebug_removable_store);
+
 
 /* Note: The following function creates attribute files in the
    /sys/bus/pseudo/drivers/scsi_debug directory. The advantage of these
@@ -3216,6 +3252,7 @@ static int do_create_driverfs_files(void)
 	ret |= driver_create_file(&sdebug_driverfs_driver, &driver_attr_num_tgts);
 	ret |= driver_create_file(&sdebug_driverfs_driver, &driver_attr_ptype);
 	ret |= driver_create_file(&sdebug_driverfs_driver, &driver_attr_opts);
+	ret |= driver_create_file(&sdebug_driverfs_driver, &driver_attr_removable);
 	ret |= driver_create_file(&sdebug_driverfs_driver, &driver_attr_scsi_level);
 	ret |= driver_create_file(&sdebug_driverfs_driver, &driver_attr_virtual_gb);
 	ret |= driver_create_file(&sdebug_driverfs_driver, &driver_attr_vpd_use_hostno);
@@ -3241,6 +3278,7 @@ static void do_remove_driverfs_files(void)
 	driver_remove_file(&sdebug_driverfs_driver, &driver_attr_scsi_level);
 	driver_remove_file(&sdebug_driverfs_driver, &driver_attr_opts);
 	driver_remove_file(&sdebug_driverfs_driver, &driver_attr_ptype);
+	driver_remove_file(&sdebug_driverfs_driver, &driver_attr_removable);
 	driver_remove_file(&sdebug_driverfs_driver, &driver_attr_num_tgts);
 	driver_remove_file(&sdebug_driverfs_driver, &driver_attr_num_parts);
 	driver_remove_file(&sdebug_driverfs_driver, &driver_attr_no_uld);
@@ -3615,6 +3653,9 @@ int scsi_debug_queuecommand_lck(struct scsi_cmnd *SCpnt, done_funct_t done)
 			scsi_debug_every_nth = -1;
 		if (SCSI_DEBUG_OPT_TIMEOUT & scsi_debug_opts)
 			return 0; /* ignore command causing timeout */
+		else if (SCSI_DEBUG_OPT_MAC_TIMEOUT & scsi_debug_opts &&
+			 scsi_medium_access_command(SCpnt))
+			return 0; /* time out reads and writes */
 		else if (SCSI_DEBUG_OPT_RECOVERED_ERR & scsi_debug_opts)
 			inj_recovered = 1; /* to reads and writes below */
 		else if (SCSI_DEBUG_OPT_TRANSPORT_ERR & scsi_debug_opts)

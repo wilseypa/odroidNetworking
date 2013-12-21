@@ -24,7 +24,6 @@
 
 #include <asm/pgtable.h>
 #include <asm/page.h>
-#include <asm/system.h>
 #include <asm/uaccess.h>
 #include <asm/ptrace.h>
 #include <asm/elf.h>
@@ -155,7 +154,7 @@ int ptrace_setxregs(struct task_struct *child, void __user *uregs)
 	coprocessor_flush_all(ti);
 	coprocessor_release_all(ti);
 
-	ret |= __copy_from_user(&ti->xtregs_cp, &xtregs->cp0, 
+	ret |= __copy_from_user(&ti->xtregs_cp, &xtregs->cp0,
 				sizeof(xtregs_coprocessor_t));
 #endif
 	ret |= __copy_from_user(&regs->xtregs_opt, &xtregs->opt,
@@ -334,8 +333,7 @@ void do_syscall_trace_enter(struct pt_regs *regs)
 		do_syscall_trace();
 
 #if 0
-	if (unlikely(current->audit_context))
-		audit_syscall_entry(current, AUDIT_ARCH_XTENSA..);
+	audit_syscall_entry(current, AUDIT_ARCH_XTENSA..);
 #endif
 }
 
@@ -345,4 +343,3 @@ void do_syscall_trace_leave(struct pt_regs *regs)
 			&& (current->ptrace & PT_PTRACED))
 		do_syscall_trace();
 }
-

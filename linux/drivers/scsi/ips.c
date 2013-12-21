@@ -389,14 +389,14 @@ MODULE_DEVICE_TABLE( pci, ips_pci_table );
 
 static char ips_hot_plug_name[] = "ips";
 
-static int __devinit  ips_insert_device(struct pci_dev *pci_dev, const struct pci_device_id *ent);
-static void __devexit ips_remove_device(struct pci_dev *pci_dev);
+static int  ips_insert_device(struct pci_dev *pci_dev, const struct pci_device_id *ent);
+static void ips_remove_device(struct pci_dev *pci_dev);
 
 static struct pci_driver ips_pci_driver = {
 	.name		= ips_hot_plug_name,
 	.id_table	= ips_pci_table,
 	.probe		= ips_insert_device,
-	.remove		= __devexit_p(ips_remove_device),
+	.remove		= ips_remove_device,
 };
 
 
@@ -1511,14 +1511,14 @@ static int ips_is_passthru(struct scsi_cmnd *SC)
                 /* kmap_atomic() ensures addressability of the user buffer.*/
                 /* local_irq_save() protects the KM_IRQ0 address slot.     */
                 local_irq_save(flags);
-                buffer = kmap_atomic(sg_page(sg), KM_IRQ0) + sg->offset;
+                buffer = kmap_atomic(sg_page(sg)) + sg->offset;
                 if (buffer && buffer[0] == 'C' && buffer[1] == 'O' &&
                     buffer[2] == 'P' && buffer[3] == 'P') {
-                        kunmap_atomic(buffer - sg->offset, KM_IRQ0);
+                        kunmap_atomic(buffer - sg->offset);
                         local_irq_restore(flags);
                         return 1;
                 }
-                kunmap_atomic(buffer - sg->offset, KM_IRQ0);
+                kunmap_atomic(buffer - sg->offset);
                 local_irq_restore(flags);
 	}
 	return 0;
@@ -4494,7 +4494,7 @@ ips_init_scb(ips_ha_t * ha, ips_scb_t * scb)
 /*                                                                          */
 /*   Initialize a CCB to default values                                     */
 /*                                                                          */
-/* ASSUMED to be callled from within a lock                                 */
+/* ASSUMED to be called from within a lock                                 */
 /*                                                                          */
 /****************************************************************************/
 static ips_scb_t *
@@ -6837,7 +6837,7 @@ err_out_sh:
 /*   Routine Description:                                                    */
 /*     Remove one Adapter ( Hot Plugging )                                   */
 /*---------------------------------------------------------------------------*/
-static void __devexit
+static void
 ips_remove_device(struct pci_dev *pci_dev)
 {
 	struct Scsi_Host *sh = pci_get_drvdata(pci_dev);
@@ -6898,7 +6898,7 @@ module_exit(ips_module_exit);
 /*   Return Value:                                                           */
 /*     0 if Successful, else non-zero                                        */
 /*---------------------------------------------------------------------------*/
-static int __devinit
+static int
 ips_insert_device(struct pci_dev *pci_dev, const struct pci_device_id *ent)
 {
 	int index = -1;

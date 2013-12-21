@@ -32,7 +32,7 @@ typedef struct _TARGET_PARAMS
       B_UINT32 m_u32PowerSavingModesEnable; //bit 1: 1 Idlemode enable; bit2: 1 Sleepmode Enable
 	  /* PowerSaving Mode Options:
 	     bit 0 = 1: CPE mode - to keep pcmcia if alive;
-	     bit 1 = 1: CINR reporing in Idlemode Msg
+	     bit 1 = 1: CINR reporting in Idlemode Msg
 	     bit 2 = 1: Default PSC Enable in sleepmode*/
       B_UINT32 m_u32PowerSavingModeOptions;
 
@@ -72,8 +72,8 @@ typedef struct _TARGET_PARAMS
 	// removed SHUT down related 'unused' params from here to sync 4.x and 5.x CFG files..
 
     //BAMC Related Parameters
-    //Bit 0-15 Band AMC signaling configuration: Bit 1 = 1 – Enable Band AMC signaling.
-    //bit 16-31 Band AMC Data configuration: Bit 16 = 1 – Band AMC 2x3 support.
+    //Bit 0-15 Band AMC signaling configuration: Bit 1 = 1 Â– Enable Band AMC signaling.
+    //bit 16-31 Band AMC Data configuration: Bit 16 = 1 Â– Band AMC 2x3 support.
 	B_UINT32 m_u32BandAMCEnable;
 
 } stTargetParams,TARGET_PARAMS,*PTARGET_PARAMS, STARGETPARAMS, *PSTARGETPARAMS;

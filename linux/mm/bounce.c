@@ -4,7 +4,7 @@
  */
 
 #include <linux/mm.h>
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/swap.h>
 #include <linux/gfp.h>
 #include <linux/bio.h>
@@ -14,6 +14,7 @@
 #include <linux/init.h>
 #include <linux/hash.h>
 #include <linux/highmem.h>
+#include <linux/bootmem.h>
 #include <asm/tlbflush.h>
 
 #include <trace/events/block.h>
@@ -23,25 +24,25 @@
 
 static mempool_t *page_pool, *isa_page_pool;
 
-#ifdef CONFIG_HIGHMEM
+#if defined(CONFIG_HIGHMEM) || defined(CONFIG_NEED_BOUNCE_POOL)
 static __init int init_emergency_pool(void)
 {
-	struct sysinfo i;
-	si_meminfo(&i);
-	si_swapinfo(&i);
-
-	if (!i.totalhigh)
+#if defined(CONFIG_HIGHMEM) && !defined(CONFIG_MEMORY_HOTPLUG)
+	if (max_pfn <= max_low_pfn)
 		return 0;
+#endif
 
 	page_pool = mempool_create_page_pool(POOL_SIZE, 0);
 	BUG_ON(!page_pool);
-	printk("highmem bounce pool size: %d pages\n", POOL_SIZE);
+	printk("bounce pool size: %d pages\n", POOL_SIZE);
 
 	return 0;
 }
 
 __initcall(init_emergency_pool);
+#endif
 
+#ifdef CONFIG_HIGHMEM
 /*
  * highmem version, map in to vec
  */
@@ -51,9 +52,9 @@ static void bounce_copy_vec(struct bio_vec *to, unsigned char *vfrom)
 	unsigned char *vto;
 
 	local_irq_save(flags);
-	vto = kmap_atomic(to->bv_page, KM_BOUNCE_READ);
+	vto = kmap_atomic(to->bv_page);
 	memcpy(vto + to->bv_offset, vfrom, to->bv_len);
-	kunmap_atomic(vto, KM_BOUNCE_READ);
+	kunmap_atomic(vto);
 	local_irq_restore(flags);
 }
 
@@ -133,7 +134,7 @@ static void bounce_end_io(struct bio *bio, mempool_t *pool, int err)
 	/*
 	 * free up bounce indirect pages used
 	 */
-	__bio_for_each_segment(bvec, bio, i, 0) {
+	bio_for_each_segment_all(bvec, bio, i) {
 		org_vec = bio_orig->bi_io_vec + i;
 		if (bvec->bv_page == org_vec->bv_page)
 			continue;

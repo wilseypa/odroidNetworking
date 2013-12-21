@@ -12,6 +12,7 @@
 #include <linux/utsname.h>
 #include <generated/utsrelease.h>
 #include <linux/version.h>
+#include <linux/proc_fs.h>
 
 #ifndef CONFIG_KALLSYMS
 #define version(a) Version_ ## a
@@ -34,13 +35,18 @@ struct uts_namespace init_uts_ns = {
 		.domainname	= UTS_DOMAINNAME,
 	},
 	.user_ns = &init_user_ns,
+	.proc_inum = PROC_UTS_INIT_INO,
 };
 EXPORT_SYMBOL_GPL(init_uts_ns);
 
 /* FIXED STRINGS! Don't touch! */
 const char linux_banner[] =
 	"Linux version " UTS_RELEASE " (" LINUX_COMPILE_BY "@"
-	LINUX_COMPILE_HOST ") (" LINUX_COMPILER ") " UTS_VERSION "\n";
+	LINUX_COMPILE_HOST ") (" LINUX_COMPILER ") " UTS_VERSION
+#ifdef CONFIG_VERSION_SIGNATURE
+        " (" CONFIG_VERSION_SIGNATURE ")"
+#endif
+	"\n";
 
 const char linux_proc_banner[] =
 	"%s version %s"

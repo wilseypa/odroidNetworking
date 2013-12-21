@@ -16,6 +16,7 @@
  * option) any later version.
  */
 
+#include <linux/module.h>
 #include <linux/delay.h>
 #include <linux/clk.h>
 #include <linux/io.h>
@@ -659,7 +660,7 @@ int s3c_i2sv2_probe(struct snd_soc_dai *dai,
 	if (IS_ERR(i2s->iis_pclk)) {
 		dev_err(dev, "failed to get iis_clock\n");
 		iounmap(i2s->regs);
-		return PTR_ERR(i2s->iis_pclk);
+		return -ENOENT;
 	}
 
 	clk_enable(i2s->iis_pclk);

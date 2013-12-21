@@ -9,14 +9,6 @@
 
 struct mm_struct;
 
-#ifdef CONFIG_DEBUG_VM
-extern void assert_pte_locked(struct mm_struct *mm, unsigned long addr);
-#else /* CONFIG_DEBUG_VM */
-static inline void assert_pte_locked(struct mm_struct *mm, unsigned long addr)
-{
-}
-#endif /* !CONFIG_DEBUG_VM */
-
 #endif /* !__ASSEMBLY__ */
 
 #if defined(CONFIG_PPC64)
@@ -26,6 +18,8 @@ static inline void assert_pte_locked(struct mm_struct *mm, unsigned long addr)
 #endif
 
 #ifndef __ASSEMBLY__
+
+#include <asm/tlbflush.h>
 
 /* Generic accessors to PTE bits */
 static inline int pte_write(pte_t pte)		{ return pte_val(pte) & _PAGE_RW; }
@@ -169,6 +163,9 @@ extern int ptep_set_access_flags(struct vm_area_struct *vma, unsigned long addre
 
 #define pgprot_cached_wthru(prot) (__pgprot((pgprot_val(prot) & ~_PAGE_CACHE_CTL) | \
 				            _PAGE_COHERENT | _PAGE_WRITETHRU))
+
+#define pgprot_cached_noncoherent(prot) \
+		(__pgprot(pgprot_val(prot) & ~_PAGE_CACHE_CTL))
 
 #define pgprot_writecombine pgprot_noncached_wc
 

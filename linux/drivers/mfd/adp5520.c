@@ -110,7 +110,7 @@ int adp5520_set_bits(struct device *dev, int reg, uint8_t bit_mask)
 
 	ret = __adp5520_read(chip->client, reg, &reg_val);
 
-	if (!ret && ((reg_val & bit_mask) == 0)) {
+	if (!ret && ((reg_val & bit_mask) != bit_mask)) {
 		reg_val |= bit_mask;
 		ret = __adp5520_write(chip->client, reg, reg_val);
 	}
@@ -204,7 +204,7 @@ static int adp5520_remove_subdevs(struct adp5520_chip *chip)
 	return device_for_each_child(chip->dev, NULL, __remove_subdev);
 }
 
-static int __devinit adp5520_probe(struct i2c_client *client,
+static int adp5520_probe(struct i2c_client *client,
 					const struct i2c_device_id *id)
 {
 	struct adp5520_platform_data *pdata = client->dev.platform_data;
@@ -308,7 +308,7 @@ out_free_chip:
 	return ret;
 }
 
-static int __devexit adp5520_remove(struct i2c_client *client)
+static int adp5520_remove(struct i2c_client *client)
 {
 	struct adp5520_chip *chip = dev_get_drvdata(&client->dev);
 
@@ -321,7 +321,7 @@ static int __devexit adp5520_remove(struct i2c_client *client)
 	return 0;
 }
 
-#ifdef CONFIG_PM
+#ifdef CONFIG_PM_SLEEP
 static int adp5520_suspend(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
@@ -360,7 +360,7 @@ static struct i2c_driver adp5520_driver = {
 		.pm	= &adp5520_pm,
 	},
 	.probe		= adp5520_probe,
-	.remove		= __devexit_p(adp5520_remove),
+	.remove		= adp5520_remove,
 	.id_table 	= adp5520_id,
 };
 

@@ -122,6 +122,7 @@ void ipc_init_ids(struct ipc_ids *ids)
 
 	ids->in_use = 0;
 	ids->seq = 0;
+	ids->next_id = -1;
 	{
 		int seq_limit = INT_MAX/SEQ_MULTIPLIER;
 		if (seq_limit > USHRT_MAX)
@@ -249,9 +250,10 @@ int ipc_get_maxid(struct ipc_ids *ids)
  
 int ipc_addid(struct ipc_ids* ids, struct kern_ipc_perm* new, int size)
 {
-	uid_t euid;
-	gid_t egid;
+	kuid_t euid;
+	kgid_t egid;
 	int id, err;
+	int next_id = ids->next_id;
 
 	if (size > IPCMNI)
 		size = IPCMNI;
@@ -264,7 +266,8 @@ int ipc_addid(struct ipc_ids* ids, struct kern_ipc_perm* new, int size)
 	rcu_read_lock();
 	spin_lock(&new->lock);
 
-	err = idr_get_new(&ids->ipcs_idr, new, &id);
+	err = idr_get_new_above(&ids->ipcs_idr, new,
+				(next_id < 0) ? 0 : ipcid_to_idx(next_id), &id);
 	if (err) {
 		spin_unlock(&new->lock);
 		rcu_read_unlock();
@@ -277,9 +280,14 @@ int ipc_addid(struct ipc_ids* ids, struct kern_ipc_perm* new, int size)
 	new->cuid = new->uid = euid;
 	new->gid = new->cgid = egid;
 
-	new->seq = ids->seq++;
-	if(ids->seq > ids->seq_max)
-		ids->seq = 0;
+	if (next_id < 0) {
+		new->seq = ids->seq++;
+		if (ids->seq > ids->seq_max)
+			ids->seq = 0;
+	} else {
+		new->seq = ipcid_to_seqx(next_id);
+		ids->next_id = -1;
+	}
 
 	new->id = ipc_buildid(id, new->seq);
 	return id;
@@ -579,19 +587,6 @@ static void ipc_schedule_free(struct rcu_head *head)
 	schedule_work(&sched->work);
 }
 
-/**
- * ipc_immediate_free - free ipc + rcu space
- * @head: RCU callback structure that contains pointer to be freed
- *
- * Free from the RCU callback context.
- */
-static void ipc_immediate_free(struct rcu_head *head)
-{
-	struct ipc_rcu_grace *free =
-		container_of(head, struct ipc_rcu_grace, rcu);
-	kfree(free);
-}
-
 void ipc_rcu_putref(void *ptr)
 {
 	if (--container_of(ptr, struct ipc_rcu_hdr, data)->refcount > 0)
@@ -601,8 +596,7 @@ void ipc_rcu_putref(void *ptr)
 		call_rcu(&container_of(ptr, struct ipc_rcu_grace, data)->rcu,
 				ipc_schedule_free);
 	} else {
-		call_rcu(&container_of(ptr, struct ipc_rcu_grace, data)->rcu,
-				ipc_immediate_free);
+		kfree_rcu(container_of(ptr, struct ipc_rcu_grace, data), rcu);
 	}
 }
 
@@ -620,14 +614,14 @@ void ipc_rcu_putref(void *ptr)
  
 int ipcperms(struct ipc_namespace *ns, struct kern_ipc_perm *ipcp, short flag)
 {
-	uid_t euid = current_euid();
+	kuid_t euid = current_euid();
 	int requested_mode, granted_mode;
 
 	audit_ipc_obj(ipcp);
 	requested_mode = (flag >> 6) | (flag >> 3) | flag;
 	granted_mode = ipcp->mode;
-	if (euid == ipcp->cuid ||
-	    euid == ipcp->uid)
+	if (uid_eq(euid, ipcp->cuid) ||
+	    uid_eq(euid, ipcp->uid))
 		granted_mode >>= 6;
 	else if (in_group_p(ipcp->cgid) || in_group_p(ipcp->gid))
 		granted_mode >>= 3;
@@ -657,10 +651,10 @@ int ipcperms(struct ipc_namespace *ns, struct kern_ipc_perm *ipcp, short flag)
 void kernel_to_ipc64_perm (struct kern_ipc_perm *in, struct ipc64_perm *out)
 {
 	out->key	= in->key;
-	out->uid	= in->uid;
-	out->gid	= in->gid;
-	out->cuid	= in->cuid;
-	out->cgid	= in->cgid;
+	out->uid	= from_kuid_munged(current_user_ns(), in->uid);
+	out->gid	= from_kgid_munged(current_user_ns(), in->gid);
+	out->cuid	= from_kuid_munged(current_user_ns(), in->cuid);
+	out->cgid	= from_kgid_munged(current_user_ns(), in->cgid);
 	out->mode	= in->mode;
 	out->seq	= in->seq;
 }
@@ -761,12 +755,19 @@ int ipcget(struct ipc_namespace *ns, struct ipc_ids *ids,
  * @in:  the permission given as input.
  * @out: the permission of the ipc to set.
  */
-void ipc_update_perm(struct ipc64_perm *in, struct kern_ipc_perm *out)
+int ipc_update_perm(struct ipc64_perm *in, struct kern_ipc_perm *out)
 {
-	out->uid = in->uid;
-	out->gid = in->gid;
+	kuid_t uid = make_kuid(current_user_ns(), in->uid);
+	kgid_t gid = make_kgid(current_user_ns(), in->gid);
+	if (!uid_valid(uid) || !gid_valid(gid))
+		return -EINVAL;
+
+	out->uid = uid;
+	out->gid = gid;
 	out->mode = (out->mode & ~S_IRWXUGO)
 		| (in->mode & S_IRWXUGO);
+
+	return 0;
 }
 
 /**
@@ -791,7 +792,7 @@ struct kern_ipc_perm *ipcctl_pre_down(struct ipc_namespace *ns,
 				      struct ipc64_perm *perm, int extra_perm)
 {
 	struct kern_ipc_perm *ipcp;
-	uid_t euid;
+	kuid_t euid;
 	int err;
 
 	down_write(&ids->rw_mutex);
@@ -807,7 +808,7 @@ struct kern_ipc_perm *ipcctl_pre_down(struct ipc_namespace *ns,
 					 perm->gid, perm->mode);
 
 	euid = current_euid();
-	if (euid == ipcp->cuid || euid == ipcp->uid  ||
+	if (uid_eq(euid, ipcp->cuid) || uid_eq(euid, ipcp->uid)  ||
 	    ns_capable(ns->user_ns, CAP_SYS_ADMIN))
 		return ipcp;
 
@@ -818,7 +819,7 @@ out_up:
 	return ERR_PTR(err);
 }
 
-#ifdef __ARCH_WANT_IPC_PARSE_VERSION
+#ifdef CONFIG_ARCH_WANT_IPC_PARSE_VERSION
 
 
 /**
@@ -840,7 +841,7 @@ int ipc_parse_version (int *cmd)
 	}
 }
 
-#endif /* __ARCH_WANT_IPC_PARSE_VERSION */
+#endif /* CONFIG_ARCH_WANT_IPC_PARSE_VERSION */
 
 #ifdef CONFIG_PROC_FS
 struct ipc_proc_iter {

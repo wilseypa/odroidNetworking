@@ -29,7 +29,6 @@
  */
 #include <linux/kernel.h>
 #include <linux/device.h>
-#include <linux/module.h>
 #include <linux/fs.h>
 #include <linux/init.h>
 #include <asm/uaccess.h>
@@ -46,13 +45,11 @@
 #include <asm/mipsregs.h>
 #include <asm/mipsmtregs.h>
 #include <asm/cacheflush.h>
-#include <asm/atomic.h>
+#include <linux/atomic.h>
 #include <asm/cpu.h>
 #include <asm/mips_mt.h>
 #include <asm/processor.h>
-#include <asm/system.h>
 #include <asm/vpe.h>
-#include <asm/kspd.h>
 
 typedef void *vpe_handle;
 
@@ -70,11 +67,6 @@ static int hw_tcs, hw_vpes;
 static char module_name[] = "vpe";
 static int major;
 static const int minor = 1;	/* fixed for now  */
-
-#ifdef CONFIG_MIPS_APSP_KSPD
-static struct kspd_notifications kspd_events;
-static int kspd_events_reqd;
-#endif
 
 /* grab the likely amount of memory we will need. */
 #ifdef CONFIG_MIPS_VPE_LOADER_TOM
@@ -192,7 +184,7 @@ static struct tc *get_tc(int index)
 	}
 	spin_unlock(&vpecontrol.tc_list_lock);
 
-	return NULL;
+	return res;
 }
 
 /* allocate a vpe and associate it with this minor (or index) */
@@ -713,7 +705,7 @@ static int vpe_run(struct vpe * v)
 
 			printk(KERN_WARNING
 			       "VPE loader: TC %d is already in use.\n",
-                               t->index);
+			       v->tc->index);
 			return -ENOEXEC;
 		}
 	} else {
@@ -1103,14 +1095,6 @@ static int vpe_open(struct inode *inode, struct file *filp)
 	v->uid = filp->f_cred->fsuid;
 	v->gid = filp->f_cred->fsgid;
 
-#ifdef CONFIG_MIPS_APSP_KSPD
-	/* get kspd to tell us when a syscall_exit happens */
-	if (!kspd_events_reqd) {
-		kspd_notify(&kspd_events);
-		kspd_events_reqd++;
-	}
-#endif
-
 	v->cwd[0] = 0;
 	ret = getcwd(v->cwd, VPE_PATH_MAX);
 	if (ret < 0)
@@ -1342,13 +1326,6 @@ char *vpe_getcwd(int index)
 }
 
 EXPORT_SYMBOL(vpe_getcwd);
-
-#ifdef CONFIG_MIPS_APSP_KSPD
-static void kspd_sp_exit( int sp_id)
-{
-	cleanup_tc(get_tc(sp_id));
-}
-#endif
 
 static ssize_t store_kill(struct device *dev, struct device_attribute *attr,
 			  const char *buf, size_t len)
@@ -1587,9 +1564,6 @@ out_reenable:
 	emt(mtflags);
 	local_irq_restore(flags);
 
-#ifdef CONFIG_MIPS_APSP_KSPD
-	kspd_events.kspd_sp_exit = kspd_sp_exit;
-#endif
 	return 0;
 
 out_class:

@@ -74,7 +74,6 @@ struct txx9ndfmc_drvdata {
 	unsigned char hold;	/* in gbusclock */
 	unsigned char spw;	/* in gbusclock */
 	struct nand_hw_control hw_control;
-	struct mtd_partition *parts[MAX_TXX9NDFMC_DEV];
 };
 
 static struct platform_device *mtd_to_platdev(struct mtd_info *mtd)
@@ -130,18 +129,6 @@ static void txx9ndfmc_read_buf(struct mtd_info *mtd, uint8_t *buf, int len)
 
 	while (len--)
 		*buf++ = __raw_readl(ndfdtr);
-}
-
-static int txx9ndfmc_verify_buf(struct mtd_info *mtd, const uint8_t *buf,
-				int len)
-{
-	struct platform_device *dev = mtd_to_platdev(mtd);
-	void __iomem *ndfdtr = ndregaddr(dev, TXX9_NDFDTR);
-
-	while (len--)
-		if (*buf++ != (uint8_t)__raw_readl(ndfdtr))
-			return -EFAULT;
-	return 0;
 }
 
 static void txx9ndfmc_cmd_ctrl(struct mtd_info *mtd, int cmd,
@@ -287,7 +274,6 @@ static int txx9ndfmc_nand_scan(struct mtd_info *mtd)
 static int __init txx9ndfmc_probe(struct platform_device *dev)
 {
 	struct txx9ndfmc_platform_data *plat = dev->dev.platform_data;
-	static const char *probes[] = { "cmdlinepart", NULL };
 	int hold, spw;
 	int i;
 	struct txx9ndfmc_drvdata *drvdata;
@@ -300,11 +286,7 @@ static int __init txx9ndfmc_probe(struct platform_device *dev)
 	drvdata = devm_kzalloc(&dev->dev, sizeof(*drvdata), GFP_KERNEL);
 	if (!drvdata)
 		return -ENOMEM;
-	if (!devm_request_mem_region(&dev->dev, res->start,
-				     resource_size(res), dev_name(&dev->dev)))
-		return -EBUSY;
-	drvdata->base = devm_ioremap(&dev->dev, res->start,
-				     resource_size(res));
+	drvdata->base = devm_request_and_ioremap(&dev->dev, res);
 	if (!drvdata->base)
 		return -EBUSY;
 
@@ -333,7 +315,6 @@ static int __init txx9ndfmc_probe(struct platform_device *dev)
 		struct txx9ndfmc_priv *txx9_priv;
 		struct nand_chip *chip;
 		struct mtd_info *mtd;
-		int nr_parts;
 
 		if (!(plat->ch_mask & (1 << i)))
 			continue;
@@ -353,7 +334,6 @@ static int __init txx9ndfmc_probe(struct platform_device *dev)
 		chip->read_byte = txx9ndfmc_read_byte;
 		chip->read_buf = txx9ndfmc_read_buf;
 		chip->write_buf = txx9ndfmc_write_buf;
-		chip->verify_buf = txx9ndfmc_verify_buf;
 		chip->cmd_ctrl = txx9ndfmc_cmd_ctrl;
 		chip->dev_ready = txx9ndfmc_dev_ready;
 		chip->ecc.calculate = txx9ndfmc_calculate_ecc;
@@ -363,6 +343,7 @@ static int __init txx9ndfmc_probe(struct platform_device *dev)
 		/* txx9ndfmc_nand_scan will overwrite ecc.size and ecc.bytes */
 		chip->ecc.size = 256;
 		chip->ecc.bytes = 3;
+		chip->ecc.strength = 1;
 		chip->chip_delay = 100;
 		chip->controller = &drvdata->hw_control;
 
@@ -393,9 +374,7 @@ static int __init txx9ndfmc_probe(struct platform_device *dev)
 		}
 		mtd->name = txx9_priv->mtdname;
 
-		nr_parts = parse_mtd_partitions(mtd, probes,
-						&drvdata->parts[i], 0);
-		mtd_device_register(mtd, drvdata->parts[i], nr_parts);
+		mtd_device_parse_register(mtd, NULL, NULL, NULL, 0);
 		drvdata->mtds[i] = mtd;
 	}
 
@@ -421,7 +400,6 @@ static int __exit txx9ndfmc_remove(struct platform_device *dev)
 		txx9_priv = chip->priv;
 
 		nand_release(mtd);
-		kfree(drvdata->parts[i]);
 		kfree(txx9_priv->mtdname);
 		kfree(txx9_priv);
 	}

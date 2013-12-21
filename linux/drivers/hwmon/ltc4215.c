@@ -19,6 +19,7 @@
 #include <linux/i2c.h>
 #include <linux/hwmon.h>
 #include <linux/hwmon-sysfs.h>
+#include <linux/jiffies.h>
 
 /* Here are names of the chip's registers (a.k.a. commands) */
 enum ltc4215_cmd {
@@ -91,8 +92,10 @@ static int ltc4215_get_voltage(struct device *dev, u8 reg)
 		voltage = regval * 605 / 10;
 		break;
 	case LTC4215_ADIN:
-		/* The ADIN input is divided by 12.5, and has 4.82 mV
-		 * per increment, so we have the additional multiply */
+		/*
+		 * The ADIN input is divided by 12.5, and has 4.82 mV
+		 * per increment, so we have the additional multiply
+		 */
 		voltage = regval * 482 * 125 / 1000;
 		break;
 	default:
@@ -109,7 +112,8 @@ static unsigned int ltc4215_get_current(struct device *dev)
 {
 	struct ltc4215_data *data = ltc4215_update_device(dev);
 
-	/* The strange looking conversions that follow are fixed-point
+	/*
+	 * The strange looking conversions that follow are fixed-point
 	 * math, since we cannot do floating point in the kernel.
 	 *
 	 * Step 1: convert sense register to microVolts
@@ -176,7 +180,8 @@ static ssize_t ltc4215_show_alarm(struct device *dev,
 	return snprintf(buf, PAGE_SIZE, "%u\n", (reg & mask) ? 1 : 0);
 }
 
-/* These macros are used below in constructing device attribute objects
+/*
+ * These macros are used below in constructing device attribute objects
  * for use with sysfs_create_group() to make a sysfs device file
  * for each register.
  */
@@ -215,7 +220,8 @@ LTC4215_ALARM(in1_min_alarm,	(1 << 1),	LTC4215_STATUS);
 LTC4215_VOLTAGE(in2_input,			LTC4215_SOURCE);
 LTC4215_ALARM(in2_min_alarm,	(1 << 3),	LTC4215_STATUS);
 
-/* Finally, construct an array of pointers to members of the above objects,
+/*
+ * Finally, construct an array of pointers to members of the above objects,
  * as required for sysfs_create_group()
  */
 static struct attribute *ltc4215_attributes[] = {
@@ -248,11 +254,9 @@ static int ltc4215_probe(struct i2c_client *client,
 	if (!i2c_check_functionality(adapter, I2C_FUNC_SMBUS_BYTE_DATA))
 		return -ENODEV;
 
-	data = kzalloc(sizeof(*data), GFP_KERNEL);
-	if (!data) {
-		ret = -ENOMEM;
-		goto out_kzalloc;
-	}
+	data = devm_kzalloc(&client->dev, sizeof(*data), GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
 
 	i2c_set_clientdata(client, data);
 	mutex_init(&data->update_lock);
@@ -263,7 +267,7 @@ static int ltc4215_probe(struct i2c_client *client,
 	/* Register sysfs hooks */
 	ret = sysfs_create_group(&client->dev.kobj, &ltc4215_group);
 	if (ret)
-		goto out_sysfs_create_group;
+		return ret;
 
 	data->hwmon_dev = hwmon_device_register(&client->dev);
 	if (IS_ERR(data->hwmon_dev)) {
@@ -275,9 +279,6 @@ static int ltc4215_probe(struct i2c_client *client,
 
 out_hwmon_device_register:
 	sysfs_remove_group(&client->dev.kobj, &ltc4215_group);
-out_sysfs_create_group:
-	kfree(data);
-out_kzalloc:
 	return ret;
 }
 
@@ -287,8 +288,6 @@ static int ltc4215_remove(struct i2c_client *client)
 
 	hwmon_device_unregister(data->hwmon_dev);
 	sysfs_remove_group(&client->dev.kobj, &ltc4215_group);
-
-	kfree(data);
 
 	return 0;
 }
@@ -309,19 +308,8 @@ static struct i2c_driver ltc4215_driver = {
 	.id_table	= ltc4215_id,
 };
 
-static int __init ltc4215_init(void)
-{
-	return i2c_add_driver(&ltc4215_driver);
-}
-
-static void __exit ltc4215_exit(void)
-{
-	i2c_del_driver(&ltc4215_driver);
-}
+module_i2c_driver(ltc4215_driver);
 
 MODULE_AUTHOR("Ira W. Snyder <iws@ovro.caltech.edu>");
 MODULE_DESCRIPTION("LTC4215 driver");
 MODULE_LICENSE("GPL");
-
-module_init(ltc4215_init);
-module_exit(ltc4215_exit);

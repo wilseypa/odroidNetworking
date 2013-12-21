@@ -187,8 +187,8 @@ static const struct file_operations bat_debug_fops = {
 
 static struct dentry *da9030_bat_create_debugfs(struct da9030_charger *charger)
 {
-	charger->debug_file = debugfs_create_file("charger", 0666, 0, charger,
-						 &bat_debug_fops);
+	charger->debug_file = debugfs_create_file("charger", 0666, NULL,
+						  charger, &bat_debug_fops);
 	return charger->debug_file;
 }
 
@@ -588,18 +588,7 @@ static struct platform_driver da903x_battery_driver = {
 	.remove = da9030_battery_remove,
 };
 
-static int da903x_battery_init(void)
-{
-	return platform_driver_register(&da903x_battery_driver);
-}
-
-static void da903x_battery_exit(void)
-{
-	platform_driver_unregister(&da903x_battery_driver);
-}
-
-module_init(da903x_battery_init);
-module_exit(da903x_battery_exit);
+module_platform_driver(da903x_battery_driver);
 
 MODULE_DESCRIPTION("DA9030 battery charger driver");
 MODULE_AUTHOR("Mike Rapoport, CompuLab");

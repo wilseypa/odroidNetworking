@@ -244,16 +244,15 @@ config USB_YUREX
 	  To compile this driver as a module, choose M here: the
 	  module will be called yurex.
 
-config USB_EXYNOS_SWITCH
-	bool "EXYNOS USB SWITCH driver"
-	depends on (USB_EHCI_S5P || USB_OHCI_S5P) && USB_GADGET_S3C_OTGD
-	depends on S5P_DEV_USB_SWITCH
+config USB_EZUSB_FX2
+	tristate "Functions for loading firmware on EZUSB chips"
+	depends on USB
 	help
-	  This driver is for switching host & device controller software.
+	  Say Y here if you need EZUSB device support.
+	  (Cypress FX/FX2/FX2LP microcontrollers)
 
 config USB_HSIC_USB3503
-	tristate "USB3503 HSIC to USB20 Driver"
-	depends on (I2C)
-	help
-	  This option enables support for USB3503 HSIC to USB 2.0 Driver.
-
+       tristate "USB3503 HSIC to USB20 Driver"
+       depends on I2C
+       help
+         This option enables support for SMSC USB3503 HSIC to USB 2.0 Driver.

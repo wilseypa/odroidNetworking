@@ -20,7 +20,6 @@
 #include "xfs_types.h"
 #include "xfs_bit.h"
 #include "xfs_log.h"
-#include "xfs_inum.h"
 #include "xfs_trans.h"
 #include "xfs_sb.h"
 #include "xfs_ag.h"
@@ -31,10 +30,10 @@
 #include "xfs_dinode.h"
 #include "xfs_inode.h"
 #include "xfs_btree.h"
-#include "xfs_btree_trace.h"
 #include "xfs_ialloc.h"
 #include "xfs_alloc.h"
 #include "xfs_error.h"
+#include "xfs_trace.h"
 
 
 STATIC int
@@ -183,6 +182,59 @@ xfs_inobt_key_diff(
 			  cur->bc_rec.i.ir_startino;
 }
 
+void
+xfs_inobt_verify(
+	struct xfs_buf		*bp)
+{
+	struct xfs_mount	*mp = bp->b_target->bt_mount;
+	struct xfs_btree_block	*block = XFS_BUF_TO_BLOCK(bp);
+	unsigned int		level;
+	int			sblock_ok; /* block passes checks */
+
+	/* magic number and level verification */
+	level = be16_to_cpu(block->bb_level);
+	sblock_ok = block->bb_magic == cpu_to_be32(XFS_IBT_MAGIC) &&
+		    level < mp->m_in_maxlevels;
+
+	/* numrecs verification */
+	sblock_ok = sblock_ok &&
+		be16_to_cpu(block->bb_numrecs) <= mp->m_inobt_mxr[level != 0];
+
+	/* sibling pointer verification */
+	sblock_ok = sblock_ok &&
+		(block->bb_u.s.bb_leftsib == cpu_to_be32(NULLAGBLOCK) ||
+		 be32_to_cpu(block->bb_u.s.bb_leftsib) < mp->m_sb.sb_agblocks) &&
+		block->bb_u.s.bb_leftsib &&
+		(block->bb_u.s.bb_rightsib == cpu_to_be32(NULLAGBLOCK) ||
+		 be32_to_cpu(block->bb_u.s.bb_rightsib) < mp->m_sb.sb_agblocks) &&
+		block->bb_u.s.bb_rightsib;
+
+	if (!sblock_ok) {
+		trace_xfs_btree_corrupt(bp, _RET_IP_);
+		XFS_CORRUPTION_ERROR(__func__, XFS_ERRLEVEL_LOW, mp, block);
+		xfs_buf_ioerror(bp, EFSCORRUPTED);
+	}
+}
+
+static void
+xfs_inobt_read_verify(
+	struct xfs_buf	*bp)
+{
+	xfs_inobt_verify(bp);
+}
+
+static void
+xfs_inobt_write_verify(
+	struct xfs_buf	*bp)
+{
+	xfs_inobt_verify(bp);
+}
+
+const struct xfs_buf_ops xfs_inobt_buf_ops = {
+	.verify_read = xfs_inobt_read_verify,
+	.verify_write = xfs_inobt_write_verify,
+};
+
 #ifdef DEBUG
 STATIC int
 xfs_inobt_keys_inorder(
@@ -205,72 +257,6 @@ xfs_inobt_recs_inorder(
 }
 #endif	/* DEBUG */
 
-#ifdef XFS_BTREE_TRACE
-ktrace_t	*xfs_inobt_trace_buf;
-
-STATIC void
-xfs_inobt_trace_enter(
-	struct xfs_btree_cur	*cur,
-	const char		*func,
-	char			*s,
-	int			type,
-	int			line,
-	__psunsigned_t		a0,
-	__psunsigned_t		a1,
-	__psunsigned_t		a2,
-	__psunsigned_t		a3,
-	__psunsigned_t		a4,
-	__psunsigned_t		a5,
-	__psunsigned_t		a6,
-	__psunsigned_t		a7,
-	__psunsigned_t		a8,
-	__psunsigned_t		a9,
-	__psunsigned_t		a10)
-{
-	ktrace_enter(xfs_inobt_trace_buf, (void *)(__psint_t)type,
-		(void *)func, (void *)s, NULL, (void *)cur,
-		(void *)a0, (void *)a1, (void *)a2, (void *)a3,
-		(void *)a4, (void *)a5, (void *)a6, (void *)a7,
-		(void *)a8, (void *)a9, (void *)a10);
-}
-
-STATIC void
-xfs_inobt_trace_cursor(
-	struct xfs_btree_cur	*cur,
-	__uint32_t		*s0,
-	__uint64_t		*l0,
-	__uint64_t		*l1)
-{
-	*s0 = cur->bc_private.a.agno;
-	*l0 = cur->bc_rec.i.ir_startino;
-	*l1 = cur->bc_rec.i.ir_free;
-}
-
-STATIC void
-xfs_inobt_trace_key(
-	struct xfs_btree_cur	*cur,
-	union xfs_btree_key	*key,
-	__uint64_t		*l0,
-	__uint64_t		*l1)
-{
-	*l0 = be32_to_cpu(key->inobt.ir_startino);
-	*l1 = 0;
-}
-
-STATIC void
-xfs_inobt_trace_record(
-	struct xfs_btree_cur	*cur,
-	union xfs_btree_rec	*rec,
-	__uint64_t		*l0,
-	__uint64_t		*l1,
-	__uint64_t		*l2)
-{
-	*l0 = be32_to_cpu(rec->inobt.ir_startino);
-	*l1 = be32_to_cpu(rec->inobt.ir_freecount);
-	*l2 = be64_to_cpu(rec->inobt.ir_free);
-}
-#endif /* XFS_BTREE_TRACE */
-
 static const struct xfs_btree_ops xfs_inobt_ops = {
 	.rec_len		= sizeof(xfs_inobt_rec_t),
 	.key_len		= sizeof(xfs_inobt_key_t),
@@ -286,17 +272,10 @@ static const struct xfs_btree_ops xfs_inobt_ops = {
 	.init_rec_from_cur	= xfs_inobt_init_rec_from_cur,
 	.init_ptr_from_cur	= xfs_inobt_init_ptr_from_cur,
 	.key_diff		= xfs_inobt_key_diff,
-
+	.buf_ops		= &xfs_inobt_buf_ops,
 #ifdef DEBUG
 	.keys_inorder		= xfs_inobt_keys_inorder,
 	.recs_inorder		= xfs_inobt_recs_inorder,
-#endif
-
-#ifdef XFS_BTREE_TRACE
-	.trace_enter		= xfs_inobt_trace_enter,
-	.trace_cursor		= xfs_inobt_trace_cursor,
-	.trace_key		= xfs_inobt_trace_key,
-	.trace_record		= xfs_inobt_trace_record,
 #endif
 };
 

@@ -366,7 +366,8 @@ void sd_dif_config_host(struct scsi_disk *sdkp)
  *
  * Type 3 does not have a reference tag so no remapping is required.
  */
-int sd_dif_prepare(struct request *rq, sector_t hw_sector, unsigned int sector_sz)
+void sd_dif_prepare(struct request *rq, sector_t hw_sector,
+		    unsigned int sector_sz)
 {
 	const int tuple_sz = sizeof(struct sd_dif_tuple);
 	struct bio *bio;
@@ -378,7 +379,7 @@ int sd_dif_prepare(struct request *rq, sector_t hw_sector, unsigned int sector_s
 	sdkp = rq->bio->bi_bdev->bd_disk->private_data;
 
 	if (sdkp->protection_type == SD_DIF_TYPE3_PROTECTION)
-		return 0;
+		return;
 
 	phys = hw_sector & 0xffffffff;
 
@@ -392,34 +393,23 @@ int sd_dif_prepare(struct request *rq, sector_t hw_sector, unsigned int sector_s
 		virt = bio->bi_integrity->bip_sector & 0xffffffff;
 
 		bip_for_each_vec(iv, bio->bi_integrity, i) {
-			sdt = kmap_atomic(iv->bv_page, KM_USER0)
+			sdt = kmap_atomic(iv->bv_page)
 				+ iv->bv_offset;
 
 			for (j = 0 ; j < iv->bv_len ; j += tuple_sz, sdt++) {
 
-				if (be32_to_cpu(sdt->ref_tag) != virt)
-					goto error;
+				if (be32_to_cpu(sdt->ref_tag) == virt)
+					sdt->ref_tag = cpu_to_be32(phys);
 
-				sdt->ref_tag = cpu_to_be32(phys);
 				virt++;
 				phys++;
 			}
 
-			kunmap_atomic(sdt, KM_USER0);
+			kunmap_atomic(sdt);
 		}
 
-		bio->bi_flags |= BIO_MAPPED_INTEGRITY;
+		bio->bi_flags |= (1 << BIO_MAPPED_INTEGRITY);
 	}
-
-	return 0;
-
-error:
-	kunmap_atomic(sdt, KM_USER0);
-	sd_printk(KERN_ERR, sdkp, "%s: virt %u, phys %u, ref %u, app %4x\n",
-		  __func__, virt, phys, be32_to_cpu(sdt->ref_tag),
-		  be16_to_cpu(sdt->app_tag));
-
-	return -EILSEQ;
 }
 
 /*
@@ -453,20 +443,17 @@ void sd_dif_complete(struct scsi_cmnd *scmd, unsigned int good_bytes)
 		virt = bio->bi_integrity->bip_sector & 0xffffffff;
 
 		bip_for_each_vec(iv, bio->bi_integrity, i) {
-			sdt = kmap_atomic(iv->bv_page, KM_USER0)
+			sdt = kmap_atomic(iv->bv_page)
 				+ iv->bv_offset;
 
 			for (j = 0 ; j < iv->bv_len ; j += tuple_sz, sdt++) {
 
 				if (sectors == 0) {
-					kunmap_atomic(sdt, KM_USER0);
+					kunmap_atomic(sdt);
 					return;
 				}
 
-				if (be32_to_cpu(sdt->ref_tag) != phys &&
-				    sdt->app_tag != 0xffff)
-					sdt->ref_tag = 0xffffffff; /* Bad ref */
-				else
+				if (be32_to_cpu(sdt->ref_tag) == phys)
 					sdt->ref_tag = cpu_to_be32(virt);
 
 				virt++;
@@ -474,7 +461,7 @@ void sd_dif_complete(struct scsi_cmnd *scmd, unsigned int good_bytes)
 				sectors--;
 			}
 
-			kunmap_atomic(sdt, KM_USER0);
+			kunmap_atomic(sdt);
 		}
 	}
 }

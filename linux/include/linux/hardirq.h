@@ -4,6 +4,7 @@
 #include <linux/preempt.h>
 #include <linux/lockdep.h>
 #include <linux/ftrace_irq.h>
+#include <linux/vtime.h>
 #include <asm/hardirq.h>
 
 /*
@@ -22,7 +23,7 @@
  *
  * - bits 16-25 are the hardirq count (max # of nested hardirqs: 1024)
  * - bit 26 is the NMI_MASK
- * - bit 28 is the PREEMPT_ACTIVE flag
+ * - bit 27 is the PREEMPT_ACTIVE flag
  *
  * PREEMPT_MASK: 0x000000ff
  * SOFTIRQ_MASK: 0x0000ff00
@@ -93,7 +94,7 @@
  */
 #define in_nmi()	(preempt_count() & NMI_MASK)
 
-#if defined(CONFIG_PREEMPT)
+#if defined(CONFIG_PREEMPT_COUNT)
 # define PREEMPT_CHECK_OFFSET 1
 #else
 # define PREEMPT_CHECK_OFFSET 0
@@ -115,7 +116,7 @@
 #define in_atomic_preempt_off() \
 		((preempt_count() & ~PREEMPT_ACTIVE) != PREEMPT_CHECK_OFFSET)
 
-#ifdef CONFIG_PREEMPT
+#ifdef CONFIG_PREEMPT_COUNT
 # define preemptible()	(preempt_count() == 0 && !irqs_disabled())
 # define IRQ_EXIT_OFFSET (HARDIRQ_OFFSET-1)
 #else
@@ -129,36 +130,7 @@ extern void synchronize_irq(unsigned int irq);
 # define synchronize_irq(irq)	barrier()
 #endif
 
-struct task_struct;
-
-#if !defined(CONFIG_VIRT_CPU_ACCOUNTING) && !defined(CONFIG_IRQ_TIME_ACCOUNTING)
-static inline void account_system_vtime(struct task_struct *tsk)
-{
-}
-#else
-extern void account_system_vtime(struct task_struct *tsk);
-#endif
-
-#if defined(CONFIG_JRCU)
-extern int rcu_nmi_seen;
-# define rcu_irq_enter() do { } while (0)
-# define rcu_irq_exit() do { } while (0)
-# define rcu_nmi_enter() do { rcu_nmi_seen = 1; } while (0)
-# define rcu_nmi_exit() do { } while (0)
-#elif defined(CONFIG_NO_HZ)
 #if defined(CONFIG_TINY_RCU) || defined(CONFIG_TINY_PREEMPT_RCU)
-extern void rcu_enter_nohz(void);
-extern void rcu_exit_nohz(void);
-
-static inline void rcu_irq_enter(void)
-{
-	rcu_exit_nohz();
-}
-
-static inline void rcu_irq_exit(void)
-{
-	rcu_enter_nohz();
-}
 
 static inline void rcu_nmi_enter(void)
 {
@@ -169,17 +141,9 @@ static inline void rcu_nmi_exit(void)
 }
 
 #else
-extern void rcu_irq_enter(void);
-extern void rcu_irq_exit(void);
 extern void rcu_nmi_enter(void);
 extern void rcu_nmi_exit(void);
 #endif
-#else
-# define rcu_irq_enter() do { } while (0)
-# define rcu_irq_exit() do { } while (0)
-# define rcu_nmi_enter() do { } while (0)
-# define rcu_nmi_exit() do { } while (0)
-#endif /* #if defined(CONFIG_NO_HZ) */
 
 /*
  * It is safe to do non-atomic ops on ->hardirq_context,
@@ -189,7 +153,7 @@ extern void rcu_nmi_exit(void);
  */
 #define __irq_enter()					\
 	do {						\
-		account_system_vtime(current);		\
+		vtime_account_irq_enter(current);	\
 		add_preempt_count(HARDIRQ_OFFSET);	\
 		trace_hardirq_enter();			\
 	} while (0)
@@ -205,7 +169,7 @@ extern void irq_enter(void);
 #define __irq_exit()					\
 	do {						\
 		trace_hardirq_exit();			\
-		account_system_vtime(current);		\
+		vtime_account_irq_exit(current);	\
 		sub_preempt_count(HARDIRQ_OFFSET);	\
 	} while (0)
 

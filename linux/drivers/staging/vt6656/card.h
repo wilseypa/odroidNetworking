@@ -52,7 +52,6 @@ typedef enum _CARD_OP_MODE {
 } CARD_OP_MODE, *PCARD_OP_MODE;
 
 #define CB_MAX_CHANNEL_24G  14
-/* #define CB_MAX_CHANNEL_5G   24 */
 #define CB_MAX_CHANNEL_5G       42 /* add channel9(5045MHz), 41==>42 */
 #define CB_MAX_CHANNEL      (CB_MAX_CHANNEL_24G+CB_MAX_CHANNEL_5G)
 
@@ -60,12 +59,12 @@ typedef enum _CARD_OP_MODE {
 
 /*---------------------  Export Functions  --------------------------*/
 
-BOOL CARDbSetMediaChannel(void *pDeviceHandler,
+void CARDbSetMediaChannel(void *pDeviceHandler,
 			  unsigned int uConnectionChannel);
 void CARDvSetRSPINF(void *pDeviceHandler, BYTE byBBType);
 void vUpdateIFS(void *pDeviceHandler);
 void CARDvUpdateBasicTopRate(void *pDeviceHandler);
-BOOL CARDbAddBasicRate(void *pDeviceHandler, WORD wRateIdx);
+void CARDbAddBasicRate(void *pDeviceHandler, WORD wRateIdx);
 BOOL CARDbIsOFDMinBasicRate(void *pDeviceHandler);
 void CARDvAdjustTSF(void *pDeviceHandler, BYTE byRxRate,
 		    QWORD qwBSSTimestamp, QWORD qwLocalTSF);

@@ -110,12 +110,20 @@ static int udf_adinicb_write_end(struct file *file,
 	char *kaddr;
 	struct udf_inode_info *iinfo = UDF_I(inode);
 
-	kaddr = kmap_atomic(page, KM_USER0);
+	kaddr = kmap_atomic(page);
 	memcpy(iinfo->i_ext.i_data + iinfo->i_lenEAttr + offset,
 		kaddr + offset, copied);
-	kunmap_atomic(kaddr, KM_USER0);
+	kunmap_atomic(kaddr);
 
 	return simple_write_end(file, mapping, pos, len, copied, page, fsdata);
+}
+
+static ssize_t udf_adinicb_direct_IO(int rw, struct kiocb *iocb,
+				     const struct iovec *iov,
+				     loff_t offset, unsigned long nr_segs)
+{
+	/* Fallback to buffered I/O. */
+	return 0;
 }
 
 const struct address_space_operations udf_adinicb_aops = {
@@ -123,6 +131,7 @@ const struct address_space_operations udf_adinicb_aops = {
 	.writepage	= udf_adinicb_writepage,
 	.write_begin	= udf_adinicb_write_begin,
 	.write_end	= udf_adinicb_write_end,
+	.direct_IO	= udf_adinicb_direct_IO,
 };
 
 static ssize_t udf_file_aio_write(struct kiocb *iocb, const struct iovec *iov,
@@ -173,7 +182,7 @@ long udf_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	long old_block, new_block;
 	int result = -EINVAL;
 
-	if (file_permission(filp, MAY_READ) != 0) {
+	if (inode_permission(inode, MAY_READ) != 0) {
 		udf_debug("no permission to access inode %lu\n", inode->i_ino);
 		result = -EPERM;
 		goto out;

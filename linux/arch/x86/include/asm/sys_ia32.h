@@ -10,6 +10,8 @@
 #ifndef _ASM_X86_SYS_IA32_H
 #define _ASM_X86_SYS_IA32_H
 
+#ifdef CONFIG_COMPAT
+
 #include <linux/compiler.h>
 #include <linux/linkage.h>
 #include <linux/types.h>
@@ -36,11 +38,9 @@ asmlinkage long sys32_rt_sigaction(int, struct sigaction32 __user *,
 				   struct sigaction32 __user *, unsigned int);
 asmlinkage long sys32_sigaction(int, struct old_sigaction32 __user *,
 				struct old_sigaction32 __user *);
-asmlinkage long sys32_rt_sigprocmask(int, compat_sigset_t __user *,
-				     compat_sigset_t __user *, unsigned int);
 asmlinkage long sys32_alarm(unsigned int);
 
-asmlinkage long sys32_waitpid(compat_pid_t, unsigned int *, int);
+asmlinkage long sys32_waitpid(compat_pid_t, unsigned int __user *, int);
 asmlinkage long sys32_sysfs(int, u32, u32);
 
 asmlinkage long sys32_sched_rr_get_interval(compat_pid_t,
@@ -53,10 +53,6 @@ asmlinkage long sys32_pwrite(unsigned int, const char __user *, u32, u32, u32);
 
 asmlinkage long sys32_personality(unsigned long);
 asmlinkage long sys32_sendfile(int, int, compat_off_t __user *, s32);
-
-asmlinkage long sys32_execve(const char __user *, compat_uptr_t __user *,
-			     compat_uptr_t __user *, struct pt_regs *);
-asmlinkage long sys32_clone(unsigned int, unsigned int, struct pt_regs *);
 
 long sys32_lseek(unsigned int, int, unsigned int);
 long sys32_kill(int, int);
@@ -73,8 +69,6 @@ asmlinkage long sys32_fallocate(int, int, unsigned,
 
 /* ia32/ia32_signal.c */
 asmlinkage long sys32_sigsuspend(int, int, old_sigset_t);
-asmlinkage long sys32_sigaltstack(const stack_ia32_t __user *,
-				  stack_ia32_t __user *, struct pt_regs *);
 asmlinkage long sys32_sigreturn(struct pt_regs *);
 asmlinkage long sys32_rt_sigreturn(struct pt_regs *);
 
@@ -83,4 +77,7 @@ asmlinkage long sys32_ipc(u32, int, int, int, compat_uptr_t, u32);
 
 asmlinkage long sys32_fanotify_mark(int, unsigned int, u32, u32, int,
 				    const char __user *);
+
+#endif /* CONFIG_COMPAT */
+
 #endif /* _ASM_X86_SYS_IA32_H */

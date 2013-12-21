@@ -23,7 +23,7 @@
 #define SCSI_NETLINK_H
 
 #include <linux/netlink.h>
-
+#include <linux/types.h>
 
 /*
  * This file intended to be included by both kernel and user space
@@ -118,30 +118,6 @@ struct scsi_nl_host_vendor_msg {
 	(hdr)->msgtype = mtype;					\
 	(hdr)->msglen = mlen;					\
 	}
-
-
-#ifdef __KERNEL__
-
-#include <scsi/scsi_host.h>
-
-/* Exported Kernel Interfaces */
-int scsi_nl_add_transport(u8 tport,
-	 int (*msg_handler)(struct sk_buff *),
-	void (*event_handler)(struct notifier_block *, unsigned long, void *));
-void scsi_nl_remove_transport(u8 tport);
-
-int scsi_nl_add_driver(u64 vendor_id, struct scsi_host_template *hostt,
-	int (*nlmsg_handler)(struct Scsi_Host *shost, void *payload,
-				 u32 len, u32 pid),
-	void (*nlevt_handler)(struct notifier_block *nb,
-				 unsigned long event, void *notify_ptr));
-void scsi_nl_remove_driver(u64 vendor_id);
-
-void scsi_nl_send_transport_msg(u32 pid, struct scsi_nl_hdr *hdr);
-int scsi_nl_send_vendor_msg(u32 pid, unsigned short host_no, u64 vendor_id,
-			 char *data_buf, u32 data_len);
-
-#endif /* __KERNEL__ */
 
 #endif /* SCSI_NETLINK_H */
 

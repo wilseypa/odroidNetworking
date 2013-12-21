@@ -46,7 +46,7 @@ static int misc_registered;
 static struct var_t vars[] = {
 	{ CAPS_START, .u.s = {"\x01+3p" } },
 	{ CAPS_STOP, .u.s = {"\x01-3p" } },
-	{ RATE, .u.n = {"\x01%ds", 5, 0, 9, 0, 0, NULL } },
+	{ RATE, .u.n = {"\x01%ds", 2, 0, 9, 0, 0, NULL } },
 	{ PITCH, .u.n = {"\x01%dp", 5, 0, 9, 0, 0, NULL } },
 	{ VOL, .u.n = {"\x01%dv", 5, 0, 9, 0, 0, NULL } },
 	{ TONE, .u.n = {"\x01%dx", 1, 0, 2, 0, 0, NULL } },
@@ -268,15 +268,8 @@ static ssize_t softsynth_write(struct file *fp, const char *buf, size_t count,
 {
 	unsigned long supplied_index = 0;
 	int converted;
-	char indbuf[5];
-	if (count >= sizeof(indbuf))
-		return -EINVAL;
 
-	if (copy_from_user(indbuf, buf, count))
-		return -EFAULT;
-	indbuf[count] = '\0';
-
-	converted = strict_strtoul(indbuf, 0, &supplied_index);
+	converted = kstrtoul_from_user(buf, count, 0, &supplied_index);
 
 	if (converted < 0)
 		return converted;

@@ -31,10 +31,9 @@
  *    Nicolai Haehnle <prefect_@gmx.net>
  */
 
-#include "drmP.h"
-#include "drm.h"
-#include "drm_buffer.h"
-#include "radeon_drm.h"
+#include <drm/drmP.h>
+#include <drm/drm_buffer.h>
+#include <drm/radeon_drm.h>
 #include "radeon_drv.h"
 #include "r300_reg.h"
 
@@ -791,7 +790,7 @@ static __inline__ int r300_emit_packet3(drm_radeon_private_t *dev_priv,
 /**
  * Emit the sequence to pacify R300.
  */
-static __inline__ void r300_pacify(drm_radeon_private_t *dev_priv)
+static void r300_pacify(drm_radeon_private_t *dev_priv)
 {
 	uint32_t cache_z, cache_3d, cache_2d;
 	RING_LOCALS;

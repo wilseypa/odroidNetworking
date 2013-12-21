@@ -177,13 +177,12 @@
 #include <net/ax25.h>
 
 #include <asm/irq.h>
-#include <asm/system.h>
 #include <asm/io.h>
 #include <asm/uaccess.h>
 
 #include "z8530.h"
 
-static const char banner[] __initdata = KERN_INFO \
+static const char banner[] __initconst = KERN_INFO \
 	"AX.25: Z8530 SCC driver version "VERSION".dl1bke\n";
 
 static void t_dwait(unsigned long);

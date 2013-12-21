@@ -184,18 +184,6 @@ int scsi_complete_async_scans(void)
 	return 0;
 }
 
-/* Only exported for the benefit of scsi_wait_scan */
-EXPORT_SYMBOL_GPL(scsi_complete_async_scans);
-
-#ifndef MODULE
-/*
- * For async scanning we need to wait for all the scans to complete before
- * trying to mount the root fs.  Otherwise non-modular drivers may not be ready
- * yet.
- */
-late_initcall(scsi_complete_async_scans);
-#endif
-
 /**
  * scsi_unlock_floptical - unlock device via a special MODE SENSE command
  * @sdev:	scsi device to send command to
@@ -297,7 +285,7 @@ static struct scsi_device *scsi_alloc_sdev(struct scsi_target *starget,
 		kfree(sdev);
 		goto out;
 	}
-	blk_get_queue(sdev->request_queue);
+	WARN_ON_ONCE(!blk_get_queue(sdev->request_queue));
 	sdev->request_queue->queuedata = sdev;
 	scsi_adjust_queue_depth(sdev, 0, sdev->host->cmd_per_lun);
 
@@ -933,6 +921,9 @@ static int scsi_add_lun(struct scsi_device *sdev, unsigned char *inq_result,
 	if (*bflags & BLIST_RETRY_HWERROR)
 		sdev->retry_hwerror = 1;
 
+	if (*bflags & BLIST_NO_DIF)
+		sdev->no_dif = 1;
+
 	transport_configure_device(&sdev->sdev_gendev);
 
 	if (sdev->host->hostt->slave_configure) {
@@ -1305,6 +1296,7 @@ EXPORT_SYMBOL(int_to_scsilun);
  *   LUNs even if it's older than SCSI-3.
  *   If BLIST_NOREPORTLUN is set, return 1 always.
  *   If BLIST_NOLUN is set, return 0 always.
+ *   If starget->no_report_luns is set, return 1 always.
  *
  * Return:
  *     0: scan completed (or no memory, so further scanning is futile)
@@ -1331,6 +1323,7 @@ static int scsi_report_lun_scan(struct scsi_target *starget, int bflags,
 	 * Only support SCSI-3 and up devices if BLIST_NOREPORTLUN is not set.
 	 * Also allow SCSI-2 if BLIST_REPORTLUN2 is set and host adapter does
 	 * support more than 8 LUNs.
+	 * Don't attempt if the target doesn't support REPORT LUNS.
 	 */
 	if (bflags & BLIST_NOREPORTLUN)
 		return 1;
@@ -1342,6 +1335,8 @@ static int scsi_report_lun_scan(struct scsi_target *starget, int bflags,
 		return 1;
 	if (bflags & BLIST_NOLUN)
 		return 0;
+	if (starget->no_report_luns)
+		return 1;
 
 	if (!(sdev = scsi_device_lookup_by_target(starget, 0))) {
 		sdev = scsi_alloc_sdev(starget, 0, NULL);
@@ -1848,14 +1843,13 @@ static void do_scsi_scan_host(struct Scsi_Host *shost)
 	}
 }
 
-static int do_scan_async(void *_data)
+static void do_scan_async(void *_data, async_cookie_t c)
 {
 	struct async_scan_data *data = _data;
 	struct Scsi_Host *shost = data->shost;
 
 	do_scsi_scan_host(shost);
 	scsi_finish_async_scan(data);
-	return 0;
 }
 
 /**
@@ -1864,7 +1858,6 @@ static int do_scan_async(void *_data)
  **/
 void scsi_scan_host(struct Scsi_Host *shost)
 {
-	struct task_struct *p;
 	struct async_scan_data *data;
 
 	if (strncmp(scsi_scan_type, "none", 4) == 0)
@@ -1879,9 +1872,11 @@ void scsi_scan_host(struct Scsi_Host *shost)
 		return;
 	}
 
-	p = kthread_run(do_scan_async, data, "scsi_scan_%d", shost->host_no);
-	if (IS_ERR(p))
-		do_scan_async(data);
+	/* register with the async subsystem so wait_for_device_probe()
+	 * will flush this work
+	 */
+	async_schedule(do_scan_async, data);
+
 	/* scsi_autopm_put_host(shost) is called in scsi_finish_async_scan() */
 }
 EXPORT_SYMBOL(scsi_scan_host);

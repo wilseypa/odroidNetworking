@@ -111,6 +111,7 @@ config VSYSCALL
 config NUMA
 	bool "Non Uniform Memory Access (NUMA) Support"
 	depends on MMU && SYS_SUPPORTS_NUMA && EXPERIMENTAL
+	select ARCH_WANT_NUMA_VARIABLE_LOCALITY
 	default n
 	help
 	  Some SH systems have many various memories scattered around
@@ -142,9 +143,6 @@ config MAX_ACTIVE_REGIONS
 	default "2" if SPARSEMEM && (CPU_SUBTYPE_SH7722 || \
 		       CPU_SUBTYPE_SH7785)
 	default "1"
-
-config ARCH_POPULATES_NODE_MAP
-	def_bool y
 
 config ARCH_SELECT_MEMORY_MODEL
 	def_bool y

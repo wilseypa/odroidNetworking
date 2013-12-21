@@ -101,6 +101,11 @@ void proc_device_tree_update_prop(struct proc_dir_entry *pde,
 {
 	struct proc_dir_entry *ent;
 
+	if (!oldprop) {
+		proc_device_tree_add_prop(pde, newprop);
+		return;
+	}
+
 	for (ent = pde->subdir; ent != NULL; ent = ent->next)
 		if (ent->data == oldprop)
 			break;
@@ -190,11 +195,7 @@ void proc_device_tree_add_node(struct device_node *np,
 	set_node_proc_entry(np, de);
 	for (child = NULL; (child = of_get_next_child(np, child));) {
 		/* Use everything after the last slash, or the full name */
-		p = strrchr(child->full_name, '/');
-		if (!p)
-			p = child->full_name;
-		else
-			++p;
+		p = kbasename(child->full_name);
 
 		if (duplicate_name(de, p))
 			p = fixup_name(np, de, p);

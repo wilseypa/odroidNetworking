@@ -80,7 +80,7 @@ extern unsigned long search_exception_table(unsigned long);
 static inline int ___range_ok(unsigned long addr, unsigned long size)
 {
 	return ((addr < memory_start) ||
-		((addr + size) > memory_end));
+		((addr + size - 1) > (memory_start + memory_size - 1)));
 }
 
 #define __range_ok(addr, size) \
@@ -95,7 +95,7 @@ static inline int ___range_ok(unsigned long addr, unsigned long size)
  *  - "addr", "addr + size" and "size" are all below the limit
  */
 #define access_ok(type, addr, size) \
-	(get_fs().seg > (((unsigned long)(addr)) | \
+	(get_fs().seg >= (((unsigned long)(addr)) | \
 		(size) | ((unsigned long)(addr) + (size))))
 
 /* || printk("access_ok failed for %s at 0x%08lx (size %d), seg 0x%08x\n",
@@ -108,7 +108,7 @@ static inline int ___range_ok(unsigned long addr, unsigned long size)
 # define __EX_TABLE_SECTION	".section __ex_table,\"a\"\n"
 #else
 # define __FIXUP_SECTION	".section .discard,\"ax\"\n"
-# define __EX_TABLE_SECTION	".section .discard,\"a\"\n"
+# define __EX_TABLE_SECTION	".section .discard,\"ax\"\n"
 #endif
 
 extern unsigned long __copy_tofrom_user(void __user *to,
@@ -298,11 +298,10 @@ extern long __user_bad(void);
 
 #define __put_user_check(x, ptr, size)					\
 ({									\
-	typeof(*(ptr)) __pu_val;					\
+	typeof(*(ptr)) volatile __pu_val = x;					\
 	typeof(*(ptr)) __user *__pu_addr = (ptr);			\
 	int __pu_err = 0;						\
 									\
-	__pu_val = (x);							\
 	if (access_ok(VERIFY_WRITE, __pu_addr, size)) {			\
 		switch (size) {						\
 		case 1:							\

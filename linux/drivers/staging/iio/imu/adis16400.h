@@ -5,7 +5,7 @@
  *		3d 2.5gauss magnetometers via SPI
  *
  * Copyright (c) 2009 Manuel Stahl <manuel.stahl@iis.fraunhofer.de>
- * Copyright (c) 2007 Jonathan Cameron <jic23@cam.ac.uk>
+ * Copyright (c) 2007 Jonathan Cameron <jic23@kernel.org>
  *
  * Loosely based upon lis3l02dq.h
  *
@@ -40,6 +40,10 @@
 #define ADIS16350_XTEMP_OUT 0x10 /* X-axis gyroscope temperature measurement */
 #define ADIS16350_YTEMP_OUT 0x12 /* Y-axis gyroscope temperature measurement */
 #define ADIS16350_ZTEMP_OUT 0x14 /* Z-axis gyroscope temperature measurement */
+
+#define ADIS16300_PITCH_OUT 0x12 /* X axis inclinometer output measurement */
+#define ADIS16300_ROLL_OUT  0x14 /* Y axis inclinometer output measurement */
+#define ADIS16300_AUX_ADC   0x16 /* Auxiliary ADC measurement */
 
 /* Calibration parameters */
 #define ADIS16400_XGYRO_OFF 0x1A /* X-axis gyroscope bias offset factor */
@@ -119,6 +123,9 @@
 /* SLP_CNT */
 #define ADIS16400_SLP_CNT_POWER_OFF	(1<<8)
 
+#define ADIS16334_RATE_DIV_SHIFT 8
+#define ADIS16334_RATE_INT_CLK BIT(0)
+
 #define ADIS16400_MAX_TX 24
 #define ADIS16400_MAX_RX 24
 
@@ -126,16 +133,21 @@
 #define ADIS16400_SPI_BURST	(u32)(1000 * 1000)
 #define ADIS16400_SPI_FAST	(u32)(2000 * 1000)
 
-#define ADIS16400_HAS_PROD_ID 1
-#define ADIS16400_NO_BURST 2
+#define ADIS16400_HAS_PROD_ID		BIT(0)
+#define ADIS16400_NO_BURST		BIT(1)
+#define ADIS16400_HAS_SLOW_MODE		BIT(2)
+
 struct adis16400_chip_info {
 	const struct iio_chan_spec *channels;
 	const int num_channels;
-	const int product_id;
 	const long flags;
 	unsigned int gyro_scale_micro;
 	unsigned int accel_scale_micro;
+	int temp_scale_nano;
+	int temp_offset;
 	unsigned long default_scan_mask;
+	int (*set_freq)(struct iio_dev *indio_dev, unsigned int freq);
+	int (*get_freq)(struct iio_dev *indio_dev);
 };
 
 /**
@@ -145,12 +157,14 @@ struct adis16400_chip_info {
  * @tx:			transmit buffer
  * @rx:			receive buffer
  * @buf_lock:		mutex to protect tx and rx
+ * @filt_int:		integer part of requested filter frequency
  **/
 struct adis16400_state {
 	struct spi_device		*us;
 	struct iio_trigger		*trig;
 	struct mutex			buf_lock;
 	struct adis16400_chip_info	*variant;
+	int				filt_int;
 
 	u8	tx[ADIS16400_MAX_TX] ____cacheline_aligned;
 	u8	rx[ADIS16400_MAX_RX] ____cacheline_aligned;
@@ -181,7 +195,7 @@ int adis16400_set_irq(struct iio_dev *indio_dev, bool enable);
 #define ADIS16300_SCAN_INCLI_X	12
 #define ADIS16300_SCAN_INCLI_Y	13
 
-#ifdef CONFIG_IIO_RING_BUFFER
+#ifdef CONFIG_IIO_BUFFER
 void adis16400_remove_trigger(struct iio_dev *indio_dev);
 int adis16400_probe_trigger(struct iio_dev *indio_dev);
 
@@ -193,7 +207,7 @@ ssize_t adis16400_read_data_from_ring(struct device *dev,
 int adis16400_configure_ring(struct iio_dev *indio_dev);
 void adis16400_unconfigure_ring(struct iio_dev *indio_dev);
 
-#else /* CONFIG_IIO_RING_BUFFER */
+#else /* CONFIG_IIO_BUFFER */
 
 static inline void adis16400_remove_trigger(struct iio_dev *indio_dev)
 {
@@ -221,5 +235,5 @@ static inline void adis16400_unconfigure_ring(struct iio_dev *indio_dev)
 {
 }
 
-#endif /* CONFIG_IIO_RING_BUFFER */
+#endif /* CONFIG_IIO_BUFFER */
 #endif /* SPI_ADIS16400_H_ */

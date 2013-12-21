@@ -27,6 +27,7 @@
 
 #include <linux/cpufreq.h>
 #include <linux/timer.h>
+#include <linux/module.h>
 
 #include <asm/hw_irq.h>
 #include <asm/io.h>
@@ -235,6 +236,13 @@ out:
 
 static int pas_cpufreq_cpu_exit(struct cpufreq_policy *policy)
 {
+	/*
+	 * We don't support CPU hotplug. Don't unmap after the system
+	 * has already made it to a running state.
+	 */
+	if (system_state != SYSTEM_BOOTING)
+		return 0;
+
 	if (sdcasr_mapbase)
 		iounmap(sdcasr_mapbase);
 	if (sdcpwr_mapbase)

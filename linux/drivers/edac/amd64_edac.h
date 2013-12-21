@@ -33,7 +33,7 @@
  *		detection. The mods to Rev F required more family
  *		information detection.
  *
- *	Changes/Fixes by Borislav Petkov <borislav.petkov@amd.com>:
+ *	Changes/Fixes by Borislav Petkov <bp@alien8.de>:
  *		- misc fixes and code cleanups
  *
  * This module is based on the following documents
@@ -219,7 +219,7 @@
 #define DBAM1				0x180
 
 /* Extract the DIMM 'type' on the i'th DIMM from the DBAM reg value passed */
-#define DBAM_DIMM(i, reg)		((((reg) >> (4*i))) & 0xF)
+#define DBAM_DIMM(i, reg)		((((reg) >> (4*(i)))) & 0xF)
 
 #define DBAM_MAX_VALUE			11
 
@@ -267,18 +267,20 @@
 #define online_spare_bad_dramcs(pvt, c)	(((pvt)->online_spare >> (4 + 4 * (c))) & 0x7)
 
 #define F10_NB_ARRAY_ADDR		0xB8
-#define F10_NB_ARRAY_DRAM_ECC		BIT(31)
+#define F10_NB_ARRAY_DRAM		BIT(31)
 
 /* Bits [2:1] are used to select 16-byte section within a 64-byte cacheline  */
-#define SET_NB_ARRAY_ADDRESS(section)	(((section) & 0x3) << 1)
+#define SET_NB_ARRAY_ADDR(section)	(((section) & 0x3) << 1)
 
 #define F10_NB_ARRAY_DATA		0xBC
-#define SET_NB_DRAM_INJECTION_WRITE(word, bits)  \
-					(BIT(((word) & 0xF) + 20) | \
-					BIT(17) | bits)
-#define SET_NB_DRAM_INJECTION_READ(word, bits)  \
-					(BIT(((word) & 0xF) + 20) | \
-					BIT(16) |  bits)
+#define F10_NB_ARR_ECC_WR_REQ		BIT(17)
+#define SET_NB_DRAM_INJECTION_WRITE(inj)  \
+					(BIT(((inj.word) & 0xF) + 20) | \
+					F10_NB_ARR_ECC_WR_REQ | inj.bit_map)
+#define SET_NB_DRAM_INJECTION_READ(inj)  \
+					(BIT(((inj.word) & 0xF) + 20) | \
+					BIT(16) |  inj.bit_map)
+
 
 #define NBCAP				0xE8
 #define NBCAP_CHIPKILL			BIT(4)
@@ -305,9 +307,9 @@ enum amd_families {
 
 /* Error injection control structure */
 struct error_injection {
-	u32	section;
-	u32	word;
-	u32	bit_map;
+	u32	 section;
+	u32	 word;
+	u32	 bit_map;
 };
 
 /* low and high part of PCI config space regs */
@@ -374,6 +376,23 @@ struct amd64_pvt {
 	struct error_injection injection;
 };
 
+enum err_codes {
+	DECODE_OK	=  0,
+	ERR_NODE	= -1,
+	ERR_CSROW	= -2,
+	ERR_CHANNEL	= -3,
+};
+
+struct err_info {
+	int err_code;
+	struct mem_ctl_info *src_mci;
+	int csrow;
+	int channel;
+	u16 syndrome;
+	u32 page;
+	u32 offset;
+};
+
 static inline u64 get_dram_base(struct amd64_pvt *pvt, unsigned i)
 {
 	u64 addr = ((u64)pvt->ranges[i].base.lo & 0xffff0000) << 8;
@@ -413,19 +432,32 @@ struct ecc_settings {
 };
 
 #ifdef CONFIG_EDAC_DEBUG
-#define NUM_DBG_ATTRS 5
+int amd64_create_sysfs_dbg_files(struct mem_ctl_info *mci);
+void amd64_remove_sysfs_dbg_files(struct mem_ctl_info *mci);
+
 #else
-#define NUM_DBG_ATTRS 0
+static inline int amd64_create_sysfs_dbg_files(struct mem_ctl_info *mci)
+{
+	return 0;
+}
+static void inline amd64_remove_sysfs_dbg_files(struct mem_ctl_info *mci)
+{
+}
 #endif
 
 #ifdef CONFIG_EDAC_AMD64_ERROR_INJECTION
-#define NUM_INJ_ATTRS 5
-#else
-#define NUM_INJ_ATTRS 0
-#endif
+int amd64_create_sysfs_inject_files(struct mem_ctl_info *mci);
+void amd64_remove_sysfs_inject_files(struct mem_ctl_info *mci);
 
-extern struct mcidev_sysfs_attribute amd64_dbg_attrs[NUM_DBG_ATTRS],
-				     amd64_inj_attrs[NUM_INJ_ATTRS];
+#else
+static inline int amd64_create_sysfs_inject_files(struct mem_ctl_info *mci)
+{
+	return 0;
+}
+static inline void amd64_remove_sysfs_inject_files(struct mem_ctl_info *mci)
+{
+}
+#endif
 
 /*
  * Each of the PCI Device IDs types have their own set of hardware accessor
@@ -434,7 +466,7 @@ extern struct mcidev_sysfs_attribute amd64_dbg_attrs[NUM_DBG_ATTRS],
 struct low_ops {
 	int (*early_channel_count)	(struct amd64_pvt *pvt);
 	void (*map_sysaddr_to_csrow)	(struct mem_ctl_info *mci, u64 sys_addr,
-					 u16 syndrome);
+					 struct err_info *);
 	int (*dbam_to_cs)		(struct amd64_pvt *pvt, u8 dct, unsigned cs_mode);
 	int (*read_dct_pci_cfg)		(struct amd64_pvt *pvt, int offset,
 					 u32 *val, const char *func);
@@ -446,6 +478,8 @@ struct amd64_family_type {
 	struct low_ops ops;
 };
 
+int __amd64_read_pci_cfg_dword(struct pci_dev *pdev, int offset,
+			       u32 *val, const char *func);
 int __amd64_write_pci_cfg_dword(struct pci_dev *pdev, int offset,
 				u32 val, const char *func);
 
@@ -460,3 +494,17 @@ int __amd64_write_pci_cfg_dword(struct pci_dev *pdev, int offset,
 
 int amd64_get_dram_hole_info(struct mem_ctl_info *mci, u64 *hole_base,
 			     u64 *hole_offset, u64 *hole_size);
+
+#define to_mci(k) container_of(k, struct mem_ctl_info, dev)
+
+/* Injection helpers */
+static inline void disable_caches(void *dummy)
+{
+	write_cr0(read_cr0() | X86_CR0_CD);
+	wbinvd();
+}
+
+static inline void enable_caches(void *dummy)
+{
+	write_cr0(read_cr0() & ~X86_CR0_CD);
+}

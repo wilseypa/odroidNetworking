@@ -17,6 +17,7 @@
 
 #include <linux/spi/spi.h>
 #include <linux/spi/ds1305.h>
+#include <linux/module.h>
 
 
 /*
@@ -600,7 +601,7 @@ static struct bin_attribute nvram = {
  * Interface to SPI stack
  */
 
-static int __devinit ds1305_probe(struct spi_device *spi)
+static int ds1305_probe(struct spi_device *spi)
 {
 	struct ds1305			*ds1305;
 	int				status;
@@ -786,7 +787,7 @@ fail0:
 	return status;
 }
 
-static int __devexit ds1305_remove(struct spi_device *spi)
+static int ds1305_remove(struct spi_device *spi)
 {
 	struct ds1305 *ds1305 = spi_get_drvdata(spi);
 
@@ -809,21 +810,11 @@ static struct spi_driver ds1305_driver = {
 	.driver.name	= "rtc-ds1305",
 	.driver.owner	= THIS_MODULE,
 	.probe		= ds1305_probe,
-	.remove		= __devexit_p(ds1305_remove),
+	.remove		= ds1305_remove,
 	/* REVISIT add suspend/resume */
 };
 
-static int __init ds1305_init(void)
-{
-	return spi_register_driver(&ds1305_driver);
-}
-module_init(ds1305_init);
-
-static void __exit ds1305_exit(void)
-{
-	spi_unregister_driver(&ds1305_driver);
-}
-module_exit(ds1305_exit);
+module_spi_driver(ds1305_driver);
 
 MODULE_DESCRIPTION("RTC driver for DS1305 and DS1306 chips");
 MODULE_LICENSE("GPL");

@@ -128,6 +128,24 @@ static struct hash_cell *__get_uuid_cell(const char *str)
 	return NULL;
 }
 
+static struct hash_cell *__get_dev_cell(uint64_t dev)
+{
+	struct mapped_device *md;
+	struct hash_cell *hc;
+
+	md = dm_get_md(huge_decode_dev(dev));
+	if (!md)
+		return NULL;
+
+	hc = dm_get_mdptr(md);
+	if (!hc) {
+		dm_put(md);
+		return NULL;
+	}
+
+	return hc;
+}
+
 /*-----------------------------------------------------------------
  * Inserting, removing and renaming a device.
  *---------------------------------------------------------------*/
@@ -718,25 +736,45 @@ static int dev_create(struct dm_ioctl *param, size_t param_size)
  */
 static struct hash_cell *__find_device_hash_cell(struct dm_ioctl *param)
 {
-	struct mapped_device *md;
-	void *mdptr = NULL;
+	struct hash_cell *hc = NULL;
 
-	if (*param->uuid)
-		return __get_uuid_cell(param->uuid);
+	if (*param->uuid) {
+		if (*param->name || param->dev)
+			return NULL;
 
-	if (*param->name)
-		return __get_name_cell(param->name);
+		hc = __get_uuid_cell(param->uuid);
+		if (!hc)
+			return NULL;
+	} else if (*param->name) {
+		if (param->dev)
+			return NULL;
 
-	md = dm_get_md(huge_decode_dev(param->dev));
-	if (!md)
-		goto out;
+		hc = __get_name_cell(param->name);
+		if (!hc)
+			return NULL;
+	} else if (param->dev) {
+		hc = __get_dev_cell(param->dev);
+		if (!hc)
+			return NULL;
+	} else
+		return NULL;
 
-	mdptr = dm_get_mdptr(md);
-	if (!mdptr)
-		dm_put(md);
+	/*
+	 * Sneakily write in both the name and the uuid
+	 * while we have the cell.
+	 */
+	strlcpy(param->name, hc->name, sizeof(param->name));
+	if (hc->uuid)
+		strlcpy(param->uuid, hc->uuid, sizeof(param->uuid));
+	else
+		param->uuid[0] = '\0';
 
-out:
-	return mdptr;
+	if (hc->new_map)
+		param->flags |= DM_INACTIVE_PRESENT_FLAG;
+	else
+		param->flags &= ~DM_INACTIVE_PRESENT_FLAG;
+
+	return hc;
 }
 
 static struct mapped_device *find_device(struct dm_ioctl *param)
@@ -746,24 +784,8 @@ static struct mapped_device *find_device(struct dm_ioctl *param)
 
 	down_read(&_hash_lock);
 	hc = __find_device_hash_cell(param);
-	if (hc) {
+	if (hc)
 		md = hc->md;
-
-		/*
-		 * Sneakily write in both the name and the uuid
-		 * while we have the cell.
-		 */
-		strlcpy(param->name, hc->name, sizeof(param->name));
-		if (hc->uuid)
-			strlcpy(param->uuid, hc->uuid, sizeof(param->uuid));
-		else
-			param->uuid[0] = '\0';
-
-		if (hc->new_map)
-			param->flags |= DM_INACTIVE_PRESENT_FLAG;
-		else
-			param->flags &= ~DM_INACTIVE_PRESENT_FLAG;
-	}
 	up_read(&_hash_lock);
 
 	return md;
@@ -858,6 +880,7 @@ static int dev_set_geometry(struct dm_ioctl *param, size_t param_size)
 	struct hd_geometry geometry;
 	unsigned long indata[4];
 	char *geostr = (char *) param + param->data_start;
+	char dummy;
 
 	md = find_device(param);
 	if (!md)
@@ -869,8 +892,8 @@ static int dev_set_geometry(struct dm_ioctl *param, size_t param_size)
 		goto out;
 	}
 
-	x = sscanf(geostr, "%lu %lu %lu %lu", indata,
-		   indata + 1, indata + 2, indata + 3);
+	x = sscanf(geostr, "%lu %lu %lu %lu%c", indata,
+		   indata + 1, indata + 2, indata + 3, &dummy);
 
 	if (x != 4) {
 		DMWARN("Unable to interpret geometry settings.");
@@ -1031,6 +1054,7 @@ static void retrieve_status(struct dm_table *table,
 	char *outbuf, *outptr;
 	status_type_t type;
 	size_t remaining, len, used = 0;
+	unsigned status_flags = 0;
 
 	outptr = outbuf = get_result_buffer(param, param_size, &len);
 
@@ -1043,6 +1067,7 @@ static void retrieve_status(struct dm_table *table,
 	num_targets = dm_table_get_num_targets(table);
 	for (i = 0; i < num_targets; i++) {
 		struct dm_target *ti = dm_table_get_target(table, i);
+		size_t l;
 
 		remaining = len - (outptr - outbuf);
 		if (remaining <= sizeof(struct dm_target_spec)) {
@@ -1067,14 +1092,19 @@ static void retrieve_status(struct dm_table *table,
 
 		/* Get the status/table string from the target driver */
 		if (ti->type->status) {
-			if (ti->type->status(ti, type, outptr, remaining)) {
-				param->flags |= DM_BUFFER_FULL_FLAG;
-				break;
-			}
+			if (param->flags & DM_NOFLUSH_FLAG)
+				status_flags |= DM_STATUS_NOFLUSH_FLAG;
+			ti->type->status(ti, type, status_flags, outptr, remaining);
 		} else
 			outptr[0] = '\0';
 
-		outptr += strlen(outptr) + 1;
+		l = strlen(outptr) + 1;
+		if (l == remaining) {
+			param->flags |= DM_BUFFER_FULL_FLAG;
+			break;
+		}
+
+		outptr += l;
 		used = param->data_start + (outptr - outbuf);
 
 		outptr = align_ptr(outptr);
@@ -1193,6 +1223,7 @@ static int table_load(struct dm_ioctl *param, size_t param_size)
 	struct hash_cell *hc;
 	struct dm_table *t;
 	struct mapped_device *md;
+	struct target_type *immutable_target_type;
 
 	md = find_device(param);
 	if (!md)
@@ -1205,6 +1236,16 @@ static int table_load(struct dm_ioctl *param, size_t param_size)
 	r = populate_table(t, param, param_size);
 	if (r) {
 		dm_table_destroy(t);
+		goto out;
+	}
+
+	immutable_target_type = dm_get_immutable_target_type(md);
+	if (immutable_target_type &&
+	    (immutable_target_type != dm_table_get_immutable_target_type(t))) {
+		DMWARN("can't replace immutable target type %s",
+		       immutable_target_type->name);
+		dm_table_destroy(t);
+		r = -EINVAL;
 		goto out;
 	}
 
@@ -1402,6 +1443,11 @@ static int target_message(struct dm_ioctl *param, size_t param_size)
 		goto out;
 	}
 
+	if (!argc) {
+		DMWARN("Empty message received.");
+		goto out_argv;
+	}
+
 	table = dm_get_live_table(md);
 	if (!table)
 		goto out_argv;
@@ -1501,7 +1547,21 @@ static int check_version(unsigned int cmd, struct dm_ioctl __user *user)
 	return r;
 }
 
-static int copy_params(struct dm_ioctl __user *user, struct dm_ioctl **param)
+#define DM_PARAMS_VMALLOC	0x0001	/* Params alloced with vmalloc not kmalloc */
+#define DM_WIPE_BUFFER		0x0010	/* Wipe input buffer before returning from ioctl */
+
+static void free_params(struct dm_ioctl *param, size_t param_size, int param_flags)
+{
+	if (param_flags & DM_WIPE_BUFFER)
+		memset(param, 0, param_size);
+
+	if (param_flags & DM_PARAMS_VMALLOC)
+		vfree(param);
+	else
+		kfree(param);
+}
+
+static int copy_params(struct dm_ioctl __user *user, struct dm_ioctl **param, int *param_flags)
 {
 	struct dm_ioctl tmp, *dmi;
 	int secure_data;
@@ -1514,7 +1574,24 @@ static int copy_params(struct dm_ioctl __user *user, struct dm_ioctl **param)
 
 	secure_data = tmp.flags & DM_SECURE_DATA_FLAG;
 
-	dmi = vmalloc(tmp.data_size);
+	*param_flags = secure_data ? DM_WIPE_BUFFER : 0;
+
+	/*
+	 * Try to avoid low memory issues when a device is suspended.
+	 * Use kmalloc() rather than vmalloc() when we can.
+	 */
+	dmi = NULL;
+	if (tmp.data_size <= KMALLOC_MAX_SIZE)
+		dmi = kmalloc(tmp.data_size, GFP_NOIO | __GFP_NORETRY | __GFP_NOMEMALLOC | __GFP_NOWARN);
+
+	if (!dmi) {
+		unsigned noio_flag;
+		noio_flag = memalloc_noio_save();
+		dmi = __vmalloc(tmp.data_size, GFP_NOIO | __GFP_REPEAT | __GFP_HIGH, PAGE_KERNEL);
+		memalloc_noio_restore(noio_flag);
+		*param_flags |= DM_PARAMS_VMALLOC;
+	}
+
 	if (!dmi) {
 		if (secure_data && clear_user(user, tmp.data_size))
 			return -EFAULT;
@@ -1540,9 +1617,8 @@ static int copy_params(struct dm_ioctl __user *user, struct dm_ioctl **param)
 	return 0;
 
 bad:
-	if (secure_data)
-		memset(dmi, 0, tmp.data_size);
-	vfree(dmi);
+	free_params(dmi, tmp.data_size, *param_flags);
+
 	return -EFAULT;
 }
 
@@ -1579,7 +1655,7 @@ static int validate_params(uint cmd, struct dm_ioctl *param)
 static int ctl_ioctl(uint command, struct dm_ioctl __user *user)
 {
 	int r = 0;
-	int wipe_buffer;
+	int param_flags;
 	unsigned int cmd;
 	struct dm_ioctl *uninitialized_var(param);
 	ioctl_fn fn = NULL;
@@ -1615,24 +1691,14 @@ static int ctl_ioctl(uint command, struct dm_ioctl __user *user)
 	}
 
 	/*
-	 * Trying to avoid low memory issues when a device is
-	 * suspended.
-	 */
-	current->flags |= PF_MEMALLOC;
-
-	/*
 	 * Copy the parameters into kernel space.
 	 */
-	r = copy_params(user, &param);
-
-	current->flags &= ~PF_MEMALLOC;
+	r = copy_params(user, &param, &param_flags);
 
 	if (r)
 		return r;
 
 	input_param_size = param->data_size;
-	wipe_buffer = param->flags & DM_SECURE_DATA_FLAG;
-
 	r = validate_params(cmd, param);
 	if (r)
 		goto out;
@@ -1647,10 +1713,7 @@ static int ctl_ioctl(uint command, struct dm_ioctl __user *user)
 		r = -EFAULT;
 
 out:
-	if (wipe_buffer)
-		memset(param, 0, input_param_size);
-
-	vfree(param);
+	free_params(param, input_param_size, param_flags);
 	return r;
 }
 

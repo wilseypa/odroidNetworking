@@ -20,6 +20,10 @@
 #include <linux/init.h>
 #include <linux/platform_device.h>
 #include <linux/irq.h>
+#include <linux/io.h>
+
+#warning "Please try migrate to use new driver SCCNXP and report the status" \
+	 "in the linux-serial mailing list."
 
 #if defined(CONFIG_MAGIC_SYSRQ)
 #define SUPPORT_SYSRQ
@@ -617,7 +621,7 @@ static u8 sc26xx_flags2mask(unsigned int flags, unsigned int bitpos)
 	return bit ? (1 << (bit - 1)) : 0;
 }
 
-static void __devinit sc26xx_init_masks(struct uart_sc26xx_port *up,
+static void sc26xx_init_masks(struct uart_sc26xx_port *up,
 					int line, unsigned int data)
 {
 	up->dtr_mask[line] = sc26xx_flags2mask(data,  0);
@@ -628,7 +632,7 @@ static void __devinit sc26xx_init_masks(struct uart_sc26xx_port *up,
 	up->ri_mask[line]  = sc26xx_flags2mask(data, 20);
 }
 
-static int __devinit sc26xx_probe(struct platform_device *dev)
+static int sc26xx_probe(struct platform_device *dev)
 {
 	struct resource *res;
 	struct uart_sc26xx_port *up;
@@ -729,26 +733,14 @@ static int __exit sc26xx_driver_remove(struct platform_device *dev)
 
 static struct platform_driver sc26xx_driver = {
 	.probe	= sc26xx_probe,
-	.remove	= __devexit_p(sc26xx_driver_remove),
+	.remove	= sc26xx_driver_remove,
 	.driver	= {
 		.name	= "SC26xx",
 		.owner	= THIS_MODULE,
 	},
 };
 
-static int __init sc26xx_init(void)
-{
-	return platform_driver_register(&sc26xx_driver);
-}
-
-static void __exit sc26xx_exit(void)
-{
-	platform_driver_unregister(&sc26xx_driver);
-}
-
-module_init(sc26xx_init);
-module_exit(sc26xx_exit);
-
+module_platform_driver(sc26xx_driver);
 
 MODULE_AUTHOR("Thomas Bogendörfer");
 MODULE_DESCRIPTION("SC681/SC2692 serial driver");

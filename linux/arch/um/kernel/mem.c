@@ -4,6 +4,7 @@
  */
 
 #include <linux/stddef.h>
+#include <linux/module.h>
 #include <linux/bootmem.h>
 #include <linux/highmem.h>
 #include <linux/mm.h>
@@ -11,15 +12,16 @@
 #include <linux/slab.h>
 #include <asm/fixmap.h>
 #include <asm/page.h>
-#include "as-layout.h"
-#include "init.h"
-#include "kern.h"
-#include "kern_util.h"
-#include "mem_user.h"
-#include "os.h"
+#include <as-layout.h>
+#include <init.h>
+#include <kern.h>
+#include <kern_util.h>
+#include <mem_user.h>
+#include <os.h>
 
 /* allocated in paging_init, zeroed in mem_init, and unchanged thereafter */
 unsigned long *empty_zero_page = NULL;
+EXPORT_SYMBOL(empty_zero_page);
 /* allocated in paging_init and unchanged thereafter */
 static unsigned long *empty_bad_page = NULL;
 

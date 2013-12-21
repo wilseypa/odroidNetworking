@@ -217,7 +217,7 @@ begin:
 }
 EXPORT_SYMBOL_GPL(__inet_lookup_listener);
 
-struct sock * __inet_lookup_established(struct net *net,
+struct sock *__inet_lookup_established(struct net *net,
 				  struct inet_hashinfo *hashinfo,
 				  const __be32 saddr, const __be16 sport,
 				  const __be32 daddr, const u16 hnum,
@@ -237,12 +237,14 @@ struct sock * __inet_lookup_established(struct net *net,
 	rcu_read_lock();
 begin:
 	sk_nulls_for_each_rcu(sk, node, &head->chain) {
-		if (INET_MATCH(sk, net, hash, acookie,
-					saddr, daddr, ports, dif)) {
+		if (sk->sk_hash != hash)
+			continue;
+		if (likely(INET_MATCH(sk, net, acookie,
+				      saddr, daddr, ports, dif))) {
 			if (unlikely(!atomic_inc_not_zero(&sk->sk_refcnt)))
 				goto begintw;
-			if (unlikely(!INET_MATCH(sk, net, hash, acookie,
-				saddr, daddr, ports, dif))) {
+			if (unlikely(!INET_MATCH(sk, net, acookie,
+						 saddr, daddr, ports, dif))) {
 				sock_put(sk);
 				goto begin;
 			}
@@ -260,15 +262,19 @@ begin:
 begintw:
 	/* Must check for a TIME_WAIT'er before going to listener hash. */
 	sk_nulls_for_each_rcu(sk, node, &head->twchain) {
-		if (INET_TW_MATCH(sk, net, hash, acookie,
-					saddr, daddr, ports, dif)) {
+		if (sk->sk_hash != hash)
+			continue;
+		if (likely(INET_TW_MATCH(sk, net, acookie,
+					 saddr, daddr, ports,
+					 dif))) {
 			if (unlikely(!atomic_inc_not_zero(&sk->sk_refcnt))) {
 				sk = NULL;
 				goto out;
 			}
-			if (unlikely(!INET_TW_MATCH(sk, net, hash, acookie,
-				 saddr, daddr, ports, dif))) {
-				sock_put(sk);
+			if (unlikely(!INET_TW_MATCH(sk, net, acookie,
+						    saddr, daddr, ports,
+						    dif))) {
+				inet_twsk_put(inet_twsk(sk));
 				goto begintw;
 			}
 			goto out;
@@ -314,10 +320,12 @@ static int __inet_check_established(struct inet_timewait_death_row *death_row,
 
 	/* Check TIME-WAIT sockets first. */
 	sk_nulls_for_each(sk2, node, &head->twchain) {
-		tw = inet_twsk(sk2);
+		if (sk2->sk_hash != hash)
+			continue;
 
-		if (INET_TW_MATCH(sk2, net, hash, acookie,
-					saddr, daddr, ports, dif)) {
+		if (likely(INET_TW_MATCH(sk2, net, acookie,
+					 saddr, daddr, ports, dif))) {
+			tw = inet_twsk(sk2);
 			if (twsk_unique(sk, sk2, twp))
 				goto unique;
 			else
@@ -328,8 +336,10 @@ static int __inet_check_established(struct inet_timewait_death_row *death_row,
 
 	/* And established part... */
 	sk_nulls_for_each(sk2, node, &head->chain) {
-		if (INET_MATCH(sk2, net, hash, acookie,
-					saddr, daddr, ports, dif))
+		if (sk2->sk_hash != hash)
+			continue;
+		if (likely(INET_MATCH(sk2, net, acookie,
+				      saddr, daddr, ports, dif)))
 			goto not_unique;
 	}
 

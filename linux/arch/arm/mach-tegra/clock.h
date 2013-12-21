@@ -2,6 +2,7 @@
  * arch/arm/mach-tegra/include/mach/clock.h
  *
  * Copyright (C) 2010 Google, Inc.
+ * Copyright (c) 2012 NVIDIA CORPORATION.  All rights reserved.
  *
  * Author:
  *	Colin Cross <ccross@google.com>
@@ -20,9 +21,11 @@
 #ifndef __MACH_TEGRA_CLOCK_H
 #define __MACH_TEGRA_CLOCK_H
 
+#include <linux/clk-provider.h>
 #include <linux/clkdev.h>
 #include <linux/list.h>
-#include <linux/spinlock.h>
+
+#include <mach/clk.h>
 
 #define DIV_BUS			(1 << 0)
 #define DIV_U71			(1 << 1)
@@ -39,9 +42,19 @@
 #define PERIPH_MANUAL_RESET	(1 << 12)
 #define PLL_ALT_MISC_REG	(1 << 13)
 #define PLLU			(1 << 14)
+#define PLLX                    (1 << 15)
+#define MUX_PWM                 (1 << 16)
+#define MUX8                    (1 << 17)
+#define DIV_U71_UART            (1 << 18)
+#define MUX_CLK_OUT             (1 << 19)
+#define PLLM                    (1 << 20)
+#define DIV_U71_INT             (1 << 21)
+#define DIV_U71_IDLE            (1 << 22)
 #define ENABLE_ON_INIT		(1 << 28)
+#define PERIPH_ON_APB           (1 << 29)
 
-struct clk;
+struct clk_tegra;
+#define to_clk_tegra(_hw) container_of(_hw, struct clk_tegra, hw)
 
 struct clk_mux_sel {
 	struct clk	*input;
@@ -57,45 +70,29 @@ struct clk_pll_freq_table {
 	u8		cpcon;
 };
 
-struct clk_ops {
-	void		(*init)(struct clk *);
-	int		(*enable)(struct clk *);
-	void		(*disable)(struct clk *);
-	int		(*set_parent)(struct clk *, struct clk *);
-	int		(*set_rate)(struct clk *, unsigned long);
-	long		(*round_rate)(struct clk *, unsigned long);
-	void		(*reset)(struct clk *, bool);
-};
-
 enum clk_state {
 	UNINITIALIZED = 0,
 	ON,
 	OFF,
 };
 
-struct clk {
+struct clk_tegra {
 	/* node for master clocks list */
-	struct list_head	node;		/* node for list of all clocks */
+	struct list_head	node;	/* node for list of all clocks */
 	struct clk_lookup	lookup;
+	struct clk_hw		hw;
 
-#ifdef CONFIG_DEBUG_FS
-	struct dentry		*dent;
-#endif
 	bool			set;
-	struct clk_ops		*ops;
-	unsigned long		rate;
+	unsigned long		fixed_rate;
 	unsigned long		max_rate;
 	unsigned long		min_rate;
 	u32			flags;
 	const char		*name;
 
-	u32			refcnt;
 	enum clk_state		state;
-	struct clk		*parent;
 	u32			div;
 	u32			mul;
 
-	const struct clk_mux_sel	*inputs;
 	u32				reg;
 	u32				reg_shift;
 
@@ -114,6 +111,7 @@ struct clk {
 			unsigned long			vco_max;
 			const struct clk_pll_freq_table	*freq_table;
 			int				lock_delay;
+			unsigned long			fixed_rate;
 		} pll;
 		struct {
 			u32				sel;
@@ -130,7 +128,8 @@ struct clk {
 		} shared_bus_user;
 	} u;
 
-	spinlock_t spinlock;
+	void (*reset)(struct clk_hw *, bool);
+	int (*clk_cfg_ex)(struct clk_hw *, enum tegra_clk_ex_param, u32);
 };
 
 struct clk_duplicate {
@@ -145,16 +144,10 @@ struct tegra_clk_init_table {
 	bool enabled;
 };
 
+void tegra_clk_add(struct clk *c);
 void tegra2_init_clocks(void);
-void tegra2_periph_reset_deassert(struct clk *c);
-void tegra2_periph_reset_assert(struct clk *c);
-void clk_init(struct clk *clk);
+void tegra30_init_clocks(void);
 struct clk *tegra_get_clock_by_name(const char *name);
-unsigned long clk_measure_input_freq(void);
-int clk_reparent(struct clk *c, struct clk *parent);
 void tegra_clk_init_from_table(struct tegra_clk_init_table *table);
-unsigned long clk_get_rate_locked(struct clk *c);
-int clk_set_rate_locked(struct clk *c, unsigned long rate);
-void tegra2_sdmmc_tap_delay(struct clk *c, int delay);
 
 #endif

@@ -123,22 +123,22 @@ struct sunfire_drvdata {
 	struct sunfire_led	leds[NUM_LEDS_PER_BOARD];
 };
 
-static int __devinit sunfire_led_generic_probe(struct platform_device *pdev,
+static int sunfire_led_generic_probe(struct platform_device *pdev,
 					       struct led_type *types)
 {
 	struct sunfire_drvdata *p;
-	int i, err = -EINVAL;
+	int i, err;
 
 	if (pdev->num_resources != 1) {
 		printk(KERN_ERR PFX "Wrong number of resources %d, should be 1\n",
 		       pdev->num_resources);
-		goto out;
+		return -EINVAL;
 	}
 
-	p = kzalloc(sizeof(*p), GFP_KERNEL);
+	p = devm_kzalloc(&pdev->dev, sizeof(*p), GFP_KERNEL);
 	if (!p) {
 		printk(KERN_ERR PFX "Could not allocate struct sunfire_drvdata\n");
-		goto out;
+		return -ENOMEM;
 	}
 
 	for (i = 0; i < NUM_LEDS_PER_BOARD; i++) {
@@ -154,31 +154,24 @@ static int __devinit sunfire_led_generic_probe(struct platform_device *pdev,
 		if (err) {
 			printk(KERN_ERR PFX "Could not register %s LED\n",
 			       lp->name);
-			goto out_unregister_led_cdevs;
+			for (i--; i >= 0; i--)
+				led_classdev_unregister(&p->leds[i].led_cdev);
+			return err;
 		}
 	}
 
 	dev_set_drvdata(&pdev->dev, p);
 
-	err = 0;
-out:
-	return err;
-
-out_unregister_led_cdevs:
-	for (i--; i >= 0; i--)
-		led_classdev_unregister(&p->leds[i].led_cdev);
-	goto out;
+	return 0;
 }
 
-static int __devexit sunfire_led_generic_remove(struct platform_device *pdev)
+static int sunfire_led_generic_remove(struct platform_device *pdev)
 {
 	struct sunfire_drvdata *p = dev_get_drvdata(&pdev->dev);
 	int i;
 
 	for (i = 0; i < NUM_LEDS_PER_BOARD; i++)
 		led_classdev_unregister(&p->leds[i].led_cdev);
-
-	kfree(p);
 
 	return 0;
 }
@@ -199,7 +192,7 @@ static struct led_type clockboard_led_types[NUM_LEDS_PER_BOARD] = {
 	},
 };
 
-static int __devinit sunfire_clockboard_led_probe(struct platform_device *pdev)
+static int sunfire_clockboard_led_probe(struct platform_device *pdev)
 {
 	return sunfire_led_generic_probe(pdev, clockboard_led_types);
 }
@@ -220,7 +213,7 @@ static struct led_type fhc_led_types[NUM_LEDS_PER_BOARD] = {
 	},
 };
 
-static int __devinit sunfire_fhc_led_probe(struct platform_device *pdev)
+static int sunfire_fhc_led_probe(struct platform_device *pdev)
 {
 	return sunfire_led_generic_probe(pdev, fhc_led_types);
 }
@@ -230,7 +223,7 @@ MODULE_ALIAS("platform:sunfire-fhc-leds");
 
 static struct platform_driver sunfire_clockboard_led_driver = {
 	.probe		= sunfire_clockboard_led_probe,
-	.remove		= __devexit_p(sunfire_led_generic_remove),
+	.remove		= sunfire_led_generic_remove,
 	.driver		= {
 		.name	= "sunfire-clockboard-leds",
 		.owner	= THIS_MODULE,
@@ -239,7 +232,7 @@ static struct platform_driver sunfire_clockboard_led_driver = {
 
 static struct platform_driver sunfire_fhc_led_driver = {
 	.probe		= sunfire_fhc_led_probe,
-	.remove		= __devexit_p(sunfire_led_generic_remove),
+	.remove		= sunfire_led_generic_remove,
 	.driver		= {
 		.name	= "sunfire-fhc-leds",
 		.owner	= THIS_MODULE,

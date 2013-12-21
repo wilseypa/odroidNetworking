@@ -19,7 +19,6 @@
 #include <asm/cpu-info.h>
 #include <asm/mipsregs.h>
 #include <asm/prefetch.h>
-#include <asm/system.h>
 
 /*
  * Return current * instruction pointer ("program counter").
@@ -227,8 +226,6 @@ struct thread_struct {
 	unsigned long cp0_badvaddr;	/* Last user fault */
 	unsigned long cp0_baduaddr;	/* Last kernel fault accessing USEG */
 	unsigned long error_code;
-	unsigned long irix_trampoline;  /* Wheee... */
-	unsigned long irix_oldctx;
 #ifdef CONFIG_CPU_CAVIUM_OCTEON
     struct octeon_cop2_state cp2 __attribute__ ((__aligned__(128)));
     struct octeon_cvmseg_state cvmseg __attribute__ ((__aligned__(128)));
@@ -298,8 +295,6 @@ struct thread_struct {
 	.cp0_badvaddr		= 0,				\
 	.cp0_baduaddr		= 0,				\
 	.error_code		= 0,				\
-	.irix_trampoline	= 0,				\
-	.irix_oldctx		= 0,				\
 	/*							\
 	 * Cavium Octeon specifics (null if not Octeon)		\
 	 */							\
@@ -310,11 +305,6 @@ struct task_struct;
 
 /* Free all resources held by a thread. */
 #define release_thread(thread) do { } while(0)
-
-/* Prepare to copy thread state - unlazy all lazy status */
-#define prepare_to_copy(tsk)	do { } while (0)
-
-extern long kernel_thread(int (*fn)(void *), void * arg, unsigned long flags);
 
 extern unsigned long thread_saved_pc(struct task_struct *tsk);
 
@@ -355,6 +345,12 @@ unsigned long get_wchan(struct task_struct *p);
 
 #define ARCH_HAS_PREFETCHW
 #define prefetchw(x) __builtin_prefetch((x), 1, 1)
+
+/*
+ * See Documentation/scheduler/sched-arch.txt; prevents deadlock on SMP
+ * systems.
+ */
+#define __ARCH_WANT_UNLOCKED_CTXSW
 
 #endif
 

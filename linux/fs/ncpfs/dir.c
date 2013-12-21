@@ -30,15 +30,15 @@ static void ncp_do_readdir(struct file *, void *, filldir_t,
 
 static int ncp_readdir(struct file *, void *, filldir_t);
 
-static int ncp_create(struct inode *, struct dentry *, int, struct nameidata *);
-static struct dentry *ncp_lookup(struct inode *, struct dentry *, struct nameidata *);
+static int ncp_create(struct inode *, struct dentry *, umode_t, bool);
+static struct dentry *ncp_lookup(struct inode *, struct dentry *, unsigned int);
 static int ncp_unlink(struct inode *, struct dentry *);
-static int ncp_mkdir(struct inode *, struct dentry *, int);
+static int ncp_mkdir(struct inode *, struct dentry *, umode_t);
 static int ncp_rmdir(struct inode *, struct dentry *);
 static int ncp_rename(struct inode *, struct dentry *,
 	  	      struct inode *, struct dentry *);
 static int ncp_mknod(struct inode * dir, struct dentry *dentry,
-		     int mode, dev_t rdev);
+		     umode_t mode, dev_t rdev);
 #if defined(CONFIG_NCPFS_EXTRAS) || defined(CONFIG_NCPFS_NFS_NS)
 extern int ncp_symlink(struct inode *, struct dentry *, const char *);
 #else
@@ -72,7 +72,7 @@ const struct inode_operations ncp_dir_inode_operations =
 /*
  * Dentry operations routines
  */
-static int ncp_lookup_validate(struct dentry *, struct nameidata *);
+static int ncp_lookup_validate(struct dentry *, unsigned int);
 static int ncp_hash_dentry(const struct dentry *, const struct inode *,
 		struct qstr *);
 static int ncp_compare_dentry(const struct dentry *, const struct inode *,
@@ -290,7 +290,7 @@ leave_me:;
 
 
 static int
-ncp_lookup_validate(struct dentry *dentry, struct nameidata *nd)
+ncp_lookup_validate(struct dentry *dentry, unsigned int flags)
 {
 	struct ncp_server *server;
 	struct dentry *parent;
@@ -302,7 +302,7 @@ ncp_lookup_validate(struct dentry *dentry, struct nameidata *nd)
 	if (dentry == dentry->d_sb->s_root)
 		return 1;
 
-	if (nd->flags & LOOKUP_RCU)
+	if (flags & LOOKUP_RCU)
 		return -ECHILD;
 
 	parent = dget_parent(dentry);
@@ -836,7 +836,7 @@ out:
 	return result;
 }
 
-static struct dentry *ncp_lookup(struct inode *dir, struct dentry *dentry, struct nameidata *nd)
+static struct dentry *ncp_lookup(struct inode *dir, struct dentry *dentry, unsigned int flags)
 {
 	struct ncp_server *server = NCP_SERVER(dir);
 	struct inode *inode = NULL;
@@ -919,7 +919,7 @@ out_close:
 	goto out;
 }
 
-int ncp_create_new(struct inode *dir, struct dentry *dentry, int mode,
+int ncp_create_new(struct inode *dir, struct dentry *dentry, umode_t mode,
 		   dev_t rdev, __le32 attributes)
 {
 	struct ncp_server *server = NCP_SERVER(dir);
@@ -928,7 +928,7 @@ int ncp_create_new(struct inode *dir, struct dentry *dentry, int mode,
 	int opmode;
 	__u8 __name[NCP_MAXPATHLEN + 1];
 	
-	PPRINTK("ncp_create_new: creating %s/%s, mode=%x\n",
+	PPRINTK("ncp_create_new: creating %s/%s, mode=%hx\n",
 		dentry->d_parent->d_name.name, dentry->d_name.name, mode);
 
 	ncp_age_dentry(server, dentry);
@@ -979,13 +979,13 @@ out:
 	return error;
 }
 
-static int ncp_create(struct inode *dir, struct dentry *dentry, int mode,
-		struct nameidata *nd)
+static int ncp_create(struct inode *dir, struct dentry *dentry, umode_t mode,
+		bool excl)
 {
 	return ncp_create_new(dir, dentry, mode, 0, 0);
 }
 
-static int ncp_mkdir(struct inode *dir, struct dentry *dentry, int mode)
+static int ncp_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 {
 	struct ncp_entry_info finfo;
 	struct ncp_server *server = NCP_SERVER(dir);
@@ -1032,15 +1032,6 @@ static int ncp_rmdir(struct inode *dir, struct dentry *dentry)
 
 	DPRINTK("ncp_rmdir: removing %s/%s\n",
 		dentry->d_parent->d_name.name, dentry->d_name.name);
-
-	/*
-	 * fail with EBUSY if there are still references to this
-	 * directory.
-	 */
-	dentry_unhash(dentry);
-	error = -EBUSY;
-	if (!d_unhashed(dentry))
-		goto out;
 
 	len = sizeof(__name);
 	error = ncp_io2vol(server, __name, &len, dentry->d_name.name,
@@ -1201,12 +1192,12 @@ out:
 }
 
 static int ncp_mknod(struct inode * dir, struct dentry *dentry,
-		     int mode, dev_t rdev)
+		     umode_t mode, dev_t rdev)
 {
 	if (!new_valid_dev(rdev))
 		return -EINVAL;
 	if (ncp_is_nfs_extras(NCP_SERVER(dir), NCP_FINFO(dir)->volNumber)) {
-		DPRINTK(KERN_DEBUG "ncp_mknod: mode = 0%o\n", mode);
+		DPRINTK(KERN_DEBUG "ncp_mknod: mode = 0%ho\n", mode);
 		return ncp_create_new(dir, dentry, mode, rdev, 0);
 	}
 	return -EPERM; /* Strange, but true */

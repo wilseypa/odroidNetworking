@@ -87,6 +87,7 @@
 #include <linux/types.h>
 #include <linux/init.h>
 #include <linux/cpufreq.h>
+#include <linux/io.h>
 
 #include <asm/cputype.h>
 
@@ -228,7 +229,7 @@ static int __init sa1100_cpu_init(struct cpufreq_policy *policy)
 	return 0;
 }
 
-static struct cpufreq_driver sa1100_driver = {
+static struct cpufreq_driver sa1100_driver __refdata = {
 	.flags		= CPUFREQ_STICKY,
 	.verify		= sa11x0_verify_speed,
 	.target		= sa1100_target,

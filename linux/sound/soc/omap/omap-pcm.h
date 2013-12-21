@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2008 Nokia Corporation
  *
- * Contact: Jarkko Nikula <jhnikula@gmail.com>
+ * Contact: Jarkko Nikula <jarkko.nikula@bitmer.com>
  *          Peter Ujfalusi <peter.ujfalusi@ti.com>
  *
  * This program is free software; you can redistribute it and/or
@@ -25,13 +25,15 @@
 #ifndef __OMAP_PCM_H__
 #define __OMAP_PCM_H__
 
+struct snd_pcm_substream;
+
 struct omap_pcm_dma_data {
 	char		*name;		/* stream identifier */
 	int		dma_req;	/* DMA request line */
 	unsigned long	port_addr;	/* transmit/receive register */
 	void (*set_threshold)(struct snd_pcm_substream *substream);
-	int		data_type;	/* data type 8,16,32 */
-	int		sync_mode;	/* DMA sync mode */
+	int		data_type;	/* 8, 16, 32 (bits) or 0 to let omap-pcm
+					 * to decide the sDMA data type */
 	int		packet_size;	/* packet size only in PACKET mode */
 };
 

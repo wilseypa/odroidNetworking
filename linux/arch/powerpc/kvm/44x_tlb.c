@@ -319,7 +319,6 @@ void kvmppc_mmu_map(struct kvm_vcpu *vcpu, u64 gvaddr, gpa_t gpaddr,
 	if (is_error_page(new_page)) {
 		printk(KERN_ERR "Couldn't get guest page for gfn %llx!\n",
 			(unsigned long long)gfn);
-		kvm_release_page_clean(new_page);
 		return;
 	}
 	hpaddr = page_to_phys(new_page);
@@ -387,8 +386,10 @@ static void kvmppc_44x_invalidate(struct kvm_vcpu *vcpu,
 	}
 }
 
-void kvmppc_mmu_priv_switch(struct kvm_vcpu *vcpu, int usermode)
+void kvmppc_mmu_msr_notify(struct kvm_vcpu *vcpu, u32 old_msr)
 {
+	int usermode = vcpu->arch.shared->msr & MSR_PR;
+
 	vcpu->arch.shadow_pid = !usermode;
 }
 

@@ -1,9 +1,8 @@
 /*
- *  arch/s390/kernel/module.c - Kernel module help for s390.
+ *  Kernel module help for s390.
  *
  *  S390 version
- *    Copyright (C) 2002, 2003 IBM Deutschland Entwicklung GmbH,
- *			       IBM Corporation
+ *    Copyright IBM Corp. 2002, 2003
  *    Author(s): Arnd Bergmann (arndb@de.ibm.com)
  *		 Martin Schwidefsky (schwidefsky@de.ibm.com)
  *
@@ -45,12 +44,16 @@
 #define PLT_ENTRY_SIZE 20
 #endif /* CONFIG_64BIT */
 
+#ifdef CONFIG_64BIT
 void *module_alloc(unsigned long size)
 {
-	if (size == 0)
+	if (PAGE_ALIGN(size) > MODULES_LEN)
 		return NULL;
-	return vmalloc(size);
+	return __vmalloc_node_range(size, 1, MODULES_VADDR, MODULES_END,
+				    GFP_KERNEL, PAGE_KERNEL, -1,
+				    __builtin_return_address(0));
 }
+#endif
 
 /* Free memory returned from module_alloc */
 void module_free(struct module *mod, void *module_region)
@@ -174,15 +177,6 @@ module_frob_arch_sections(Elf_Ehdr *hdr, Elf_Shdr *sechdrs,
 	me->arch.plt_offset = me->core_size;
 	me->core_size += me->arch.plt_size;
 	return 0;
-}
-
-int
-apply_relocate(Elf_Shdr *sechdrs, const char *strtab, unsigned int symindex,
-	       unsigned int relsec, struct module *me)
-{
-	printk(KERN_ERR "module %s: RELOCATION unsupported\n",
-	       me->name);
-	return -ENOEXEC;
 }
 
 static int
@@ -408,8 +402,4 @@ int module_finalize(const Elf_Ehdr *hdr,
 	vfree(me->arch.syminfo);
 	me->arch.syminfo = NULL;
 	return 0;
-}
-
-void module_arch_cleanup(struct module *mod)
-{
 }

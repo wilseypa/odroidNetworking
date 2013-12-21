@@ -7,8 +7,8 @@ Please try and keep the descriptions small enough to fit on one line.
 
 Following translations are available on the WWW:
 
-   - Japanese, maintained by the JF Project (JF@linux.or.jp), at
-     http://www.linux.or.jp/JF/
+   - Japanese, maintained by the JF Project (jf@listserv.linux.or.jp), at
+     http://linuxjf.sourceforge.jp/
 
 00-INDEX
 	- this file.
@@ -136,8 +136,6 @@ fault-injection/
 	- dir with docs about the fault injection capabilities infrastructure.
 fb/
 	- directory with info on the frame buffer graphics abstraction layer.
-feature-removal-schedule.txt
-	- list of files and features that are going to be removed.
 filesystems/
 	- info on the vfs and the various filesystems that Linux supports.
 firmware_class/
@@ -210,6 +208,8 @@ local_ops.txt
 	- semantics and behavior of local atomic operations.
 lockdep-design.txt
 	- documentation on the runtime locking correctness validator.
+lockup-watchdogs.txt
+	- info on soft and hard lockup detectors (aka nmi_watchdog).
 logo.gif
 	- full colour GIF image of Linux logo (penguin - Tux).
 logo.txt
@@ -218,8 +218,6 @@ m68k/
 	- directory with info about Linux on Motorola 68k architecture.
 magic-number.txt
 	- list of magic numbers used to mark/protect kernel data structures.
-mca.txt
-	- info on supporting Micro Channel Architecture (e.g. PS/2) systems.
 md.txt
 	- info on boot arguments for the multiple devices driver.
 memory-barriers.txt
@@ -242,8 +240,6 @@ netlabel/
 	- directory with information on the NetLabel subsystem.
 networking/
 	- directory with info on various aspects of networking with Linux.
-nmi_watchdog.txt
-	- info on NMI watchdog for SMP systems.
 nommu-mmap.txt
 	- documentation about no-mmu memory mapping support.
 numastat.txt
@@ -272,8 +268,8 @@ preempt-locking.txt
 	- info on locking under a preemptive kernel.
 printk-formats.txt
 	- how to get printk format specifiers right
-prio_tree.txt
-	- info on radix-priority-search-tree use for indexing vmas.
+ramoops.txt
+	- documentation of the ramoops oops/panic logging module.
 rbtree.txt
 	- info on what red-black trees are and what they are for.
 robust-futex-ABI.txt

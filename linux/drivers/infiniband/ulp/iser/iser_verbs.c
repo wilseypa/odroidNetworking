@@ -70,32 +70,50 @@ static void iser_event_handler(struct ib_event_handler *handler,
  */
 static int iser_create_device_ib_res(struct iser_device *device)
 {
+	int i, j;
+	struct iser_cq_desc *cq_desc;
+
+	device->cqs_used = min(ISER_MAX_CQ, device->ib_device->num_comp_vectors);
+	iser_err("using %d CQs, device %s supports %d vectors\n", device->cqs_used,
+		 device->ib_device->name, device->ib_device->num_comp_vectors);
+
+	device->cq_desc = kmalloc(sizeof(struct iser_cq_desc) * device->cqs_used,
+				  GFP_KERNEL);
+	if (device->cq_desc == NULL)
+		goto cq_desc_err;
+	cq_desc = device->cq_desc;
+
 	device->pd = ib_alloc_pd(device->ib_device);
 	if (IS_ERR(device->pd))
 		goto pd_err;
 
-	device->rx_cq = ib_create_cq(device->ib_device,
-				  iser_cq_callback,
-				  iser_cq_event_callback,
-				  (void *)device,
-				  ISER_MAX_RX_CQ_LEN, 0);
-	if (IS_ERR(device->rx_cq))
-		goto rx_cq_err;
+	for (i = 0; i < device->cqs_used; i++) {
+		cq_desc[i].device   = device;
+		cq_desc[i].cq_index = i;
 
-	device->tx_cq = ib_create_cq(device->ib_device,
-				  NULL, iser_cq_event_callback,
-				  (void *)device,
-				  ISER_MAX_TX_CQ_LEN, 0);
+		device->rx_cq[i] = ib_create_cq(device->ib_device,
+					  iser_cq_callback,
+					  iser_cq_event_callback,
+					  (void *)&cq_desc[i],
+					  ISER_MAX_RX_CQ_LEN, i);
+		if (IS_ERR(device->rx_cq[i]))
+			goto cq_err;
 
-	if (IS_ERR(device->tx_cq))
-		goto tx_cq_err;
+		device->tx_cq[i] = ib_create_cq(device->ib_device,
+					  NULL, iser_cq_event_callback,
+					  (void *)&cq_desc[i],
+					  ISER_MAX_TX_CQ_LEN, i);
 
-	if (ib_req_notify_cq(device->rx_cq, IB_CQ_NEXT_COMP))
-		goto cq_arm_err;
+		if (IS_ERR(device->tx_cq[i]))
+			goto cq_err;
 
-	tasklet_init(&device->cq_tasklet,
-		     iser_cq_tasklet_fn,
-		     (unsigned long)device);
+		if (ib_req_notify_cq(device->rx_cq[i], IB_CQ_NEXT_COMP))
+			goto cq_err;
+
+		tasklet_init(&device->cq_tasklet[i],
+			     iser_cq_tasklet_fn,
+			(unsigned long)&cq_desc[i]);
+	}
 
 	device->mr = ib_get_dma_mr(device->pd, IB_ACCESS_LOCAL_WRITE |
 				   IB_ACCESS_REMOTE_WRITE |
@@ -113,14 +131,19 @@ static int iser_create_device_ib_res(struct iser_device *device)
 handler_err:
 	ib_dereg_mr(device->mr);
 dma_mr_err:
-	tasklet_kill(&device->cq_tasklet);
-cq_arm_err:
-	ib_destroy_cq(device->tx_cq);
-tx_cq_err:
-	ib_destroy_cq(device->rx_cq);
-rx_cq_err:
+	for (j = 0; j < device->cqs_used; j++)
+		tasklet_kill(&device->cq_tasklet[j]);
+cq_err:
+	for (j = 0; j < i; j++) {
+		if (device->tx_cq[j])
+			ib_destroy_cq(device->tx_cq[j]);
+		if (device->rx_cq[j])
+			ib_destroy_cq(device->rx_cq[j]);
+	}
 	ib_dealloc_pd(device->pd);
 pd_err:
+	kfree(device->cq_desc);
+cq_desc_err:
 	iser_err("failed to allocate an IB resource\n");
 	return -1;
 }
@@ -131,18 +154,24 @@ pd_err:
  */
 static void iser_free_device_ib_res(struct iser_device *device)
 {
+	int i;
 	BUG_ON(device->mr == NULL);
 
-	tasklet_kill(&device->cq_tasklet);
+	for (i = 0; i < device->cqs_used; i++) {
+		tasklet_kill(&device->cq_tasklet[i]);
+		(void)ib_destroy_cq(device->tx_cq[i]);
+		(void)ib_destroy_cq(device->rx_cq[i]);
+		device->tx_cq[i] = NULL;
+		device->rx_cq[i] = NULL;
+	}
+
 	(void)ib_unregister_event_handler(&device->event_handler);
 	(void)ib_dereg_mr(device->mr);
-	(void)ib_destroy_cq(device->tx_cq);
-	(void)ib_destroy_cq(device->rx_cq);
 	(void)ib_dealloc_pd(device->pd);
 
+	kfree(device->cq_desc);
+
 	device->mr = NULL;
-	device->tx_cq = NULL;
-	device->rx_cq = NULL;
 	device->pd = NULL;
 }
 
@@ -155,20 +184,40 @@ static int iser_create_ib_conn_res(struct iser_conn *ib_conn)
 {
 	struct iser_device	*device;
 	struct ib_qp_init_attr	init_attr;
-	int			ret = -ENOMEM;
+	int			req_err, resp_err, ret = -ENOMEM;
 	struct ib_fmr_pool_param params;
+	int index, min_index = 0;
 
 	BUG_ON(ib_conn->device == NULL);
 
 	device = ib_conn->device;
 
-	ib_conn->login_buf = kmalloc(ISER_RX_LOGIN_SIZE, GFP_KERNEL);
+	ib_conn->login_buf = kmalloc(ISCSI_DEF_MAX_RECV_SEG_LEN +
+					ISER_RX_LOGIN_SIZE, GFP_KERNEL);
 	if (!ib_conn->login_buf)
 		goto out_err;
 
-	ib_conn->login_dma = ib_dma_map_single(ib_conn->device->ib_device,
-				(void *)ib_conn->login_buf, ISER_RX_LOGIN_SIZE,
-				DMA_FROM_DEVICE);
+	ib_conn->login_req_buf  = ib_conn->login_buf;
+	ib_conn->login_resp_buf = ib_conn->login_buf + ISCSI_DEF_MAX_RECV_SEG_LEN;
+
+	ib_conn->login_req_dma = ib_dma_map_single(ib_conn->device->ib_device,
+				(void *)ib_conn->login_req_buf,
+				ISCSI_DEF_MAX_RECV_SEG_LEN, DMA_TO_DEVICE);
+
+	ib_conn->login_resp_dma = ib_dma_map_single(ib_conn->device->ib_device,
+				(void *)ib_conn->login_resp_buf,
+				ISER_RX_LOGIN_SIZE, DMA_FROM_DEVICE);
+
+	req_err  = ib_dma_mapping_error(device->ib_device, ib_conn->login_req_dma);
+	resp_err = ib_dma_mapping_error(device->ib_device, ib_conn->login_resp_dma);
+
+	if (req_err || resp_err) {
+		if (req_err)
+			ib_conn->login_req_dma = 0;
+		if (resp_err)
+			ib_conn->login_resp_dma = 0;
+		goto out_err;
+	}
 
 	ib_conn->page_vec = kmalloc(sizeof(struct iser_page_vec) +
 				    (sizeof(u64) * (ISCSI_ISER_SG_TABLESIZE +1)),
@@ -201,10 +250,20 @@ static int iser_create_ib_conn_res(struct iser_conn *ib_conn)
 
 	memset(&init_attr, 0, sizeof init_attr);
 
+	mutex_lock(&ig.connlist_mutex);
+	/* select the CQ with the minimal number of usages */
+	for (index = 0; index < device->cqs_used; index++)
+		if (device->cq_active_qps[index] <
+		    device->cq_active_qps[min_index])
+			min_index = index;
+	device->cq_active_qps[min_index]++;
+	mutex_unlock(&ig.connlist_mutex);
+	iser_err("cq index %d used for ib_conn %p\n", min_index, ib_conn);
+
 	init_attr.event_handler = iser_qp_event_callback;
 	init_attr.qp_context	= (void *)ib_conn;
-	init_attr.send_cq	= device->tx_cq;
-	init_attr.recv_cq	= device->rx_cq;
+	init_attr.send_cq	= device->tx_cq[min_index];
+	init_attr.recv_cq	= device->rx_cq[min_index];
 	init_attr.cap.max_send_wr  = ISER_QP_MAX_REQ_DTOS;
 	init_attr.cap.max_recv_wr  = ISER_QP_MAX_RECV_DTOS;
 	init_attr.cap.max_send_sge = 2;
@@ -233,6 +292,7 @@ out_err:
  */
 static int iser_free_ib_conn_res(struct iser_conn *ib_conn, int can_destroy_id)
 {
+	int cq_index;
 	BUG_ON(ib_conn == NULL);
 
 	iser_err("freeing conn %p cma_id %p fmr pool %p qp %p\n",
@@ -243,9 +303,12 @@ static int iser_free_ib_conn_res(struct iser_conn *ib_conn, int can_destroy_id)
 	if (ib_conn->fmr_pool != NULL)
 		ib_destroy_fmr_pool(ib_conn->fmr_pool);
 
-	if (ib_conn->qp != NULL)
-		rdma_destroy_qp(ib_conn->cma_id);
+	if (ib_conn->qp != NULL) {
+		cq_index = ((struct iser_cq_desc *)ib_conn->qp->recv_cq->cq_context)->cq_index;
+		ib_conn->device->cq_active_qps[cq_index]--;
 
+		rdma_destroy_qp(ib_conn->cma_id);
+	}
 	/* if cma handler context, the caller acts s.t the cma destroy the id */
 	if (ib_conn->cma_id != NULL && can_destroy_id)
 		rdma_destroy_id(ib_conn->cma_id);
@@ -254,6 +317,18 @@ static int iser_free_ib_conn_res(struct iser_conn *ib_conn, int can_destroy_id)
 	ib_conn->qp	  = NULL;
 	ib_conn->cma_id   = NULL;
 	kfree(ib_conn->page_vec);
+
+	if (ib_conn->login_buf) {
+		if (ib_conn->login_req_dma)
+			ib_dma_unmap_single(ib_conn->device->ib_device,
+				ib_conn->login_req_dma,
+				ISCSI_DEF_MAX_RECV_SEG_LEN, DMA_TO_DEVICE);
+		if (ib_conn->login_resp_dma)
+			ib_dma_unmap_single(ib_conn->device->ib_device,
+				ib_conn->login_resp_dma,
+				ISER_RX_LOGIN_SIZE, DMA_FROM_DEVICE);
+		kfree(ib_conn->login_buf);
+	}
 
 	return 0;
 }
@@ -582,8 +657,9 @@ id_failure:
 	ib_conn->cma_id = NULL;
 addr_failure:
 	ib_conn->state = ISER_CONN_DOWN;
+	iser_conn_put(ib_conn, 1); /* deref ib conn's cma id */
 connect_failure:
-	iser_conn_release(ib_conn, 1);
+	iser_conn_put(ib_conn, 1); /* deref ib conn deallocate */
 	return err;
 }
 
@@ -658,11 +734,11 @@ int iser_post_recvl(struct iser_conn *ib_conn)
 	struct ib_sge	  sge;
 	int ib_ret;
 
-	sge.addr   = ib_conn->login_dma;
+	sge.addr   = ib_conn->login_resp_dma;
 	sge.length = ISER_RX_LOGIN_SIZE;
 	sge.lkey   = ib_conn->device->mr->lkey;
 
-	rx_wr.wr_id   = (unsigned long)ib_conn->login_buf;
+	rx_wr.wr_id   = (unsigned long)ib_conn->login_resp_buf;
 	rx_wr.sg_list = &sge;
 	rx_wr.num_sge = 1;
 	rx_wr.next    = NULL;
@@ -759,9 +835,9 @@ static void iser_handle_comp_error(struct iser_tx_desc *desc,
 	}
 }
 
-static int iser_drain_tx_cq(struct iser_device  *device)
+static int iser_drain_tx_cq(struct iser_device  *device, int cq_index)
 {
-	struct ib_cq  *cq = device->tx_cq;
+	struct ib_cq  *cq = device->tx_cq[cq_index];
 	struct ib_wc  wc;
 	struct iser_tx_desc *tx_desc;
 	struct iser_conn *ib_conn;
@@ -790,8 +866,10 @@ static int iser_drain_tx_cq(struct iser_device  *device)
 
 static void iser_cq_tasklet_fn(unsigned long data)
 {
-	 struct iser_device  *device = (struct iser_device *)data;
-	 struct ib_cq	     *cq = device->rx_cq;
+	struct iser_cq_desc *cq_desc = (struct iser_cq_desc *)data;
+	struct iser_device  *device = cq_desc->device;
+	int cq_index = cq_desc->cq_index;
+	struct ib_cq	     *cq = device->rx_cq[cq_index];
 	 struct ib_wc	     wc;
 	 struct iser_rx_desc *desc;
 	 unsigned long	     xfer_len;
@@ -819,19 +897,21 @@ static void iser_cq_tasklet_fn(unsigned long data)
 		}
 		completed_rx++;
 		if (!(completed_rx & 63))
-			completed_tx += iser_drain_tx_cq(device);
+			completed_tx += iser_drain_tx_cq(device, cq_index);
 	}
 	/* #warning "it is assumed here that arming CQ only once its empty" *
 	 * " would not cause interrupts to be missed"                       */
 	ib_req_notify_cq(cq, IB_CQ_NEXT_COMP);
 
-	completed_tx += iser_drain_tx_cq(device);
+	completed_tx += iser_drain_tx_cq(device, cq_index);
 	iser_dbg("got %d rx %d tx completions\n", completed_rx, completed_tx);
 }
 
 static void iser_cq_callback(struct ib_cq *cq, void *cq_context)
 {
-	struct iser_device  *device = (struct iser_device *)cq_context;
+	struct iser_cq_desc *cq_desc = (struct iser_cq_desc *)cq_context;
+	struct iser_device  *device = cq_desc->device;
+	int cq_index = cq_desc->cq_index;
 
-	tasklet_schedule(&device->cq_tasklet);
+	tasklet_schedule(&device->cq_tasklet[cq_index]);
 }

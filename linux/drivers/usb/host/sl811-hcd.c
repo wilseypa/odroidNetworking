@@ -51,7 +51,6 @@
 
 #include <asm/io.h>
 #include <asm/irq.h>
-#include <asm/system.h>
 #include <asm/byteorder.h>
 #include <asm/unaligned.h>
 
@@ -157,7 +156,7 @@ static void setup_packet(
 	writeb(SL_SETUP /* | ep->epnum */, data_reg);
 	writeb(usb_pipedevice(urb->pipe), data_reg);
 
-	/* always OUT/data0 */ ;
+	/* always OUT/data0 */
 	sl811_write(sl811, bank + SL11H_HOSTCTLREG,
 			control | SL11H_HCTLMASK_OUT);
 	ep->length = 0;
@@ -1596,7 +1595,7 @@ static struct hc_driver sl811h_hc_driver = {
 
 /*-------------------------------------------------------------------------*/
 
-static int __devexit
+static int
 sl811h_remove(struct platform_device *dev)
 {
 	struct usb_hcd		*hcd = platform_get_drvdata(dev);
@@ -1619,7 +1618,7 @@ sl811h_remove(struct platform_device *dev)
 	return 0;
 }
 
-static int __devinit
+static int
 sl811h_probe(struct platform_device *dev)
 {
 	struct usb_hcd		*hcd;
@@ -1631,6 +1630,9 @@ sl811h_probe(struct platform_device *dev)
 	int			retval;
 	u8			tmp, ioaddr = 0;
 	unsigned long		irqflags;
+
+	if (usb_disabled())
+		return -ENODEV;
 
 	/* basic sanity checks first.  board-specific init logic should
 	 * have initialized these three resources and probably board
@@ -1729,7 +1731,7 @@ sl811h_probe(struct platform_device *dev)
 	 * Use resource IRQ flags if set by platform device setup.
 	 */
 	irqflags |= IRQF_SHARED;
-	retval = usb_add_hcd(hcd, irq, IRQF_DISABLED | irqflags);
+	retval = usb_add_hcd(hcd, irq, irqflags);
 	if (retval != 0)
 		goto err6;
 
@@ -1806,7 +1808,7 @@ sl811h_resume(struct platform_device *dev)
 /* this driver is exported so sl811_cs can depend on it */
 struct platform_driver sl811h_driver = {
 	.probe =	sl811h_probe,
-	.remove =	__devexit_p(sl811h_remove),
+	.remove =	sl811h_remove,
 
 	.suspend =	sl811h_suspend,
 	.resume =	sl811h_resume,
@@ -1817,20 +1819,4 @@ struct platform_driver sl811h_driver = {
 };
 EXPORT_SYMBOL(sl811h_driver);
 
-/*-------------------------------------------------------------------------*/
-
-static int __init sl811h_init(void)
-{
-	if (usb_disabled())
-		return -ENODEV;
-
-	INFO("driver %s, %s\n", hcd_name, DRIVER_VERSION);
-	return platform_driver_register(&sl811h_driver);
-}
-module_init(sl811h_init);
-
-static void __exit sl811h_cleanup(void)
-{
-	platform_driver_unregister(&sl811h_driver);
-}
-module_exit(sl811h_cleanup);
+module_platform_driver(sl811h_driver);

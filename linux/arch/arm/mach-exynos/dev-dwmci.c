@@ -54,24 +54,23 @@ static int exynos_dwmci_init(u32 slot_id, irq_handler_t handler, void *data)
 static void exynos_dwmci_set_io_timing(void *data, unsigned char timing)
 {
 	struct dw_mci *host = (struct dw_mci *)data;
-
-	if (timing == MMC_TIMING_UHS_DDR50)
-		__raw_writel(host->pdata->ddr_timing,
-			host->regs + DWMCI_CLKSEL);
-	else
-		__raw_writel(host->pdata->sdr_timing,
-			host->regs + DWMCI_CLKSEL);
+	host->pdata->ddr_timing = 0x00010002;
+	if (timing == MMC_TIMING_UHS_DDR50) {
+		__raw_writel(host->pdata->ddr_timing, host->regs + DWMCI_CLKSEL);
+	} else {
+		__raw_writel(host->pdata->sdr_timing, host->regs + DWMCI_CLKSEL);
+	}
 }
 
 static struct resource exynos_dwmci_resource[] = {
 	[0] = {
-		.start	= EXYNOS_PA_DWMCI,
-		.end	= EXYNOS_PA_DWMCI + SZ_4K - 1,
+		.start	= EXYNOS4_PA_DWMCI,
+		.end	= EXYNOS4_PA_DWMCI + SZ_4K - 1,
 		.flags	= IORESOURCE_MEM,
 	},
 	[1] = {
-		.start	= IRQ_DWMCI,
-		.end	= IRQ_DWMCI,
+		.start	= EXYNOS4_IRQ_DWMCI,
+		.end	= EXYNOS4_IRQ_DWMCI,
 		.flags	= IORESOURCE_IRQ,
 	}
 };
@@ -79,7 +78,7 @@ static struct resource exynos_dwmci_resource[] = {
 static struct dw_mci_board exynos_dwmci_def_platdata = {
 	.num_slots		= 1,
 	.quirks			= DW_MCI_QUIRK_BROKEN_CARD_DETECTION,
-	.bus_hz			= 80 * 1000 * 1000,
+	.bus_hz			= 25 * 1000 * 1000,
 	.detect_delay_ms	= 200,
 	.init			= exynos_dwmci_init,
 	.get_bus_wd		= exynos_dwmci_get_bus_wd,
@@ -124,7 +123,7 @@ struct dw_mci_board exynos_dwmci##_channel##_def_platdata = {	\
 	.num_slots		= 1,				\
 	.quirks			=				\
 		DW_MCI_QUIRK_BROKEN_CARD_DETECTION,		\
-	.bus_hz			= 200 * 1000 * 1000,		\
+	.bus_hz			= 25 * 1000 * 1000,		\
 	.detect_delay_ms	= 200,				\
 	.init			= exynos_dwmci_init,		\
 	.get_bus_wd		= exynos_dwmci_get_bus_wd,	\

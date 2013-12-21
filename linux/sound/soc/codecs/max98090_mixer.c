@@ -17,7 +17,6 @@
 #include <plat/map-base.h>
 #include <mach/regs-clock.h>
 
-#include <sound/max98090.h>
 #include "max98090.h"
 
 //----------------------------------------------------------------------------------------
@@ -74,18 +73,18 @@ void max98090_set_playback_earpiece(struct snd_soc_codec *codec)
 void max98090_set_playback_speaker_headset(struct snd_soc_codec *codec)
 {
 	int reg;
-	
+
 	// 0x92 Power DAC L/R, SPLEN
 	reg = snd_soc_read(codec, M98090_03F_OUTPUT_ENABLE);
 	reg &= ~(M98090_DAREN|M98090_DALEN|M98090_RCVREN|M98090_RCVLEN|M98090_SPREN|M98090_SPLEN|M98090_HPREN|M98090_HPLEN);
 	reg |= (M98090_DAREN|M98090_DALEN|M98090_HPREN|M98090_HPLEN);
 	snd_soc_write(codec, M98090_03F_OUTPUT_ENABLE, reg);
 
-//	// Stereo DAC to SPK_L, SPK_R Mute
-//	reg = M98090_DACL_TO_SPKL;
-//	snd_soc_write(codec, M98090_02E_MIX_SPK_L, reg);
-//	reg = M98090_DACR_TO_SPKR;
-//	snd_soc_write(codec, M98090_02F_MIX_SPK_R, reg);
+	//	// Stereo DAC to SPK_L, SPK_R Mute
+	//	reg = M98090_DACL_TO_SPKL;
+	//	snd_soc_write(codec, M98090_02E_MIX_SPK_L, reg);
+	//	reg = M98090_DACR_TO_SPKR;
+	//	snd_soc_write(codec, M98090_02F_MIX_SPK_R, reg);
 
 	// DAC L/R to HP L/R
 	reg = M98090_DACL_TO_HPL;
@@ -93,15 +92,15 @@ void max98090_set_playback_speaker_headset(struct snd_soc_codec *codec)
 	reg = M98090_DACR_TO_HPR;
 	snd_soc_write(codec, M98090_02A_MIX_HP_R, reg);
 
-//	reg = TUNNING_SPK_VOL;
-//	snd_soc_write(codec, M98090_031_SPK_L_VOL, reg);
-//	snd_soc_write(codec, M98090_032_SPK_R_VOL, reg);
-//
-//	reg = TUNNING_SPKMIX_VOL;
-//	snd_soc_write(codec, M98090_030_MIX_SPK_CNTL, reg);
+	//	reg = TUNNING_SPK_VOL;
+	//	snd_soc_write(codec, M98090_031_SPK_L_VOL, reg);
+	//	snd_soc_write(codec, M98090_032_SPK_R_VOL, reg);
+	//
+	//	reg = TUNNING_SPKMIX_VOL;
+	//	snd_soc_write(codec, M98090_030_MIX_SPK_CNTL, reg);
 
 	// HPMIX L/R to HP_AMP L/R
-//	reg = M98090_HPNORMAL;
+	//	reg = M98090_HPNORMAL;
 	reg = TUNNING_HPMIX_VOL;
 	snd_soc_write(codec, M98090_02B_MIX_HP_CNTL, reg);
 
@@ -128,17 +127,6 @@ void max98090_set_record_main_mic(struct snd_soc_codec *codec)
 {
 	int reg;
 
-#if defined(CONFIG_BOARD_ODROID_U) || defined(CONFIG_BOARD_ODROID_U2)
-
-	reg = snd_soc_read(codec, M98090_00C_DIGITAL_MIC);
-	reg |= (1<<4); // DMIC CLK enable, DMIC CLK = MCLK/8
-	snd_soc_write(codec, M98090_00C_DIGITAL_MIC, reg);
-	
-	reg = M98090_IN12_TO_ADCL; // MIC2 to ADC L/R Mixer
-	snd_soc_write(codec, M98090_015_MIX_ADC_L, reg);
-	snd_soc_write(codec, M98090_016_MIX_ADC_R, reg);
-
-#else
 	// 0x4C Mic bias, ADC L enable
 	reg = snd_soc_read(codec, M98090_03E_IPUT_ENABLE);
 	reg &= ~(M98090_ADLEN | M98090_ADREN | M98090_MBEN | M98090_LINEAEN | M98090_LINEBEN);
@@ -158,7 +146,6 @@ void max98090_set_record_main_mic(struct snd_soc_codec *codec)
 	reg = TUNNING_ADC_GAIN;
 	snd_soc_write(codec, M98090_017_ADC_L_LVL, reg);
 	snd_soc_write(codec, M98090_018_ADC_R_LVL, reg);
-#endif
 
 	printk("\t[MAX98090] %s(%d)\n",__FUNCTION__,__LINE__);
 	return;

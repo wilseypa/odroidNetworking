@@ -93,8 +93,8 @@
 static struct pci_driver sis630_driver;
 
 /* insmod parameters */
-static int high_clock;
-static int force;
+static bool high_clock;
+static bool force;
 module_param(high_clock, bool, 0);
 MODULE_PARM_DESC(high_clock, "Set Host Master Clock to 56KHz (default 14KHz).");
 module_param(force, bool, 0);
@@ -389,7 +389,7 @@ static u32 sis630_func(struct i2c_adapter *adapter)
 		I2C_FUNC_SMBUS_BLOCK_DATA;
 }
 
-static int __devinit sis630_setup(struct pci_dev *sis630_dev)
+static int sis630_setup(struct pci_dev *sis630_dev)
 {
 	unsigned char b;
 	struct pci_dev *dummy = NULL;
@@ -472,7 +472,7 @@ static struct i2c_adapter sis630_adapter = {
 	.algo		= &smbus_algorithm,
 };
 
-static const struct pci_device_id sis630_ids[] __devinitconst = {
+static DEFINE_PCI_DEVICE_TABLE(sis630_ids) = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_SI, PCI_DEVICE_ID_SI_503) },
 	{ PCI_DEVICE(PCI_VENDOR_ID_SI, PCI_DEVICE_ID_SI_LPC) },
 	{ 0, }
@@ -480,7 +480,7 @@ static const struct pci_device_id sis630_ids[] __devinitconst = {
 
 MODULE_DEVICE_TABLE (pci, sis630_ids);
 
-static int __devinit sis630_probe(struct pci_dev *dev, const struct pci_device_id *id)
+static int sis630_probe(struct pci_dev *dev, const struct pci_device_id *id)
 {
 	if (sis630_setup(dev)) {
 		dev_err(&dev->dev, "SIS630 comp. bus not detected, module not inserted.\n");
@@ -496,7 +496,7 @@ static int __devinit sis630_probe(struct pci_dev *dev, const struct pci_device_i
 	return i2c_add_adapter(&sis630_adapter);
 }
 
-static void __devexit sis630_remove(struct pci_dev *dev)
+static void sis630_remove(struct pci_dev *dev)
 {
 	if (acpi_base) {
 		i2c_del_adapter(&sis630_adapter);
@@ -510,24 +510,11 @@ static struct pci_driver sis630_driver = {
 	.name		= "sis630_smbus",
 	.id_table	= sis630_ids,
 	.probe		= sis630_probe,
-	.remove		= __devexit_p(sis630_remove),
+	.remove		= sis630_remove,
 };
 
-static int __init i2c_sis630_init(void)
-{
-	return pci_register_driver(&sis630_driver);
-}
-
-
-static void __exit i2c_sis630_exit(void)
-{
-	pci_unregister_driver(&sis630_driver);
-}
-
+module_pci_driver(sis630_driver);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Alexander Malysh <amalysh@web.de>");
 MODULE_DESCRIPTION("SIS630 SMBus driver");
-
-module_init(i2c_sis630_init);
-module_exit(i2c_sis630_exit);

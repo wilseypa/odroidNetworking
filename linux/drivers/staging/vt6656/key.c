@@ -36,9 +36,9 @@
  *
  */
 
+#include "mac.h"
 #include "tmacro.h"
 #include "key.h"
-#include "mac.h"
 #include "rndis.h"
 #include "control.h"
 
@@ -413,7 +413,7 @@ BOOL KeybRemoveKey(
     BOOL    bReturnValue = FALSE;
 
     if (is_broadcast_ether_addr(pbyBSSID)) {
-        // dealte all key
+        // delete all keys
         if ((dwKeyIndex & PAIRWISE_KEY) != 0) {
             for (i=0;i<MAX_KEY_TABLE;i++) {
                 pTable->KeyTable[i].PairwiseKey.bKeyValid = FALSE;
@@ -629,7 +629,7 @@ BOOL KeybGetTransmitKey(PSKeyManagement pTable, PBYTE pbyBSSID, DWORD dwKeyType,
 
 
 /*
- * Description: Check Pairewise Key
+ * Description: Check Pairwise Key
  *
  * Parameters:
  *  In:
@@ -694,6 +694,9 @@ BOOL KeybSetDefaultKey(
     } else if ((dwKeyIndex & 0x000000FF) >= MAX_GROUP_KEY) {
         return (FALSE);
     }
+
+    if (uKeyLength > MAX_KEY_LEN)
+	    return false;
 
     pTable->KeyTable[MAX_KEY_TABLE-1].bInUse = TRUE;
     for (ii = 0; ii < ETH_ALEN; ii++)

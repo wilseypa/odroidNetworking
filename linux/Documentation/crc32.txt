@@ -29,8 +29,8 @@ is sent last.  And when appending a CRC word to a message, you should
 do it in the right order, matching the endianness.
 
 Just like with ordinary division, you proceed one digit (bit) at a time.
-Each step of the division, division, you take one more digit (bit) of the
-dividend and append it to the current remainder.  Then you figure out the
+Each step of the division you take one more digit (bit) of the dividend
+and append it to the current remainder.  Then you figure out the
 appropriate multiple of the divisor to subtract to being the remainder
 back into range.  In binary, this is easy - it has to be either 0 or 1,
 and to make the XOR cancel, it's just a copy of bit 32 of the remainder.
@@ -180,4 +180,3 @@ The same problem applies to zero bits prepended to the message, and a
 similar solution is used.  Instead of starting the CRC computation with
 a remainder of 0, an initial remainder of all ones is used.  As long as
 you start the same way on decoding, it doesn't make a difference.
-

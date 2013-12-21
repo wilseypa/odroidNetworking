@@ -50,11 +50,12 @@ MODULE_SUPPORTED_DEVICE("{{Native Instruments, RigKontrol2},"
 			 "{Native Instruments, Session I/O},"
 			 "{Native Instruments, GuitarRig mobile}"
 			 "{Native Instruments, Traktor Kontrol X1}"
-			 "{Native Instruments, Traktor Kontrol S4}");
+			 "{Native Instruments, Traktor Kontrol S4}"
+			 "{Native Instruments, Maschine Controller}");
 
 static int index[SNDRV_CARDS] = SNDRV_DEFAULT_IDX; /* Index 0-max */
 static char* id[SNDRV_CARDS] = SNDRV_DEFAULT_STR; /* Id for this card */
-static int enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP; /* Enable this card */
+static bool enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP; /* Enable this card */
 static int snd_card_used[SNDRV_CARDS];
 
 module_param_array(index, int, NULL, 0444);
@@ -145,6 +146,11 @@ static struct usb_device_id snd_usb_id_table[] = {
 		.match_flags =  USB_DEVICE_ID_MATCH_DEVICE,
 		.idVendor =     USB_VID_NATIVEINSTRUMENTS,
 		.idProduct =    USB_PID_TRAKTORAUDIO2
+	},
+	{
+		.match_flags =  USB_DEVICE_ID_MATCH_DEVICE,
+		.idVendor =     USB_VID_NATIVEINSTRUMENTS,
+		.idProduct =    USB_PID_MASCHINECONTROLLER
 	},
 	{ /* terminator */ }
 };
@@ -283,7 +289,7 @@ int snd_usb_caiaq_set_auto_msg(struct snd_usb_caiaqdev *dev,
 					  tmp, sizeof(tmp));
 }
 
-static void __devinit setup_card(struct snd_usb_caiaqdev *dev)
+static void setup_card(struct snd_usb_caiaqdev *dev)
 {
 	int ret;
 	char val[4];
@@ -401,7 +407,7 @@ static int create_card(struct usb_device *usb_dev,
 	return 0;
 }
 
-static int __devinit init_card(struct snd_usb_caiaqdev *dev)
+static int init_card(struct snd_usb_caiaqdev *dev)
 {
 	char *c, usbpath[32];
 	struct usb_device *usb_dev = dev->chip.dev;
@@ -475,11 +481,11 @@ static int __devinit init_card(struct snd_usb_caiaqdev *dev)
 	return 0;
 }
 
-static int __devinit snd_probe(struct usb_interface *intf,
+static int snd_probe(struct usb_interface *intf,
 		     const struct usb_device_id *id)
 {
 	int ret;
-	struct snd_card *card;
+	struct snd_card *card = NULL;
 	struct usb_device *device = interface_to_usbdev(intf);
 
 	ret = create_card(device, intf, &card);
@@ -532,16 +538,5 @@ static struct usb_driver snd_usb_driver = {
 	.id_table 	= snd_usb_id_table,
 };
 
-static int __init snd_module_init(void)
-{
-	return usb_register(&snd_usb_driver);
-}
-
-static void __exit snd_module_exit(void)
-{
-	usb_deregister(&snd_usb_driver);
-}
-
-module_init(snd_module_init)
-module_exit(snd_module_exit)
+module_usb_driver(snd_usb_driver);
 

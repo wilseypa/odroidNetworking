@@ -14,11 +14,10 @@
 #include <plat/regs-watchdog.h>
 #include <mach/map.h>
 
-#include <linux/kernel.h>
 #include <linux/clk.h>
-#include <linux/delay.h>
 #include <linux/err.h>
 #include <linux/io.h>
+#include <linux/delay.h>
 
 static inline void arch_wdt_reset(void)
 {
@@ -26,7 +25,7 @@ static inline void arch_wdt_reset(void)
 
 	__raw_writel(0, S3C2410_WTCON);	  /* disable watchdog, to be safe  */
 
-	if (s3c2410_wdtclk)
+	if (!IS_ERR(s3c2410_wdtclk))
 		clk_enable(s3c2410_wdtclk);
 
 	/* put initial values into count and data */

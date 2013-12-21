@@ -94,6 +94,7 @@ void nilfs_forget_buffer(struct buffer_head *bh)
 	clear_buffer_nilfs_volatile(bh);
 	clear_buffer_nilfs_checked(bh);
 	clear_buffer_nilfs_redirected(bh);
+	clear_buffer_async_write(bh);
 	clear_buffer_dirty(bh);
 	if (nilfs_page_buffers_clean(page))
 		__nilfs_clear_page_dirty(page);
@@ -119,11 +120,11 @@ void nilfs_copy_buffer(struct buffer_head *dbh, struct buffer_head *sbh)
 	struct page *spage = sbh->b_page, *dpage = dbh->b_page;
 	struct buffer_head *bh;
 
-	kaddr0 = kmap_atomic(spage, KM_USER0);
-	kaddr1 = kmap_atomic(dpage, KM_USER1);
+	kaddr0 = kmap_atomic(spage);
+	kaddr1 = kmap_atomic(dpage);
 	memcpy(kaddr1 + bh_offset(dbh), kaddr0 + bh_offset(sbh), sbh->b_size);
-	kunmap_atomic(kaddr1, KM_USER1);
-	kunmap_atomic(kaddr0, KM_USER0);
+	kunmap_atomic(kaddr1);
+	kunmap_atomic(kaddr0);
 
 	dbh->b_state = sbh->b_state & NILFS_BUFFER_INHERENT_BITS;
 	dbh->b_blocknr = sbh->b_blocknr;
@@ -390,6 +391,7 @@ void nilfs_clear_dirty_pages(struct address_space *mapping)
 			bh = head = page_buffers(page);
 			do {
 				lock_buffer(bh);
+				clear_buffer_async_write(bh);
 				clear_buffer_dirty(bh);
 				clear_buffer_nilfs_volatile(bh);
 				clear_buffer_nilfs_checked(bh);
@@ -431,7 +433,7 @@ void nilfs_mapping_init(struct address_space *mapping, struct inode *inode,
 	mapping->host = inode;
 	mapping->flags = 0;
 	mapping_set_gfp_mask(mapping, GFP_NOFS);
-	mapping->assoc_mapping = NULL;
+	mapping->private_data = NULL;
 	mapping->backing_dev_info = bdi;
 	mapping->a_ops = &empty_aops;
 }

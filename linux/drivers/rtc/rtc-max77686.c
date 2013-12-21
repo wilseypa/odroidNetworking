@@ -1,7 +1,7 @@
 /*
  * RTC driver for Maxim MAX77686
  *
- * Copyright (C) 2011 Samsung Electronics Co.Ltd
+ * Copyright (C) 2012 Samsung Electronics Co.Ltd
  *
  *  based on rtc-max8997.c
  *
@@ -16,8 +16,11 @@
 #include <linux/rtc.h>
 #include <linux/delay.h>
 #include <linux/mutex.h>
+#include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/mfd/max77686-private.h>
+#include <linux/irqdomain.h>
+#include <linux/regmap.h>
 
 /* RTC Control Register */
 #define BCD_EN_SHIFT			0
@@ -65,7 +68,10 @@ struct max77686_rtc_info {
 	struct i2c_client	*rtc;
 	struct rtc_device	*rtc_dev;
 	struct mutex		lock;
-	int irq;
+
+	struct regmap		*regmap;
+
+	int virq;
 	int rtc_24hr_mode;
 };
 
@@ -123,22 +129,19 @@ static int max77686_rtc_tm_to_data(struct rtc_time *tm, u8 *data)
 	return 0;
 }
 
-static inline int max77686_rtc_update(struct max77686_rtc_info *info,
+static int max77686_rtc_update(struct max77686_rtc_info *info,
 	enum MAX77686_RTC_OP op)
 {
 	int ret;
-	u8 data;
+	unsigned int data;
 
-	switch (op) {
-	case MAX77686_RTC_WRITE:
+	if (op == MAX77686_RTC_WRITE)
 		data = 1 << RTC_UDR_SHIFT;
-		break;
-	case MAX77686_RTC_READ:
+	else
 		data = 1 << RTC_RBUDR_SHIFT;
-		break;
-	}
 
-	ret = max77686_update_reg(info->rtc, MAX77686_RTC_UPDATE0, data, data);
+	ret = regmap_update_bits(info->max77686->rtc_regmap,
+				 MAX77686_RTC_UPDATE0, data, data);
 	if (ret < 0)
 		dev_err(info->dev, "%s: fail to write update reg(ret=%d, data=0x%x)\n",
 				__func__, ret, data);
@@ -162,7 +165,8 @@ static int max77686_rtc_read_time(struct device *dev, struct rtc_time *tm)
 	if (ret < 0)
 		goto out;
 
-	ret = max77686_bulk_read(info->rtc, MAX77686_RTC_SEC, RTC_NR_TIME, data);
+	ret = regmap_bulk_read(info->max77686->rtc_regmap,
+				MAX77686_RTC_SEC, data, RTC_NR_TIME);
 	if (ret < 0) {
 		dev_err(info->dev, "%s: fail to read time reg(%d)\n", __func__,	ret);
 		goto out;
@@ -171,10 +175,6 @@ static int max77686_rtc_read_time(struct device *dev, struct rtc_time *tm)
 	max77686_rtc_data_to_tm(data, tm, info->rtc_24hr_mode);
 
 	ret = rtc_valid_tm(tm);
-
-	printk(KERN_INFO "%s: %d/%d/%d %d:%d:%d(%d)\n", __func__,
-		tm->tm_year, tm->tm_mon, tm->tm_mday,
-		tm->tm_hour, tm->tm_min, tm->tm_sec, tm->tm_wday);
 
 out:
 	mutex_unlock(&info->lock);
@@ -191,13 +191,10 @@ static int max77686_rtc_set_time(struct device *dev, struct rtc_time *tm)
 	if (ret < 0)
 		return ret;
 
-	printk(KERN_INFO "%s: %d/%d/%d %d:%d:%d(%d)\n", __func__,
-		tm->tm_year, tm->tm_mon, tm->tm_mday,
-		tm->tm_hour, tm->tm_min, tm->tm_sec, tm->tm_wday);
-
 	mutex_lock(&info->lock);
 
-	ret = max77686_bulk_write(info->rtc, MAX77686_RTC_SEC, RTC_NR_TIME, data);
+	ret = regmap_bulk_write(info->max77686->rtc_regmap,
+				 MAX77686_RTC_SEC, data, RTC_NR_TIME);
 	if (ret < 0) {
 		dev_err(info->dev, "%s: fail to write time reg(%d)\n", __func__,
 				ret);
@@ -215,7 +212,7 @@ static int max77686_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 {
 	struct max77686_rtc_info *info = dev_get_drvdata(dev);
 	u8 data[RTC_NR_TIME];
-	u8 val;
+	unsigned int val;
 	int i, ret;
 
 	mutex_lock(&info->lock);
@@ -224,7 +221,8 @@ static int max77686_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 	if (ret < 0)
 		goto out;
 
-	ret = max77686_bulk_read(info->rtc, MAX77686_RTC_ALARM1_SEC, RTC_NR_TIME, data);
+	ret = regmap_bulk_read(info->max77686->rtc_regmap,
+				 MAX77686_ALARM1_SEC, data, RTC_NR_TIME);
 	if (ret < 0) {
 		dev_err(info->dev, "%s:%d fail to read alarm reg(%d)\n",
 				__func__, __LINE__, ret);
@@ -232,10 +230,6 @@ static int max77686_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 	}
 
 	max77686_rtc_data_to_tm(data, &alrm->time, info->rtc_24hr_mode);
-
-	printk(KERN_INFO "%s: %d/%d/%d %d:%d:%d(%d)\n", __func__,
-		alrm->time.tm_year, alrm->time.tm_mon, alrm->time.tm_mday,
-		alrm->time.tm_hour, alrm->time.tm_min, alrm->time.tm_sec, alrm->time.tm_wday);
 
 	alrm->enabled = 0;
 	for (i = 0; i < RTC_NR_TIME; i++) {
@@ -246,7 +240,7 @@ static int max77686_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 	}
 
 	alrm->pending = 0;
-	ret = max77686_read_reg(info->max77686->i2c, MAX77686_REG_STATUS1, &val);
+	ret = regmap_read(info->max77686->regmap, MAX77686_REG_STATUS1, &val);
 	if (ret < 0) {
 		dev_err(info->dev, "%s:%d fail to read status1 reg(%d)\n",
 				__func__, __LINE__, ret);
@@ -274,7 +268,8 @@ static int max77686_rtc_stop_alarm(struct max77686_rtc_info *info)
 	if (ret < 0)
 		goto out;
 
-	ret = max77686_bulk_read(info->rtc, MAX77686_RTC_ALARM1_SEC, RTC_NR_TIME, data);
+	ret = regmap_bulk_read(info->max77686->rtc_regmap,
+				 MAX77686_ALARM1_SEC, data, RTC_NR_TIME);
 	if (ret < 0) {
 		dev_err(info->dev, "%s: fail to read alarm reg(%d)\n",
 				__func__, ret);
@@ -282,14 +277,12 @@ static int max77686_rtc_stop_alarm(struct max77686_rtc_info *info)
 	}
 
 	max77686_rtc_data_to_tm(data, &tm, info->rtc_24hr_mode);
-	printk(KERN_INFO "%s: %d/%d/%d %d:%d:%d(%d)\n", __func__,
-		tm.tm_year, tm.tm_mon, tm.tm_mday,
-		tm.tm_hour, tm.tm_min, tm.tm_sec, tm.tm_wday);
 
 	for (i = 0; i < RTC_NR_TIME; i++)
 		data[i] &= ~ALARM_ENABLE_MASK;
 
-	ret = max77686_bulk_write(info->rtc, MAX77686_RTC_ALARM1_SEC, RTC_NR_TIME, data);
+	ret = regmap_bulk_write(info->max77686->rtc_regmap,
+				 MAX77686_ALARM1_SEC, data, RTC_NR_TIME);
 	if (ret < 0) {
 		dev_err(info->dev, "%s: fail to write alarm reg(%d)\n",
 				__func__, ret);
@@ -314,7 +307,8 @@ static int max77686_rtc_start_alarm(struct max77686_rtc_info *info)
 	if (ret < 0)
 		goto out;
 
-	ret = max77686_bulk_read(info->rtc, MAX77686_RTC_ALARM1_SEC, RTC_NR_TIME, data);
+	ret = regmap_bulk_read(info->max77686->rtc_regmap,
+				 MAX77686_ALARM1_SEC, data, RTC_NR_TIME);
 	if (ret < 0) {
 		dev_err(info->dev, "%s: fail to read alarm reg(%d)\n",
 				__func__, ret);
@@ -322,14 +316,11 @@ static int max77686_rtc_start_alarm(struct max77686_rtc_info *info)
 	}
 
 	max77686_rtc_data_to_tm(data, &tm, info->rtc_24hr_mode);
-	printk(KERN_INFO "%s: %d/%d/%d %d:%d:%d(%d)\n", __func__,
-		tm.tm_year, tm.tm_mon, tm.tm_mday,
-		tm.tm_hour, tm.tm_min, tm.tm_sec, tm.tm_wday);
 
 	data[RTC_SEC] |= (1 << ALARM_ENABLE_SHIFT);
 	data[RTC_MIN] |= (1 << ALARM_ENABLE_SHIFT);
 	data[RTC_HOUR] |= (1 << ALARM_ENABLE_SHIFT);
-	data[RTC_WEEKDAY] |= (1 << ALARM_ENABLE_SHIFT);
+	data[RTC_WEEKDAY] &= ~ALARM_ENABLE_MASK;
 	if (data[RTC_MONTH] & 0xf)
 		data[RTC_MONTH] |= (1 << ALARM_ENABLE_SHIFT);
 	if (data[RTC_YEAR] & 0x7f)
@@ -337,7 +328,8 @@ static int max77686_rtc_start_alarm(struct max77686_rtc_info *info)
 	if (data[RTC_DATE] & 0x1f)
 		data[RTC_DATE] |= (1 << ALARM_ENABLE_SHIFT);
 
-	ret = max77686_bulk_write(info->rtc, MAX77686_RTC_ALARM1_SEC, RTC_NR_TIME, data);
+	ret = regmap_bulk_write(info->max77686->rtc_regmap,
+				 MAX77686_ALARM1_SEC, data, RTC_NR_TIME);
 	if (ret < 0) {
 		dev_err(info->dev, "%s: fail to write alarm reg(%d)\n",
 				__func__, ret);
@@ -359,18 +351,15 @@ static int max77686_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 	if (ret < 0)
 		return ret;
 
-	printk(KERN_INFO "%s: %d/%d/%d %d:%d:%d(%d)\n", __func__,
-		alrm->time.tm_year, alrm->time.tm_mon, alrm->time.tm_mday,
-		alrm->time.tm_hour, alrm->time.tm_min, alrm->time.tm_sec, alrm->time.tm_wday);
-
 	mutex_lock(&info->lock);
 
 	ret = max77686_rtc_stop_alarm(info);
 	if (ret < 0)
 		goto out;
 
-	ret = max77686_bulk_write(info->rtc, MAX77686_RTC_ALARM1_SEC, RTC_NR_TIME,
-				data);
+	ret = regmap_bulk_write(info->max77686->rtc_regmap,
+				 MAX77686_ALARM1_SEC, data, RTC_NR_TIME);
+
 	if (ret < 0) {
 		dev_err(info->dev, "%s: fail to write alarm reg(%d)\n",
 				__func__, ret);
@@ -427,7 +416,7 @@ static const struct rtc_class_ops max77686_rtc_ops = {
 static void max77686_rtc_enable_wtsr(struct max77686_rtc_info *info, bool enable)
 {
 	int ret;
-	u8 val, mask;
+	unsigned int val, mask;
 
 	if (enable)
 		val = (1 << WTSR_EN_SHIFT) | (3 << WTSRT_SHIFT);
@@ -439,7 +428,8 @@ static void max77686_rtc_enable_wtsr(struct max77686_rtc_info *info, bool enable
 	dev_info(info->dev, "%s: %s WTSR\n", __func__,
 			enable ? "enable" : "disable");
 
-	ret = max77686_update_reg(info->rtc, MAX77686_WTSR_SMPL_CNTL, val, mask);
+	ret = regmap_update_bits(info->max77686->rtc_regmap,
+				 MAX77686_WTSR_SMPL_CNTL, mask, val);
 	if (ret < 0) {
 		dev_err(info->dev, "%s: fail to update WTSR reg(%d)\n",
 				__func__, ret);
@@ -452,7 +442,7 @@ static void max77686_rtc_enable_wtsr(struct max77686_rtc_info *info, bool enable
 static void max77686_rtc_enable_smpl(struct max77686_rtc_info *info, bool enable)
 {
 	int ret;
-	u8 val, mask;
+	unsigned int val, mask;
 
 	if (enable)
 		val = (1 << SMPL_EN_SHIFT) | (0 << SMPLT_SHIFT);
@@ -464,7 +454,8 @@ static void max77686_rtc_enable_smpl(struct max77686_rtc_info *info, bool enable
 	dev_info(info->dev, "%s: %s SMPL\n", __func__,
 			enable ? "enable" : "disable");
 
-	ret = max77686_update_reg(info->rtc, MAX77686_WTSR_SMPL_CNTL, val, mask);
+	ret = regmap_update_bits(info->max77686->rtc_regmap,
+				 MAX77686_WTSR_SMPL_CNTL, mask, val);
 	if (ret < 0) {
 		dev_err(info->dev, "%s: fail to update SMPL reg(%d)\n",
 				__func__, ret);
@@ -474,7 +465,7 @@ static void max77686_rtc_enable_smpl(struct max77686_rtc_info *info, bool enable
 	max77686_rtc_update(info, MAX77686_RTC_WRITE);
 
 	val = 0;
-	max77686_read_reg(info->rtc, MAX77686_WTSR_SMPL_CNTL, &val);
+	regmap_read(info->max77686->rtc_regmap, MAX77686_WTSR_SMPL_CNTL, &val);
 	pr_info("%s: WTSR_SMPL(0x%02x)\n", __func__, val);
 }
 #endif /* MAX77686_RTC_WTSR_SMPL */
@@ -490,7 +481,7 @@ static int max77686_rtc_init_reg(struct max77686_rtc_info *info)
 
 	info->rtc_24hr_mode = 1;
 
-	ret = max77686_bulk_write(info->rtc, MAX77686_RTC_RTCCNTLM, 2, data);
+	ret = regmap_bulk_write(info->max77686->rtc_regmap, MAX77686_RTC_CONTROLM, data, 2);
 	if (ret < 0) {
 		dev_err(info->dev, "%s: fail to write controlm reg(%d)\n",
 				__func__, ret);
@@ -501,13 +492,18 @@ static int max77686_rtc_init_reg(struct max77686_rtc_info *info)
 	return ret;
 }
 
-static int __devinit max77686_rtc_probe(struct platform_device *pdev)
+static struct regmap_config max77686_rtc_regmap_config = {
+	.reg_bits = 8,
+	.val_bits = 8,
+};
+
+static int max77686_rtc_probe(struct platform_device *pdev)
 {
 	struct max77686_dev *max77686 = dev_get_drvdata(pdev->dev.parent);
 	struct max77686_rtc_info *info;
-	int ret;
+	int ret, virq;
 
-	printk(KERN_INFO "%s\n", __func__);
+	dev_info(&pdev->dev, "%s\n", __func__);
 
 	info = kzalloc(sizeof(struct max77686_rtc_info), GFP_KERNEL);
 	if (!info)
@@ -517,8 +513,15 @@ static int __devinit max77686_rtc_probe(struct platform_device *pdev)
 	info->dev = &pdev->dev;
 	info->max77686 = max77686;
 	info->rtc = max77686->rtc;
-//	info->irq = max77686->irq_base + MAX77686_RTCIRQ_RTCA1;
-
+	info->max77686->rtc_regmap = regmap_init_i2c(info->max77686->rtc,
+					 &max77686_rtc_regmap_config);
+	if (IS_ERR(info->max77686->rtc_regmap)) {
+		ret = PTR_ERR(info->max77686->rtc_regmap);
+		dev_err(info->max77686->dev, "Failed to allocate register map: %d\n",
+				ret);
+		kfree(info);
+		return ret;
+	}
 	platform_set_drvdata(pdev, info);
 
 	ret = max77686_rtc_init_reg(info);
@@ -539,7 +542,7 @@ static int __devinit max77686_rtc_probe(struct platform_device *pdev)
 			&max77686_rtc_ops, THIS_MODULE);
 
 	if (IS_ERR(info->rtc_dev)) {
-		printk(KERN_INFO "%s: fail\n", __func__);
+		dev_info(&pdev->dev, "%s: fail\n", __func__);
 
 		ret = PTR_ERR(info->rtc_dev);
 		dev_err(&pdev->dev, "Failed to register RTC device: %d\n", ret);
@@ -547,16 +550,18 @@ static int __devinit max77686_rtc_probe(struct platform_device *pdev)
 			ret = -EINVAL;
 		goto err_rtc;
 	}
+	virq = irq_create_mapping(max77686->irq_domain, MAX77686_RTCIRQ_RTCA1);
+	if (!virq)
+		goto err_rtc;
+	info->virq = virq;
 
-#if 0
-	ret = request_threaded_irq(info->irq, NULL, max77686_rtc_alarm_irq, 0,
+	ret = request_threaded_irq(virq, NULL, max77686_rtc_alarm_irq, 0,
 			"rtc-alarm0", info);
 	if (ret < 0) {
 		dev_err(&pdev->dev, "Failed to request alarm IRQ: %d: %d\n",
-			info->irq, ret);
+			info->virq, ret);
 		goto err_rtc;
 	}
-#endif
 
 	goto out;
 err_rtc:
@@ -566,12 +571,12 @@ out:
 	return ret;
 }
 
-static int __devexit max77686_rtc_remove(struct platform_device *pdev)
+static int max77686_rtc_remove(struct platform_device *pdev)
 {
 	struct max77686_rtc_info *info = platform_get_drvdata(pdev);
 
 	if (info) {
-		free_irq(info->irq, info);
+		free_irq(info->virq, info);
 		rtc_device_unregister(info->rtc_dev);
 		kfree(info);
 	}
@@ -588,7 +593,7 @@ static void max77686_rtc_shutdown(struct platform_device *pdev)
 
 	for (i = 0; i < 3; i++) {
 		max77686_rtc_enable_wtsr(info, false);
-		max77686_read_reg(info->rtc, MAX77686_WTSR_SMPL_CNTL, &val);
+		regmap_read(info->max77686->rtc_regmap, MAX77686_WTSR_SMPL_CNTL, &val);
 		pr_info("%s: WTSR_SMPL reg(0x%02x)\n", __func__, val);
 		if (val & WTSR_EN_MASK)
 			pr_emerg("%s: fail to disable WTSR\n", __func__);
@@ -614,7 +619,7 @@ static struct platform_driver max77686_rtc_driver = {
 		.owner	= THIS_MODULE,
 	},
 	.probe		= max77686_rtc_probe,
-	.remove		= __devexit_p(max77686_rtc_remove),
+	.remove		= max77686_rtc_remove,
 	.shutdown	= max77686_rtc_shutdown,
 	.id_table	= rtc_id,
 };

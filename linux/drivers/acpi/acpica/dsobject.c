@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2011, Intel Corp.
+ * Copyright (C) 2000 - 2012, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -64,7 +64,7 @@ acpi_ds_build_internal_object(struct acpi_walk_state *walk_state,
  * FUNCTION:    acpi_ds_build_internal_object
  *
  * PARAMETERS:  walk_state      - Current walk state
- *              Op              - Parser object to be translated
+ *              op              - Parser object to be translated
  *              obj_desc_ptr    - Where the ACPI internal object is returned
  *
  * RETURN:      Status
@@ -250,7 +250,7 @@ acpi_ds_build_internal_object(struct acpi_walk_state *walk_state,
  * FUNCTION:    acpi_ds_build_internal_buffer_obj
  *
  * PARAMETERS:  walk_state      - Current walk state
- *              Op              - Parser object to be translated
+ *              op              - Parser object to be translated
  *              buffer_length   - Length of the buffer
  *              obj_desc_ptr    - Where the ACPI internal object is returned
  *
@@ -293,7 +293,7 @@ acpi_ds_build_internal_buffer_obj(struct acpi_walk_state *walk_state,
 
 	/*
 	 * Second arg is the buffer data (optional) byte_list can be either
-	 * individual bytes or a string initializer.  In either case, a
+	 * individual bytes or a string initializer. In either case, a
 	 * byte_list appears in the AML.
 	 */
 	arg = op->common.value.arg;	/* skip first arg */
@@ -354,7 +354,7 @@ acpi_ds_build_internal_buffer_obj(struct acpi_walk_state *walk_state,
  * FUNCTION:    acpi_ds_build_internal_package_obj
  *
  * PARAMETERS:  walk_state      - Current walk state
- *              Op              - Parser object to be translated
+ *              op              - Parser object to be translated
  *              element_count   - Number of elements in the package - this is
  *                                the num_elements argument to Package()
  *              obj_desc_ptr    - Where the ACPI internal object is returned
@@ -547,8 +547,8 @@ acpi_ds_build_internal_package_obj(struct acpi_walk_state *walk_state,
  * FUNCTION:    acpi_ds_create_node
  *
  * PARAMETERS:  walk_state      - Current walk state
- *              Node            - NS Node to be initialized
- *              Op              - Parser object to be translated
+ *              node            - NS Node to be initialized
+ *              op              - Parser object to be translated
  *
  * RETURN:      Status
  *
@@ -568,7 +568,7 @@ acpi_ds_create_node(struct acpi_walk_state *walk_state,
 
 	/*
 	 * Because of the execution pass through the non-control-method
-	 * parts of the table, we can arrive here twice.  Only init
+	 * parts of the table, we can arrive here twice. Only init
 	 * the named object node the first time through
 	 */
 	if (acpi_ns_get_attached_object(node)) {
@@ -611,14 +611,14 @@ acpi_ds_create_node(struct acpi_walk_state *walk_state,
  * FUNCTION:    acpi_ds_init_object_from_op
  *
  * PARAMETERS:  walk_state      - Current walk state
- *              Op              - Parser op used to init the internal object
- *              Opcode          - AML opcode associated with the object
+ *              op              - Parser op used to init the internal object
+ *              opcode          - AML opcode associated with the object
  *              ret_obj_desc    - Namespace object to be initialized
  *
  * RETURN:      Status
  *
  * DESCRIPTION: Initialize a namespace object from a parser Op and its
- *              associated arguments.  The namespace object is a more compact
+ *              associated arguments. The namespace object is a more compact
  *              representation of the Op and its arguments.
  *
  ******************************************************************************/

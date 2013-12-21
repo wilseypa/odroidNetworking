@@ -44,7 +44,6 @@ obj-$(CONFIG_CPU_CACHE_FA)	+= cache-fa.o
 AFLAGS_cache-v6.o	:=-Wa,-march=armv6
 AFLAGS_cache-v7.o	:=-Wa,-march=armv7-a
 
-obj-$(CONFIG_CPU_COPY_V3)	+= copypage-v3.o
 obj-$(CONFIG_CPU_COPY_V4WT)	+= copypage-v4wt.o
 obj-$(CONFIG_CPU_COPY_V4WB)	+= copypage-v4wb.o
 obj-$(CONFIG_CPU_COPY_FEROCEON)	+= copypage-feroceon.o
@@ -54,7 +53,6 @@ obj-$(CONFIG_CPU_XSCALE)	+= copypage-xscale.o
 obj-$(CONFIG_CPU_XSC3)		+= copypage-xsc3.o
 obj-$(CONFIG_CPU_COPY_FA)	+= copypage-fa.o
 
-obj-$(CONFIG_CPU_TLB_V3)	+= tlb-v3.o
 obj-$(CONFIG_CPU_TLB_V4WT)	+= tlb-v4.o
 obj-$(CONFIG_CPU_TLB_V4WB)	+= tlb-v4wb.o
 obj-$(CONFIG_CPU_TLB_V4WBI)	+= tlb-v4wbi.o
@@ -66,8 +64,6 @@ obj-$(CONFIG_CPU_TLB_FA)	+= tlb-fa.o
 AFLAGS_tlb-v6.o		:=-Wa,-march=armv6
 AFLAGS_tlb-v7.o		:=-Wa,-march=armv7-a
 
-obj-$(CONFIG_CPU_ARM610)	+= proc-arm6_7.o
-obj-$(CONFIG_CPU_ARM710)	+= proc-arm6_7.o
 obj-$(CONFIG_CPU_ARM7TDMI)	+= proc-arm7tdmi.o
 obj-$(CONFIG_CPU_ARM720T)	+= proc-arm720.o
 obj-$(CONFIG_CPU_ARM740T)	+= proc-arm740.o
@@ -100,4 +96,3 @@ obj-$(CONFIG_CACHE_FEROCEON_L2)	+= cache-feroceon-l2.o
 obj-$(CONFIG_CACHE_L2X0)	+= cache-l2x0.o
 obj-$(CONFIG_CACHE_XSC3L2)	+= cache-xsc3l2.o
 obj-$(CONFIG_CACHE_TAUROS2)	+= cache-tauros2.o
-obj-$(CONFIG_CACHE_PERF)	+= cache_perf.o

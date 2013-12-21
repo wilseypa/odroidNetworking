@@ -72,7 +72,7 @@ enum hp_wmi_event_ids {
 	HPWMI_LOCK_SWITCH = 7,
 };
 
-static int __devinit hp_wmi_bios_setup(struct platform_device *device);
+static int hp_wmi_bios_setup(struct platform_device *device);
 static int __exit hp_wmi_bios_remove(struct platform_device *device);
 static int hp_wmi_resume_handler(struct device *device);
 
@@ -619,7 +619,7 @@ static void cleanup_sysfs(struct platform_device *device)
 	device_remove_file(&device->dev, &dev_attr_tablet);
 }
 
-static int __devinit hp_wmi_rfkill_setup(struct platform_device *device)
+static int hp_wmi_rfkill_setup(struct platform_device *device)
 {
 	int err;
 	int wireless = 0;
@@ -634,6 +634,8 @@ static int __devinit hp_wmi_rfkill_setup(struct platform_device *device)
 					   RFKILL_TYPE_WLAN,
 					   &hp_wmi_rfkill_ops,
 					   (void *) HPWMI_WIFI);
+		if (!wifi_rfkill)
+			return -ENOMEM;
 		rfkill_init_sw_state(wifi_rfkill,
 				     hp_wmi_get_sw_state(HPWMI_WIFI));
 		rfkill_set_hw_state(wifi_rfkill,
@@ -648,6 +650,10 @@ static int __devinit hp_wmi_rfkill_setup(struct platform_device *device)
 						RFKILL_TYPE_BLUETOOTH,
 						&hp_wmi_rfkill_ops,
 						(void *) HPWMI_BLUETOOTH);
+		if (!bluetooth_rfkill) {
+			err = -ENOMEM;
+			goto register_wifi_error;
+		}
 		rfkill_init_sw_state(bluetooth_rfkill,
 				     hp_wmi_get_sw_state(HPWMI_BLUETOOTH));
 		rfkill_set_hw_state(bluetooth_rfkill,
@@ -662,6 +668,10 @@ static int __devinit hp_wmi_rfkill_setup(struct platform_device *device)
 					   RFKILL_TYPE_WWAN,
 					   &hp_wmi_rfkill_ops,
 					   (void *) HPWMI_WWAN);
+		if (!wwan_rfkill) {
+			err = -ENOMEM;
+			goto register_bluetooth_error;
+		}
 		rfkill_init_sw_state(wwan_rfkill,
 				     hp_wmi_get_sw_state(HPWMI_WWAN));
 		rfkill_set_hw_state(wwan_rfkill,
@@ -688,7 +698,7 @@ register_wifi_error:
 	return err;
 }
 
-static int __devinit hp_wmi_rfkill2_setup(struct platform_device *device)
+static int hp_wmi_rfkill2_setup(struct platform_device *device)
 {
 	int err, i;
 	struct bios_rfkill2_state state;
@@ -768,7 +778,7 @@ fail:
 	return err;
 }
 
-static int __devinit hp_wmi_bios_setup(struct platform_device *device)
+static int hp_wmi_bios_setup(struct platform_device *device)
 {
 	int err;
 

@@ -459,7 +459,7 @@ static int wm8350_rtc_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int __devexit wm8350_rtc_remove(struct platform_device *pdev)
+static int wm8350_rtc_remove(struct platform_device *pdev)
 {
 	struct wm8350 *wm8350 = platform_get_drvdata(pdev);
 	struct wm8350_rtc *wm_rtc = &wm8350->rtc;
@@ -479,24 +479,14 @@ static struct dev_pm_ops wm8350_rtc_pm_ops = {
 
 static struct platform_driver wm8350_rtc_driver = {
 	.probe = wm8350_rtc_probe,
-	.remove = __devexit_p(wm8350_rtc_remove),
+	.remove = wm8350_rtc_remove,
 	.driver = {
 		.name = "wm8350-rtc",
 		.pm = &wm8350_rtc_pm_ops,
 	},
 };
 
-static int __init wm8350_rtc_init(void)
-{
-	return platform_driver_register(&wm8350_rtc_driver);
-}
-module_init(wm8350_rtc_init);
-
-static void __exit wm8350_rtc_exit(void)
-{
-	platform_driver_unregister(&wm8350_rtc_driver);
-}
-module_exit(wm8350_rtc_exit);
+module_platform_driver(wm8350_rtc_driver);
 
 MODULE_AUTHOR("Mark Brown <broonie@opensource.wolfsonmicro.com>");
 MODULE_DESCRIPTION("RTC driver for the WM8350");

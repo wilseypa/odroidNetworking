@@ -153,7 +153,7 @@ done:
 	kunmap(page);
 	*max = offset + (curr - pptr) * 32 + i - start;
 	sbi->free_blocks -= *max;
-	sb->s_dirt = 1;
+	hfsplus_mark_mdb_dirty(sb);
 	dprint(DBG_BITMAP, "-> %u,%u\n", start, *max);
 out:
 	mutex_unlock(&sbi->alloc_mutex);
@@ -176,12 +176,14 @@ int hfsplus_block_free(struct super_block *sb, u32 offset, u32 count)
 	dprint(DBG_BITMAP, "block_free: %u,%u\n", offset, count);
 	/* are all of the bits in range? */
 	if ((offset + count) > sbi->total_blocks)
-		return -2;
+		return -ENOENT;
 
 	mutex_lock(&sbi->alloc_mutex);
 	mapping = sbi->alloc_file->i_mapping;
 	pnr = offset / PAGE_CACHE_BITS;
 	page = read_mapping_page(mapping, pnr, NULL);
+	if (IS_ERR(page))
+		goto kaboom;
 	pptr = kmap(page);
 	curr = pptr + (offset & (PAGE_CACHE_BITS - 1)) / 32;
 	end = pptr + PAGE_CACHE_BITS / 32;
@@ -214,6 +216,8 @@ int hfsplus_block_free(struct super_block *sb, u32 offset, u32 count)
 		set_page_dirty(page);
 		kunmap(page);
 		page = read_mapping_page(mapping, ++pnr, NULL);
+		if (IS_ERR(page))
+			goto kaboom;
 		pptr = kmap(page);
 		curr = pptr;
 		end = pptr + PAGE_CACHE_BITS / 32;
@@ -228,8 +232,15 @@ out:
 	set_page_dirty(page);
 	kunmap(page);
 	sbi->free_blocks += len;
-	sb->s_dirt = 1;
+	hfsplus_mark_mdb_dirty(sb);
 	mutex_unlock(&sbi->alloc_mutex);
 
 	return 0;
+
+kaboom:
+	printk(KERN_CRIT "hfsplus: unable to mark blocks free: error %ld\n",
+			PTR_ERR(page));
+	mutex_unlock(&sbi->alloc_mutex);
+
+	return -EIO;
 }

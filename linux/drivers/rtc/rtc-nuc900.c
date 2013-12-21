@@ -222,7 +222,7 @@ static struct rtc_class_ops nuc900_rtc_ops = {
 	.alarm_irq_enable = nuc900_alarm_irq_enable,
 };
 
-static int __devinit nuc900_rtc_probe(struct platform_device *pdev)
+static int nuc900_rtc_probe(struct platform_device *pdev)
 {
 	struct resource *res;
 	struct nuc900_rtc *nuc900_rtc;
@@ -269,7 +269,7 @@ static int __devinit nuc900_rtc_probe(struct platform_device *pdev)
 
 	nuc900_rtc->irq_num = platform_get_irq(pdev, 0);
 	if (request_irq(nuc900_rtc->irq_num, nuc900_rtc_interrupt,
-				IRQF_DISABLED, "nuc900rtc", nuc900_rtc)) {
+				0, "nuc900rtc", nuc900_rtc)) {
 		dev_err(&pdev->dev, "NUC900 RTC request irq failed\n");
 		err = -EBUSY;
 		goto fail4;
@@ -284,7 +284,7 @@ fail1:	kfree(nuc900_rtc);
 	return err;
 }
 
-static int __devexit nuc900_rtc_remove(struct platform_device *pdev)
+static int nuc900_rtc_remove(struct platform_device *pdev)
 {
 	struct nuc900_rtc *nuc900_rtc = platform_get_drvdata(pdev);
 	struct resource *res;
@@ -304,7 +304,7 @@ static int __devexit nuc900_rtc_remove(struct platform_device *pdev)
 }
 
 static struct platform_driver nuc900_rtc_driver = {
-	.remove		= __devexit_p(nuc900_rtc_remove),
+	.remove		= nuc900_rtc_remove,
 	.driver		= {
 		.name	= "nuc900-rtc",
 		.owner	= THIS_MODULE,

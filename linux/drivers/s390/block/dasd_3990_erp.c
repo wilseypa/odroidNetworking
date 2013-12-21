@@ -1,9 +1,8 @@
 /*
- * File...........: linux/drivers/s390/block/dasd_3990_erp.c
  * Author(s)......: Horst  Hummel    <Horst.Hummel@de.ibm.com>
  *		    Holger Smolinski <Holger.Smolinski@de.ibm.com>
  * Bugreports.to..: <Linux390@de.ibm.com>
- * (C) IBM Corporation, IBM Deutschland Entwicklung GmbH, 2000, 2001
+ * Copyright IBM Corp. 2000, 2001
  *
  */
 
@@ -1718,7 +1717,7 @@ dasd_3990_erp_action_1B_32(struct dasd_ccw_req * default_erp, char *sense)
 	erp->startdev = device;
 	erp->memdev = device;
 	erp->magic = default_erp->magic;
-	erp->expires = 0;
+	erp->expires = default_erp->expires;
 	erp->retries = 256;
 	erp->buildclk = get_clock();
 	erp->status = DASD_CQR_FILLED;
@@ -2363,7 +2362,7 @@ static struct dasd_ccw_req *dasd_3990_erp_add_erp(struct dasd_ccw_req *cqr)
 	erp->memdev   = device;
 	erp->block    = cqr->block;
 	erp->magic    = cqr->magic;
-	erp->expires  = 0;
+	erp->expires  = cqr->expires;
 	erp->retries  = 256;
 	erp->buildclk = get_clock();
 	erp->status = DASD_CQR_FILLED;

@@ -116,6 +116,7 @@ On all -  write a character to /proc/sysrq-trigger.  e.g.:
 'w'	- Dumps tasks that are in uninterruptable (blocked) state.
 
 'x'	- Used by xmon interface on ppc/powerpc platforms.
+          Show global PMU Registers on sparc64.
 
 'y'	- Show global CPU Registers [SPARC-64 specific]
 
@@ -241,9 +242,8 @@ command you are interested in.
 
 *  I have more questions, who can I ask?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-And I'll answer any questions about the registration system you got, also
-responding as soon as possible.
- -Crutcher
+Just ask them on the linux-kernel mailing list:
+	linux-kernel@vger.kernel.org
 
 *  Credits
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

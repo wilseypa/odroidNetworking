@@ -3,7 +3,7 @@
  * Subsystem core
  *
  * Copyright 2005, Broadcom Corporation
- * Copyright 2006, 2007, Michael Buesch <mb@bu3sch.de>
+ * Copyright 2006, 2007, Michael Buesch <m@bues.ch>
  *
  * Licensed under the GNU/GPL. See COPYING for details.
  */
@@ -12,6 +12,8 @@
 
 #include <linux/delay.h>
 #include <linux/io.h>
+#include <linux/module.h>
+#include <linux/platform_device.h>
 #include <linux/ssb/ssb.h>
 #include <linux/ssb/ssb_regs.h>
 #include <linux/ssb/ssb_driver_gige.h>
@@ -139,19 +141,6 @@ static void ssb_device_put(struct ssb_device *dev)
 		put_device(dev->dev);
 }
 
-static inline struct ssb_driver *ssb_driver_get(struct ssb_driver *drv)
-{
-	if (drv)
-		get_driver(&drv->drv);
-	return drv;
-}
-
-static inline void ssb_driver_put(struct ssb_driver *drv)
-{
-	if (drv)
-		put_driver(&drv->drv);
-}
-
 static int ssb_device_resume(struct device *dev)
 {
 	struct ssb_device *ssb_dev = dev_to_ssb_dev(dev);
@@ -249,11 +238,9 @@ int ssb_devices_freeze(struct ssb_bus *bus, struct ssb_freeze_context *ctx)
 			ssb_device_put(sdev);
 			continue;
 		}
-		sdrv = ssb_driver_get(drv_to_ssb_drv(sdev->dev->driver));
-		if (!sdrv || SSB_WARN_ON(!sdrv->remove)) {
-			ssb_device_put(sdev);
+		sdrv = drv_to_ssb_drv(sdev->dev->driver);
+		if (SSB_WARN_ON(!sdrv->remove))
 			continue;
-		}
 		sdrv->remove(sdev);
 		ctx->device_frozen[i] = 1;
 	}
@@ -292,7 +279,6 @@ int ssb_devices_thaw(struct ssb_freeze_context *ctx)
 				   dev_name(sdev->dev));
 			result = err;
 		}
-		ssb_driver_put(sdrv);
 		ssb_device_put(sdev);
 	}
 
@@ -448,10 +434,24 @@ static void ssb_devices_unregister(struct ssb_bus *bus)
 		if (sdev->dev)
 			device_unregister(sdev->dev);
 	}
+
+#ifdef CONFIG_SSB_EMBEDDED
+	if (bus->bustype == SSB_BUSTYPE_SSB)
+		platform_device_unregister(bus->watchdog);
+#endif
 }
 
 void ssb_bus_unregister(struct ssb_bus *bus)
 {
+	int err;
+
+	err = ssb_gpio_unregister(bus);
+	if (err == -EBUSY)
+		ssb_dprintk(KERN_ERR PFX "Some GPIOs are still in use.\n");
+	else if (err)
+		ssb_dprintk(KERN_ERR PFX
+			    "Can not unregister GPIO driver: %i\n", err);
+
 	ssb_buses_lock();
 	ssb_devices_unregister(bus);
 	list_del(&bus->list);
@@ -576,6 +576,8 @@ static int ssb_attach_queued_buses(void)
 		if (err)
 			goto error;
 		ssb_pcicore_init(&bus->pcicore);
+		if (bus->bustype == SSB_BUSTYPE_SSB)
+			ssb_watchdog_register(bus);
 		ssb_bus_may_powerdown(bus);
 
 		err = ssb_devices_register(bus);
@@ -811,7 +813,14 @@ static int ssb_bus_register(struct ssb_bus *bus,
 	if (err)
 		goto err_pcmcia_exit;
 	ssb_chipcommon_init(&bus->chipco);
+	ssb_extif_init(&bus->extif);
 	ssb_mipscore_init(&bus->mipscore);
+	err = ssb_gpio_init(bus);
+	if (err == -ENOTSUPP)
+		ssb_dprintk(KERN_DEBUG PFX "GPIO driver not activated\n");
+	else if (err)
+		ssb_dprintk(KERN_ERR PFX
+			   "Error registering GPIO driver: %i\n", err);
 	err = ssb_fetch_invariants(bus, get_invariants);
 	if (err) {
 		ssb_bus_may_powerdown(bus);
@@ -851,8 +860,7 @@ err_disable_xtal:
 }
 
 #ifdef CONFIG_SSB_PCIHOST
-int ssb_bus_pcibus_register(struct ssb_bus *bus,
-			    struct pci_dev *host_pci)
+int ssb_bus_pcibus_register(struct ssb_bus *bus, struct pci_dev *host_pci)
 {
 	int err;
 
@@ -918,8 +926,7 @@ int ssb_bus_sdiobus_register(struct ssb_bus *bus, struct sdio_func *func,
 EXPORT_SYMBOL(ssb_bus_sdiobus_register);
 #endif /* CONFIG_SSB_PCMCIAHOST */
 
-int ssb_bus_ssbbus_register(struct ssb_bus *bus,
-			    unsigned long baseaddr,
+int ssb_bus_ssbbus_register(struct ssb_bus *bus, unsigned long baseaddr,
 			    ssb_invariants_func_t get_invariants)
 {
 	int err;
@@ -1001,8 +1008,8 @@ u32 ssb_calc_clock_rate(u32 plltype, u32 n, u32 m)
 	switch (plltype) {
 	case SSB_PLLTYPE_6: /* 100/200 or 120/240 only */
 		if (m & SSB_CHIPCO_CLK_T6_MMASK)
-			return SSB_CHIPCO_CLK_T6_M0;
-		return SSB_CHIPCO_CLK_T6_M1;
+			return SSB_CHIPCO_CLK_T6_M1;
+		return SSB_CHIPCO_CLK_T6_M0;
 	case SSB_PLLTYPE_1: /* 48Mhz base, 3 dividers */
 	case SSB_PLLTYPE_3: /* 25Mhz, 2 dividers */
 	case SSB_PLLTYPE_4: /* 48Mhz, 4 dividers */
@@ -1092,6 +1099,9 @@ u32 ssb_clockspeed(struct ssb_bus *bus)
 	u32 plltype;
 	u32 clkctl_n, clkctl_m;
 
+	if (bus->chipco.capabilities & SSB_CHIPCO_CAP_PMU)
+		return ssb_pmu_get_controlclock(&bus->chipco);
+
 	if (ssb_extif_available(&bus->extif))
 		ssb_extif_get_clockcontrol(&bus->extif, &plltype,
 					   &clkctl_n, &clkctl_m);
@@ -1129,8 +1139,7 @@ static u32 ssb_tmslow_reject_bitmask(struct ssb_device *dev)
 	case SSB_IDLOW_SSBREV_27:     /* same here */
 		return SSB_TMSLOW_REJECT;	/* this is a guess */
 	default:
-		printk(KERN_INFO "ssb: Backplane Revision 0x%.8X\n", rev);
-		WARN_ON(1);
+		WARN(1, KERN_INFO "ssb: Backplane Revision 0x%.8X\n", rev);
 	}
 	return (SSB_TMSLOW_REJECT | SSB_TMSLOW_REJECT_23);
 }
@@ -1259,13 +1268,34 @@ void ssb_device_disable(struct ssb_device *dev, u32 core_specific_flags)
 }
 EXPORT_SYMBOL(ssb_device_disable);
 
+/* Some chipsets need routing known for PCIe and 64-bit DMA */
+static bool ssb_dma_translation_special_bit(struct ssb_device *dev)
+{
+	u16 chip_id = dev->bus->chip_id;
+
+	if (dev->id.coreid == SSB_DEV_80211) {
+		return (chip_id == 0x4322 || chip_id == 43221 ||
+			chip_id == 43231 || chip_id == 43222);
+	}
+
+	return 0;
+}
+
 u32 ssb_dma_translation(struct ssb_device *dev)
 {
 	switch (dev->bus->bustype) {
 	case SSB_BUSTYPE_SSB:
 		return 0;
 	case SSB_BUSTYPE_PCI:
-		return SSB_PCI_DMA;
+		if (pci_is_pcie(dev->bus->host_pci) &&
+		    ssb_read32(dev, SSB_TMSHIGH) & SSB_TMSHIGH_DMA64) {
+			return SSB_PCIE_DMA_H32;
+		} else {
+			if (ssb_dma_translation_special_bit(dev))
+				return SSB_PCIE_DMA_H32;
+			else
+				return SSB_PCI_DMA;
+		}
 	default:
 		__ssb_dma_not_implemented(dev);
 	}

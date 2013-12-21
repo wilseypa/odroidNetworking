@@ -199,6 +199,46 @@ ENTRY(startup_64)
 	 * an identity mapped page table being provied that maps our
 	 * entire text+data+bss and hopefully all of memory.
 	 */
+#ifdef CONFIG_EFI_STUB
+	/*
+	 * The entry point for the PE/COFF executable is efi_pe_entry, so
+	 * only legacy boot loaders will execute this jmp.
+	 */
+	jmp	preferred_addr
+
+ENTRY(efi_pe_entry)
+	mov	%rcx, %rdi
+	mov	%rdx, %rsi
+	pushq	%rdi
+	pushq	%rsi
+	call	make_boot_params
+	cmpq	$0,%rax
+	je	1f
+	mov	%rax, %rdx
+	popq	%rsi
+	popq	%rdi
+
+ENTRY(efi_stub_entry)
+	call	efi_main
+	movq	%rax,%rsi
+	cmpq	$0,%rax
+	jne	2f
+1:
+	/* EFI init failed, so hang. */
+	hlt
+	jmp	1b
+2:
+	call	3f
+3:
+	popq	%rax
+	subq	$3b, %rax
+	subq	BP_pref_address(%rsi), %rax
+	add	BP_code32_start(%esi), %eax
+	leaq	preferred_addr(%rax), %rax
+	jmp	*%rax
+
+preferred_addr:
+#endif
 
 	/* Setup data segments. */
 	xorl	%eax, %eax

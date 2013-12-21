@@ -78,6 +78,8 @@ enum {
 	Opt_quota_quantum,
 	Opt_barrier,
 	Opt_nobarrier,
+	Opt_rgrplvb,
+	Opt_norgrplvb,
 	Opt_error,
 };
 
@@ -115,6 +117,8 @@ static const match_table_t tokens = {
 	{Opt_quota_quantum, "quota_quantum=%d"},
 	{Opt_barrier, "barrier"},
 	{Opt_nobarrier, "nobarrier"},
+	{Opt_rgrplvb, "rgrplvb"},
+	{Opt_norgrplvb, "norgrplvb"},
 	{Opt_error, NULL}
 };
 
@@ -266,6 +270,12 @@ int gfs2_mount_args(struct gfs2_args *args, char *options)
 			break;
 		case Opt_nobarrier:
 			args->ar_nobarrier = 1;
+			break;
+		case Opt_rgrplvb:
+			args->ar_rgrplvb = 1;
+			break;
+		case Opt_norgrplvb:
+			args->ar_rgrplvb = 0;
 			break;
 		case Opt_error:
 		default:
@@ -752,51 +762,78 @@ static int gfs2_write_inode(struct inode *inode, struct writeback_control *wbc)
 	struct gfs2_sbd *sdp = GFS2_SB(inode);
 	struct address_space *metamapping = gfs2_glock2aspace(ip->i_gl);
 	struct backing_dev_info *bdi = metamapping->backing_dev_info;
-	struct gfs2_holder gh;
-	struct buffer_head *bh;
-	struct timespec atime;
-	struct gfs2_dinode *di;
-	int ret = -EAGAIN;
-	int unlock_required = 0;
+	int ret = 0;
 
-	/* Skip timestamp update, if this is from a memalloc */
-	if (current->flags & PF_MEMALLOC)
-		goto do_flush;
-	if (!gfs2_glock_is_locked_by_me(ip->i_gl)) {
-		ret = gfs2_glock_nq_init(ip->i_gl, LM_ST_EXCLUSIVE, 0, &gh);
-		if (ret)
-			goto do_flush;
-		unlock_required = 1;
-	}
-	ret = gfs2_trans_begin(sdp, RES_DINODE, 0);
-	if (ret)
-		goto do_unlock;
-	ret = gfs2_meta_inode_buffer(ip, &bh);
-	if (ret == 0) {
-		di = (struct gfs2_dinode *)bh->b_data;
-		atime.tv_sec = be64_to_cpu(di->di_atime);
-		atime.tv_nsec = be32_to_cpu(di->di_atime_nsec);
-		if (timespec_compare(&inode->i_atime, &atime) > 0) {
-			gfs2_trans_add_bh(ip->i_gl, bh, 1);
-			gfs2_dinode_out(ip, bh->b_data);
-		}
-		brelse(bh);
-	}
-	gfs2_trans_end(sdp);
-do_unlock:
-	if (unlock_required)
-		gfs2_glock_dq_uninit(&gh);
-do_flush:
 	if (wbc->sync_mode == WB_SYNC_ALL)
 		gfs2_log_flush(GFS2_SB(inode), ip->i_gl);
-	filemap_fdatawrite(metamapping);
 	if (bdi->dirty_exceeded)
 		gfs2_ail1_flush(sdp, wbc);
-	if (!ret && (wbc->sync_mode == WB_SYNC_ALL))
+	else
+		filemap_fdatawrite(metamapping);
+	if (wbc->sync_mode == WB_SYNC_ALL)
 		ret = filemap_fdatawait(metamapping);
 	if (ret)
 		mark_inode_dirty_sync(inode);
 	return ret;
+}
+
+/**
+ * gfs2_dirty_inode - check for atime updates
+ * @inode: The inode in question
+ * @flags: The type of dirty
+ *
+ * Unfortunately it can be called under any combination of inode
+ * glock and transaction lock, so we have to check carefully.
+ *
+ * At the moment this deals only with atime - it should be possible
+ * to expand that role in future, once a review of the locking has
+ * been carried out.
+ */
+
+static void gfs2_dirty_inode(struct inode *inode, int flags)
+{
+	struct gfs2_inode *ip = GFS2_I(inode);
+	struct gfs2_sbd *sdp = GFS2_SB(inode);
+	struct buffer_head *bh;
+	struct gfs2_holder gh;
+	int need_unlock = 0;
+	int need_endtrans = 0;
+	int ret;
+
+	if (!(flags & (I_DIRTY_DATASYNC|I_DIRTY_SYNC)))
+		return;
+
+	if (!gfs2_glock_is_locked_by_me(ip->i_gl)) {
+		ret = gfs2_glock_nq_init(ip->i_gl, LM_ST_EXCLUSIVE, 0, &gh);
+		if (ret) {
+			fs_err(sdp, "dirty_inode: glock %d\n", ret);
+			return;
+		}
+		need_unlock = 1;
+	} else if (WARN_ON_ONCE(ip->i_gl->gl_state != LM_ST_EXCLUSIVE))
+		return;
+
+	if (current->journal_info == NULL) {
+		ret = gfs2_trans_begin(sdp, RES_DINODE, 0);
+		if (ret) {
+			fs_err(sdp, "dirty_inode: gfs2_trans_begin %d\n", ret);
+			goto out;
+		}
+		need_endtrans = 1;
+	}
+
+	ret = gfs2_meta_inode_buffer(ip, &bh);
+	if (ret == 0) {
+		gfs2_trans_add_bh(ip->i_gl, bh, 1);
+		gfs2_dinode_out(ip, bh->b_data);
+		brelse(bh);
+	}
+
+	if (need_endtrans)
+		gfs2_trans_end(sdp);
+out:
+	if (need_unlock)
+		gfs2_glock_dq_uninit(&gh);
 }
 
 /**
@@ -812,7 +849,7 @@ static int gfs2_make_fs_ro(struct gfs2_sbd *sdp)
 	int error;
 
 	flush_workqueue(gfs2_delete_workqueue);
-	gfs2_quota_sync(sdp->sd_vfs, 0, 1);
+	gfs2_quota_sync(sdp->sd_vfs, 0);
 	gfs2_statfs_sync(sdp->sd_vfs, 0);
 
 	error = gfs2_glock_nq_init(sdp->sd_trans_gl, LM_ST_SHARED, GL_NOCACHE,
@@ -926,6 +963,8 @@ restart:
 static int gfs2_sync_fs(struct super_block *sb, int wait)
 {
 	struct gfs2_sbd *sdp = sb->s_fs_info;
+
+	gfs2_quota_sync(sb, -1);
 	if (wait && sdp)
 		gfs2_log_flush(sdp, NULL);
 	return 0;
@@ -1011,7 +1050,6 @@ static int statfs_slow_fill(struct gfs2_rgrpd *rgd,
 
 static int gfs2_statfs_slow(struct gfs2_sbd *sdp, struct gfs2_statfs_change_host *sc)
 {
-	struct gfs2_holder ri_gh;
 	struct gfs2_rgrpd *rgd_next;
 	struct gfs2_holder *gha, *gh;
 	unsigned int slots = 64;
@@ -1023,10 +1061,6 @@ static int gfs2_statfs_slow(struct gfs2_sbd *sdp, struct gfs2_statfs_change_host
 	gha = kcalloc(slots, sizeof(struct gfs2_holder), GFP_KERNEL);
 	if (!gha)
 		return -ENOMEM;
-
-	error = gfs2_rindex_hold(sdp, &ri_gh);
-	if (error)
-		goto out;
 
 	rgd_next = gfs2_rgrpd_get_first(sdp);
 
@@ -1070,9 +1104,6 @@ static int gfs2_statfs_slow(struct gfs2_sbd *sdp, struct gfs2_statfs_change_host
 		yield();
 	}
 
-	gfs2_glock_dq_uninit(&ri_gh);
-
-out:
 	kfree(gha);
 	return error;
 }
@@ -1123,6 +1154,10 @@ static int gfs2_statfs(struct dentry *dentry, struct kstatfs *buf)
 	struct gfs2_sbd *sdp = sb->s_fs_info;
 	struct gfs2_statfs_change_host sc;
 	int error;
+
+	error = gfs2_rindex_update(sdp);
+	if (error)
+		return error;
 
 	if (gfs2_tune_get(sdp, gt_statfs_slow))
 		error = gfs2_statfs_slow(sdp, &sc);
@@ -1262,18 +1297,18 @@ static int is_ancestor(const struct dentry *d1, const struct dentry *d2)
 /**
  * gfs2_show_options - Show mount options for /proc/mounts
  * @s: seq_file structure
- * @mnt: vfsmount
+ * @root: root of this (sub)tree
  *
  * Returns: 0 on success or error code
  */
 
-static int gfs2_show_options(struct seq_file *s, struct vfsmount *mnt)
+static int gfs2_show_options(struct seq_file *s, struct dentry *root)
 {
-	struct gfs2_sbd *sdp = mnt->mnt_sb->s_fs_info;
+	struct gfs2_sbd *sdp = root->d_sb->s_fs_info;
 	struct gfs2_args *args = &sdp->sd_args;
 	int val;
 
-	if (is_ancestor(mnt->mnt_root, sdp->sd_master_dir))
+	if (is_ancestor(root, sdp->sd_master_dir))
 		seq_printf(s, ",meta");
 	if (args->ar_lockproto[0])
 		seq_printf(s, ",lockproto=%s", args->ar_lockproto);
@@ -1332,6 +1367,8 @@ static int gfs2_show_options(struct seq_file *s, struct vfsmount *mnt)
 	val = sdp->sd_tune.gt_statfs_quantum;
 	if (val != 30)
 		seq_printf(s, ",statfs_quantum=%d", val);
+	else if (sdp->sd_tune.gt_statfs_slow)
+		seq_puts(s, ",statfs_quantum=0");
 	val = sdp->sd_tune.gt_quota_quantum;
 	if (val != 60)
 		seq_printf(s, ",quota_quantum=%d", val);
@@ -1357,6 +1394,8 @@ static int gfs2_show_options(struct seq_file *s, struct vfsmount *mnt)
 		seq_printf(s, ",nobarrier");
 	if (test_bit(SDF_DEMOTE, &sdp->sd_flags))
 		seq_printf(s, ",demote_interface_used");
+	if (args->ar_rgrplvb)
+		seq_printf(s, ",rgrplvb");
 	return 0;
 }
 
@@ -1377,8 +1416,8 @@ static void gfs2_final_release_pages(struct gfs2_inode *ip)
 static int gfs2_dinode_dealloc(struct gfs2_inode *ip)
 {
 	struct gfs2_sbd *sdp = GFS2_SB(&ip->i_inode);
-	struct gfs2_alloc *al;
 	struct gfs2_rgrpd *rgd;
+	struct gfs2_holder gh;
 	int error;
 
 	if (gfs2_get_inode_blocks(&ip->i_inode) != 1) {
@@ -1386,29 +1425,24 @@ static int gfs2_dinode_dealloc(struct gfs2_inode *ip)
 		return -EIO;
 	}
 
-	al = gfs2_alloc_get(ip);
-	if (!al)
-		return -ENOMEM;
+	error = gfs2_rindex_update(sdp);
+	if (error)
+		return error;
 
 	error = gfs2_quota_hold(ip, NO_QUOTA_CHANGE, NO_QUOTA_CHANGE);
 	if (error)
-		goto out;
+		return error;
 
-	error = gfs2_rindex_hold(sdp, &al->al_ri_gh);
-	if (error)
-		goto out_qs;
-
-	rgd = gfs2_blk2rgrpd(sdp, ip->i_no_addr);
+	rgd = gfs2_blk2rgrpd(sdp, ip->i_no_addr, 1);
 	if (!rgd) {
 		gfs2_consist_inode(ip);
 		error = -EIO;
-		goto out_rindex_relse;
+		goto out_qs;
 	}
 
-	error = gfs2_glock_nq_init(rgd->rd_gl, LM_ST_EXCLUSIVE, 0,
-				   &al->al_rgd_gh);
+	error = gfs2_glock_nq_init(rgd->rd_gl, LM_ST_EXCLUSIVE, 0, &gh);
 	if (error)
-		goto out_rindex_relse;
+		goto out_qs;
 
 	error = gfs2_trans_begin(sdp, RES_RG_BIT + RES_STATFS + RES_QUOTA,
 				 sdp->sd_jdesc->jd_blocks);
@@ -1422,13 +1456,9 @@ static int gfs2_dinode_dealloc(struct gfs2_inode *ip)
 	gfs2_trans_end(sdp);
 
 out_rg_gunlock:
-	gfs2_glock_dq_uninit(&al->al_rgd_gh);
-out_rindex_relse:
-	gfs2_glock_dq_uninit(&al->al_ri_gh);
+	gfs2_glock_dq_uninit(&gh);
 out_qs:
 	gfs2_quota_unhold(ip);
-out:
-	gfs2_alloc_put(ip);
 	return error;
 }
 
@@ -1471,9 +1501,11 @@ static void gfs2_evict_inode(struct inode *inode)
 		goto out;
 	}
 
-	error = gfs2_check_blk_type(sdp, ip->i_no_addr, GFS2_BLKST_UNLINKED);
-	if (error)
-		goto out_truncate;
+	if (!test_bit(GIF_ALLOC_FAILED, &ip->i_flags)) {
+		error = gfs2_check_blk_type(sdp, ip->i_no_addr, GFS2_BLKST_UNLINKED);
+		if (error)
+			goto out_truncate;
+	}
 
 	if (test_bit(GIF_INVALID, &ip->i_flags)) {
 		error = gfs2_inode_refresh(ip);
@@ -1513,6 +1545,15 @@ static void gfs2_evict_inode(struct inode *inode)
 	goto out_unlock;
 
 out_truncate:
+	gfs2_log_flush(sdp, ip->i_gl);
+	if (test_bit(GLF_DIRTY, &ip->i_gl->gl_flags)) {
+		struct address_space *metamapping = gfs2_glock2aspace(ip->i_gl);
+		filemap_fdatawrite(metamapping);
+		filemap_fdatawait(metamapping);
+	}
+	write_inode_now(inode, 1);
+	gfs2_ail_flush(ip->i_gl, 0);
+
 	/* Case 2 starts here */
 	error = gfs2_trans_begin(sdp, 0, sdp->sd_jdesc->jd_blocks);
 	if (error)
@@ -1523,6 +1564,9 @@ out_truncate:
 
 out_unlock:
 	/* Error path for case 1 */
+	if (gfs2_rs_active(ip->i_res))
+		gfs2_rs_deltree(ip, ip->i_res);
+
 	if (test_bit(HIF_HOLDER, &ip->i_iopen_gh.gh_iflags))
 		gfs2_glock_dq(&ip->i_iopen_gh);
 	gfs2_holder_uninit(&ip->i_iopen_gh);
@@ -1532,9 +1576,11 @@ out_unlock:
 out:
 	/* Case 3 starts here */
 	truncate_inode_pages(&inode->i_data, 0);
-	end_writeback(inode);
-
+	gfs2_rs_delete(ip);
+	clear_inode(inode);
+	gfs2_dir_hash_inval(ip);
 	ip->i_gl->gl_object = NULL;
+	flush_delayed_work(&ip->i_gl->gl_work);
 	gfs2_glock_add_to_lru(ip->i_gl);
 	gfs2_glock_put(ip->i_gl);
 	ip->i_gl = NULL;
@@ -1552,6 +1598,8 @@ static struct inode *gfs2_alloc_inode(struct super_block *sb)
 	if (ip) {
 		ip->i_flags = 0;
 		ip->i_gl = NULL;
+		ip->i_rgd = NULL;
+		ip->i_res = NULL;
 	}
 	return &ip->i_inode;
 }
@@ -1559,7 +1607,6 @@ static struct inode *gfs2_alloc_inode(struct super_block *sb)
 static void gfs2_i_callback(struct rcu_head *head)
 {
 	struct inode *inode = container_of(head, struct inode, i_rcu);
-	INIT_LIST_HEAD(&inode->i_dentry);
 	kmem_cache_free(gfs2_inode_cachep, inode);
 }
 
@@ -1572,6 +1619,7 @@ const struct super_operations gfs2_super_ops = {
 	.alloc_inode		= gfs2_alloc_inode,
 	.destroy_inode		= gfs2_destroy_inode,
 	.write_inode		= gfs2_write_inode,
+	.dirty_inode		= gfs2_dirty_inode,
 	.evict_inode		= gfs2_evict_inode,
 	.put_super		= gfs2_put_super,
 	.sync_fs		= gfs2_sync_fs,

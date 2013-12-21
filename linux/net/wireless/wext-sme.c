@@ -5,10 +5,12 @@
  * Copyright (C) 2009   Intel Corporation. All rights reserved.
  */
 
+#include <linux/export.h>
 #include <linux/etherdevice.h>
 #include <linux/if_arp.h>
 #include <linux/slab.h>
 #include <net/cfg80211.h>
+#include <net/cfg80211-wext.h>
 #include "wext-compat.h"
 #include "nl80211.h"
 
@@ -27,6 +29,9 @@ int cfg80211_mgd_wext_connect(struct cfg80211_registered_device *rdev,
 
 	wdev->wext.connect.ie = wdev->wext.ie;
 	wdev->wext.connect.ie_len = wdev->wext.ie_len;
+
+	/* Use default background scan period */
+	wdev->wext.connect.bg_scan_period = -1;
 
 	if (wdev->wext.keys) {
 		wdev->wext.keys->def = wdev->wext.default_key;
@@ -106,9 +111,24 @@ int cfg80211_mgd_wext_siwfreq(struct net_device *dev,
 
 	wdev->wext.connect.channel = chan;
 
-	/* SSID is not set, we just want to switch channel */
+	/*
+	 * SSID is not set, we just want to switch monitor channel,
+	 * this is really just backward compatibility, if the SSID
+	 * is set then we use the channel to select the BSS to use
+	 * to connect to instead. If we were connected on another
+	 * channel we disconnected above and reconnect below.
+	 */
 	if (chan && !wdev->wext.connect.ssid_len) {
-		err = cfg80211_set_freq(rdev, wdev, freq, NL80211_CHAN_NO_HT);
+		struct cfg80211_chan_def chandef = {
+			.width = NL80211_CHAN_WIDTH_20_NOHT,
+			.center_freq1 = freq,
+		};
+
+		chandef.chan = ieee80211_get_channel(&rdev->wiphy, freq);
+		if (chandef.chan)
+			err = cfg80211_set_monitor_channel(rdev, &chandef);
+		else
+			err = -EINVAL;
 		goto out;
 	}
 
@@ -222,13 +242,17 @@ int cfg80211_mgd_wext_giwessid(struct net_device *dev,
 
 	wdev_lock(wdev);
 	if (wdev->current_bss) {
-		const u8 *ie = ieee80211_bss_get_ie(&wdev->current_bss->pub,
-						    WLAN_EID_SSID);
+		const u8 *ie;
+
+		rcu_read_lock();
+		ie = ieee80211_bss_get_ie(&wdev->current_bss->pub,
+					  WLAN_EID_SSID);
 		if (ie) {
 			data->flags = 1;
 			data->length = ie[1];
 			memcpy(ssid, ie + 2, data->length);
 		}
+		rcu_read_unlock();
 	} else if (wdev->wext.connect.ssid && wdev->wext.connect.ssid_len) {
 		data->flags = 1;
 		data->length = wdev->wext.connect.ssid_len;
@@ -271,7 +295,7 @@ int cfg80211_mgd_wext_siwap(struct net_device *dev,
 
 		/* fixed already - and no change */
 		if (wdev->wext.connect.bssid && bssid &&
-		    compare_ether_addr(bssid, wdev->wext.connect.bssid) == 0)
+		    ether_addr_equal(bssid, wdev->wext.connect.bssid))
 			goto out;
 
 		err = __cfg80211_disconnect(rdev, dev,
@@ -365,7 +389,6 @@ int cfg80211_wext_siwgenie(struct net_device *dev,
 	wdev_unlock(wdev);
 	return err;
 }
-EXPORT_SYMBOL_GPL(cfg80211_wext_siwgenie);
 
 int cfg80211_wext_siwmlme(struct net_device *dev,
 			  struct iw_request_info *info,
@@ -402,4 +425,3 @@ int cfg80211_wext_siwmlme(struct net_device *dev,
 
 	return err;
 }
-EXPORT_SYMBOL_GPL(cfg80211_wext_siwmlme);

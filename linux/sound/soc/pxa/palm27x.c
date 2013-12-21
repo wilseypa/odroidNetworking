@@ -25,7 +25,7 @@
 
 #include <asm/mach-types.h>
 #include <mach/audio.h>
-#include <mach/palmasoc.h>
+#include <linux/platform_data/asoc-palm27x.h>
 
 #include "../codecs/wm9712.h"
 #include "pxa2xx-ac97.h"
@@ -107,10 +107,6 @@ static int palm27x_ac97_init(struct snd_soc_pcm_runtime *rtd)
 	snd_soc_dapm_nc_pin(dapm, "PHONE");
 	snd_soc_dapm_nc_pin(dapm, "MIC2");
 
-	err = snd_soc_dapm_sync(dapm);
-	if (err)
-		return err;
-
 	/* Jack detection API stuff */
 	err = snd_soc_jack_new(codec, "Headphone Jack",
 				SND_JACK_HEADPHONE, &hs_jack);
@@ -150,6 +146,7 @@ static struct snd_soc_dai_link palm27x_dai[] = {
 
 static struct snd_soc_card palm27x_asoc = {
 	.name = "Palm/PXA27x",
+	.owner = THIS_MODULE,
 	.dai_link = palm27x_dai,
 	.num_links = ARRAY_SIZE(palm27x_dai),
 };
@@ -190,7 +187,7 @@ put_device:
 	return ret;
 }
 
-static int __devexit palm27x_asoc_remove(struct platform_device *pdev)
+static int palm27x_asoc_remove(struct platform_device *pdev)
 {
 	platform_device_unregister(palm27x_snd_device);
 	return 0;
@@ -198,25 +195,14 @@ static int __devexit palm27x_asoc_remove(struct platform_device *pdev)
 
 static struct platform_driver palm27x_wm9712_driver = {
 	.probe		= palm27x_asoc_probe,
-	.remove		= __devexit_p(palm27x_asoc_remove),
+	.remove		= palm27x_asoc_remove,
 	.driver		= {
 		.name		= "palm27x-asoc",
 		.owner		= THIS_MODULE,
 	},
 };
 
-static int __init palm27x_asoc_init(void)
-{
-	return platform_driver_register(&palm27x_wm9712_driver);
-}
-
-static void __exit palm27x_asoc_exit(void)
-{
-	platform_driver_unregister(&palm27x_wm9712_driver);
-}
-
-module_init(palm27x_asoc_init);
-module_exit(palm27x_asoc_exit);
+module_platform_driver(palm27x_wm9712_driver);
 
 /* Module information */
 MODULE_AUTHOR("Marek Vasut <marek.vasut@gmail.com>");

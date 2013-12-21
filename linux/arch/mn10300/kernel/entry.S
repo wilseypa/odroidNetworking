@@ -15,7 +15,6 @@
 #include <linux/sys.h>
 #include <linux/linkage.h>
 #include <asm/smp.h>
-#include <asm/system.h>
 #include <asm/irqflags.h>
 #include <asm/thread_info.h>
 #include <asm/intctl-regs.h>
@@ -52,6 +51,15 @@ ENTRY(ret_from_fork)
 	GET_THREAD_INFO a2
 
 	# return 0 to indicate child process
+	clr	d0
+	mov	d0,(REG_D0,fp)
+	jmp	syscall_exit
+
+ENTRY(ret_from_kernel_thread)
+	call	schedule_tail[],0
+	mov	(REG_D0,fp),d0
+	mov	(REG_A0,fp),a0
+	calls	(a0)
 	clr	d0
 	mov	d0,(REG_D0,fp)
 	jmp	syscall_exit
@@ -95,6 +103,10 @@ restore_all:
 ###############################################################################
 	ALIGN
 syscall_exit_work:
+	mov	(REG_EPSW,fp),d0
+	and	EPSW_nSL,d0
+	beq	resume_kernel		# returning to supervisor mode
+
 	btst	_TIF_SYSCALL_TRACE,d2
 	beq	work_pending
 	LOCAL_IRQ_ENABLE		# could let syscall_trace_exit() call
@@ -589,7 +601,7 @@ ENTRY(sys_call_table)
 	.long sys_ni_syscall	/* vm86 */
 	.long sys_ni_syscall	/* Old sys_query_module */
 	.long sys_poll
-	.long sys_nfsservctl
+	.long sys_ni_syscall	/* was nfsservctl */
 	.long sys_setresgid16	/* 170 */
 	.long sys_getresgid16
 	.long sys_prctl

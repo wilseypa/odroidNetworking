@@ -76,6 +76,12 @@ static struct omap_video_timings nec_8048_panel_timings = {
 	.vfp		= 3,
 	.vsw		= 1,
 	.vbp		= 4,
+
+	.vsync_level	= OMAPDSS_SIG_ACTIVE_LOW,
+	.hsync_level	= OMAPDSS_SIG_ACTIVE_LOW,
+	.data_pclk_edge	= OMAPDSS_DRIVE_SIG_RISING_EDGE,
+	.de_level	= OMAPDSS_SIG_ACTIVE_HIGH,
+	.sync_pclk_edge	= OMAPDSS_DRIVE_SIG_RISING_EDGE,
 };
 
 static int nec_8048_bl_update_status(struct backlight_device *bl)
@@ -116,9 +122,6 @@ static int nec_8048_panel_probe(struct omap_dss_device *dssdev)
 	struct backlight_properties props;
 	int r;
 
-	dssdev->panel.config = OMAP_DSS_LCD_TFT | OMAP_DSS_LCD_IVS |
-				OMAP_DSS_LCD_IHS | OMAP_DSS_LCD_RF |
-				OMAP_DSS_LCD_ONOFF;
 	dssdev->panel.timings = nec_8048_panel_timings;
 
 	necd = kzalloc(sizeof(*necd), GFP_KERNEL);
@@ -163,50 +166,74 @@ static void nec_8048_panel_remove(struct omap_dss_device *dssdev)
 	kfree(necd);
 }
 
-static int nec_8048_panel_enable(struct omap_dss_device *dssdev)
+static int nec_8048_panel_power_on(struct omap_dss_device *dssdev)
 {
-	int r = 0;
+	int r;
 	struct nec_8048_data *necd = dev_get_drvdata(&dssdev->dev);
 	struct backlight_device *bl = necd->bl;
+
+	if (dssdev->state == OMAP_DSS_DISPLAY_ACTIVE)
+		return 0;
+
+	omapdss_dpi_set_timings(dssdev, &dssdev->panel.timings);
+	omapdss_dpi_set_data_lines(dssdev, dssdev->phy.dpi.data_lines);
+
+	r = omapdss_dpi_display_enable(dssdev);
+	if (r)
+		goto err0;
 
 	if (dssdev->platform_enable) {
 		r = dssdev->platform_enable(dssdev);
 		if (r)
-			return r;
+			goto err1;
 	}
 
 	r = nec_8048_bl_update_status(bl);
 	if (r < 0)
 		dev_err(&dssdev->dev, "failed to set lcd brightness\n");
 
-	r = omapdss_dpi_display_enable(dssdev);
-
+	return 0;
+err1:
+	omapdss_dpi_display_disable(dssdev);
+err0:
 	return r;
 }
 
-static void nec_8048_panel_disable(struct omap_dss_device *dssdev)
+static void nec_8048_panel_power_off(struct omap_dss_device *dssdev)
 {
 	struct nec_8048_data *necd = dev_get_drvdata(&dssdev->dev);
 	struct backlight_device *bl = necd->bl;
 
-	omapdss_dpi_display_disable(dssdev);
+	if (dssdev->state != OMAP_DSS_DISPLAY_ACTIVE)
+		return;
 
 	bl->props.brightness = 0;
 	nec_8048_bl_update_status(bl);
 
 	if (dssdev->platform_disable)
 		dssdev->platform_disable(dssdev);
+
+	omapdss_dpi_display_disable(dssdev);
 }
 
-static int nec_8048_panel_suspend(struct omap_dss_device *dssdev)
+static int nec_8048_panel_enable(struct omap_dss_device *dssdev)
 {
-	nec_8048_panel_disable(dssdev);
+	int r;
+
+	r = nec_8048_panel_power_on(dssdev);
+	if (r)
+		return r;
+
+	dssdev->state = OMAP_DSS_DISPLAY_ACTIVE;
+
 	return 0;
 }
 
-static int nec_8048_panel_resume(struct omap_dss_device *dssdev)
+static void nec_8048_panel_disable(struct omap_dss_device *dssdev)
 {
-	return nec_8048_panel_enable(dssdev);
+	nec_8048_panel_power_off(dssdev);
+
+	dssdev->state = OMAP_DSS_DISPLAY_DISABLED;
 }
 
 static int nec_8048_recommended_bpp(struct omap_dss_device *dssdev)
@@ -219,8 +246,6 @@ static struct omap_dss_driver nec_8048_driver = {
 	.remove			= nec_8048_panel_remove,
 	.enable			= nec_8048_panel_enable,
 	.disable		= nec_8048_panel_disable,
-	.suspend		= nec_8048_panel_suspend,
-	.resume			= nec_8048_panel_resume,
 	.get_recommended_bpp	= nec_8048_recommended_bpp,
 
 	.driver		= {
@@ -298,28 +323,17 @@ static int nec_8048_spi_resume(struct spi_device *spi)
 
 static struct spi_driver nec_8048_spi_driver = {
 	.probe		= nec_8048_spi_probe,
-	.remove		= __devexit_p(nec_8048_spi_remove),
+	.remove		= nec_8048_spi_remove,
 	.suspend	= nec_8048_spi_suspend,
 	.resume		= nec_8048_spi_resume,
 	.driver		= {
 		.name	= "nec_8048_spi",
-		.bus	= &spi_bus_type,
 		.owner	= THIS_MODULE,
 	},
 };
 
-static int __init nec_8048_lcd_init(void)
-{
-	return spi_register_driver(&nec_8048_spi_driver);
-}
+module_spi_driver(nec_8048_spi_driver);
 
-static void __exit nec_8048_lcd_exit(void)
-{
-	return spi_unregister_driver(&nec_8048_spi_driver);
-}
-
-module_init(nec_8048_lcd_init);
-module_exit(nec_8048_lcd_exit);
 MODULE_AUTHOR("Erik Gilling <konkers@android.com>");
 MODULE_DESCRIPTION("NEC-nl8048hl11-01b Driver");
 MODULE_LICENSE("GPL");

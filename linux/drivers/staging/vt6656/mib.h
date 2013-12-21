@@ -68,7 +68,6 @@ typedef struct tagSDot11Counters {
     unsigned long long   TKIPLocalMICFailures;
     unsigned long long   TKIPRemoteMICFailures;
     unsigned long long   TKIPICVErrors;
-    unsigned long long   TKIPCounterMeasuresInvoked;
     unsigned long long   TKIPReplays;
     unsigned long long   CCMPFormatErrors;
     unsigned long long   CCMPReplays;
@@ -113,7 +112,6 @@ typedef struct tagSMib2Counter {
 } SMib2Counter, *PSMib2Counter;
 
 // Value in the ifType entry
-//#define ETHERNETCSMACD      6           //
 #define WIRELESSLANIEEE80211b      6           //
 
 // Value in the ifAdminStatus/ifOperStatus entry

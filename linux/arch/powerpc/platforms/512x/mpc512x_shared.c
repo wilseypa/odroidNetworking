@@ -58,6 +58,8 @@ void mpc512x_restart(char *cmd)
 		;
 }
 
+#if defined(CONFIG_FB_FSL_DIU) || defined(CONFIG_FB_FSL_DIU_MODULE)
+
 struct fsl_diu_shared_fb {
 	u8		gamma[0x300];	/* 32-bit aligned! */
 	struct diu_ad	ad0;		/* 32-bit aligned! */
@@ -66,25 +68,7 @@ struct fsl_diu_shared_fb {
 	bool		in_use;
 };
 
-unsigned int mpc512x_get_pixel_format(unsigned int bits_per_pixel,
-				      int monitor_port)
-{
-	switch (bits_per_pixel) {
-	case 32:
-		return 0x88883316;
-	case 24:
-		return 0x88082219;
-	case 16:
-		return 0x65053118;
-	}
-	return 0x00000400;
-}
-
-void mpc512x_set_gamma_table(int monitor_port, char *gamma_table_base)
-{
-}
-
-void mpc512x_set_monitor_port(int monitor_port)
+void mpc512x_set_monitor_port(enum fsl_diu_monitor_port port)
 {
 }
 
@@ -182,20 +166,14 @@ void mpc512x_set_pixel_clock(unsigned int pixclock)
 	iounmap(ccm);
 }
 
-ssize_t mpc512x_show_monitor_port(int monitor_port, char *buf)
+enum fsl_diu_monitor_port
+mpc512x_valid_monitor_port(enum fsl_diu_monitor_port port)
 {
-	return sprintf(buf, "0 - 5121 LCD\n");
-}
-
-int mpc512x_set_sysfs_monitor_port(int val)
-{
-	return 0;
+	return FSL_DIU_PORT_DVI;
 }
 
 static struct fsl_diu_shared_fb __attribute__ ((__aligned__(8))) diu_shared_fb;
 
-#if defined(CONFIG_FB_FSL_DIU) || \
-    defined(CONFIG_FB_FSL_DIU_MODULE)
 static inline void mpc512x_free_bootmem(struct page *page)
 {
 	__ClearPageReserved(page);
@@ -223,7 +201,6 @@ void mpc512x_release_bootmem(void)
 	}
 	diu_ops.release_bootmem	= NULL;
 }
-#endif
 
 /*
  * Check if DIU was pre-initialized. If so, perform steps
@@ -256,7 +233,7 @@ void __init mpc512x_init_diu(void)
 	}
 
 	mode = in_be32(&diu_reg->diu_mode);
-	if (mode != MFB_MODE1) {
+	if (mode == MFB_MODE0) {
 		pr_info("%s: DIU OFF\n", __func__);
 		goto out;
 	}
@@ -326,17 +303,13 @@ void __init mpc512x_setup_diu(void)
 		}
 	}
 
-#if defined(CONFIG_FB_FSL_DIU) || \
-    defined(CONFIG_FB_FSL_DIU_MODULE)
-	diu_ops.get_pixel_format	= mpc512x_get_pixel_format;
-	diu_ops.set_gamma_table		= mpc512x_set_gamma_table;
 	diu_ops.set_monitor_port	= mpc512x_set_monitor_port;
 	diu_ops.set_pixel_clock		= mpc512x_set_pixel_clock;
-	diu_ops.show_monitor_port	= mpc512x_show_monitor_port;
-	diu_ops.set_sysfs_monitor_port	= mpc512x_set_sysfs_monitor_port;
+	diu_ops.valid_monitor_port	= mpc512x_valid_monitor_port;
 	diu_ops.release_bootmem		= mpc512x_release_bootmem;
-#endif
 }
+
+#endif
 
 void __init mpc512x_init_IRQ(void)
 {

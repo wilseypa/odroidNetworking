@@ -87,8 +87,8 @@ static int do_read_inode(struct inode *inode)
 	ri = &(rn->i);
 
 	inode->i_mode = le16_to_cpu(ri->i_mode);
-	inode->i_gid = le32_to_cpu(ri->i_gid);
-	inode->i_uid = le32_to_cpu(ri->i_uid);
+	i_uid_write(inode, le32_to_cpu(ri->i_uid));
+	i_gid_write(inode, le32_to_cpu(ri->i_gid));
 	set_nlink(inode, le32_to_cpu(ri->i_links));
 	inode->i_size = le64_to_cpu(ri->i_size);
 	inode->i_blocks = le64_to_cpu(ri->i_blocks);
@@ -185,8 +185,8 @@ void update_inode(struct inode *inode, struct page *node_page)
 
 	ri->i_mode = cpu_to_le16(inode->i_mode);
 	ri->i_advise = F2FS_I(inode)->i_advise;
-	ri->i_uid = cpu_to_le32(inode->i_uid);
-	ri->i_gid = cpu_to_le32(inode->i_gid);
+	ri->i_uid = cpu_to_le32(i_uid_read(inode));
+	ri->i_gid = cpu_to_le32(i_gid_read(inode));
 	ri->i_links = cpu_to_le32(inode->i_nlink);
 	ri->i_size = cpu_to_le64(i_size_read(inode));
 	ri->i_blocks = cpu_to_le64(inode->i_blocks);
@@ -216,6 +216,9 @@ int f2fs_write_inode(struct inode *inode, struct writeback_control *wbc)
 	if (inode->i_ino == F2FS_NODE_INO(sbi) ||
 			inode->i_ino == F2FS_META_INO(sbi))
 		return 0;
+
+	if (wbc)
+		f2fs_balance_fs(sbi);
 
 	node_page = get_node_page(sbi, inode->i_ino);
 	if (IS_ERR(node_page))

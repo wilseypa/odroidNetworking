@@ -16,6 +16,7 @@
 
 #include <linux/types.h>
 #include <linux/netdevice.h>
+#include <linux/module.h>
 #include <linux/hdlc.h>
 #include <linux/if_arp.h>
 #include <linux/init.h>
@@ -404,7 +405,7 @@ c4_linux_xmit (struct sk_buff * skb, struct net_device * ndev)
     priv = hdlc->priv;
 
     rval = musycc_start_xmit (priv->ci, priv->channum, skb);
-    return -rval;
+    return rval;
 }
 
 static const struct net_device_ops chan_ops = {
@@ -1017,13 +1018,7 @@ c4_add_dev (hdw_info_t * hi, int brdno, unsigned long f0, unsigned long f1,
      **************************************************************/
 
     if (request_irq (irq0, &c4_linux_interrupt,
-#if defined(SBE_ISR_TASKLET)
-                     IRQF_DISABLED | IRQF_SHARED,
-#elif defined(SBE_ISR_IMMEDIATE)
-                     IRQF_DISABLED | IRQF_SHARED,
-#elif defined(SBE_ISR_INLINE)
                      IRQF_SHARED,
-#endif
                      ndev->name, ndev))
     {
         pr_warning("%s: MUSYCC could not get irq: %d\n", ndev->name, irq0);
@@ -1174,11 +1169,11 @@ cleanup_hdlc (void)
 STATIC void __exit
 c4_mod_remove (void)
 {
-    cleanup_hdlc ();            /* delete any missed channels */
-    cleanup_devs ();
-    c4_cleanup ();
-    cleanup_ioremap ();
-    pr_info("SBE - driver removed.\n");
+	cleanup_hdlc();            /* delete any missed channels */
+	cleanup_devs();
+	c4_cleanup();
+	cleanup_ioremap();
+	pr_info("SBE - driver removed.\n");
 }
 
 module_init (c4_mod_init);

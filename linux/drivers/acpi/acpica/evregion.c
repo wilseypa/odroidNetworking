@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2011, Intel Corp.
+ * Copyright (C) 2000 - 2012, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -150,7 +150,7 @@ acpi_status acpi_ev_install_region_handlers(void)
  *
  * FUNCTION:    acpi_ev_has_default_handler
  *
- * PARAMETERS:  Node                - Namespace node for the device
+ * PARAMETERS:  node                - Namespace node for the device
  *              space_id            - The address space ID
  *
  * RETURN:      TRUE if default handler is installed, FALSE otherwise
@@ -244,7 +244,7 @@ acpi_status acpi_ev_initialize_op_regions(void)
  * FUNCTION:    acpi_ev_execute_reg_method
  *
  * PARAMETERS:  region_obj          - Region object
- *              Function            - Passed to _REG: On (1) or Off (0)
+ *              function            - Passed to _REG: On (1) or Off (0)
  *
  * RETURN:      Status
  *
@@ -286,10 +286,10 @@ acpi_ev_execute_reg_method(union acpi_operand_object *region_obj, u32 function)
 	/*
 	 * The _REG method has two arguments:
 	 *
-	 * Arg0 - Integer:
+	 * arg0 - Integer:
 	 *  Operation region space ID Same value as region_obj->Region.space_id
 	 *
-	 * Arg1 - Integer:
+	 * arg1 - Integer:
 	 *  connection status 1 for connecting the handler, 0 for disconnecting
 	 *  the handler (Passed as a parameter)
 	 */
@@ -329,10 +329,11 @@ acpi_ev_execute_reg_method(union acpi_operand_object *region_obj, u32 function)
  * FUNCTION:    acpi_ev_address_space_dispatch
  *
  * PARAMETERS:  region_obj          - Internal region object
- *              Function            - Read or Write operation
+ *              field_obj           - Corresponding field. Can be NULL.
+ *              function            - Read or Write operation
  *              region_offset       - Where in the region to read or write
  *              bit_width           - Field width in bits (8, 16, 32, or 64)
- *              Value               - Pointer to in or out value, must be
+ *              value               - Pointer to in or out value, must be
  *                                    a full 64-bit integer
  *
  * RETURN:      Status
@@ -344,6 +345,7 @@ acpi_ev_execute_reg_method(union acpi_operand_object *region_obj, u32 function)
 
 acpi_status
 acpi_ev_address_space_dispatch(union acpi_operand_object *region_obj,
+			       union acpi_operand_object *field_obj,
 			       u32 function,
 			       u32 region_offset, u32 bit_width, u64 *value)
 {
@@ -353,6 +355,7 @@ acpi_ev_address_space_dispatch(union acpi_operand_object *region_obj,
 	union acpi_operand_object *handler_desc;
 	union acpi_operand_object *region_obj2;
 	void *region_context = NULL;
+	struct acpi_connection_info *context;
 
 	ACPI_FUNCTION_TRACE(ev_address_space_dispatch);
 
@@ -374,6 +377,8 @@ acpi_ev_address_space_dispatch(union acpi_operand_object *region_obj,
 
 		return_ACPI_STATUS(AE_NOT_EXIST);
 	}
+
+	context = handler_desc->address_space.context;
 
 	/*
 	 * It may be the case that the region has never been initialized.
@@ -404,8 +409,7 @@ acpi_ev_address_space_dispatch(union acpi_operand_object *region_obj,
 		acpi_ex_exit_interpreter();
 
 		status = region_setup(region_obj, ACPI_REGION_ACTIVATE,
-				      handler_desc->address_space.context,
-				      &region_context);
+				      context, &region_context);
 
 		/* Re-enter the interpreter */
 
@@ -455,6 +459,25 @@ acpi_ev_address_space_dispatch(union acpi_operand_object *region_obj,
 			  acpi_ut_get_region_name(region_obj->region.
 						  space_id)));
 
+	/*
+	 * Special handling for generic_serial_bus and general_purpose_io:
+	 * There are three extra parameters that must be passed to the
+	 * handler via the context:
+	 *   1) Connection buffer, a resource template from Connection() op.
+	 *   2) Length of the above buffer.
+	 *   3) Actual access length from the access_as() op.
+	 */
+	if (((region_obj->region.space_id == ACPI_ADR_SPACE_GSBUS) ||
+	     (region_obj->region.space_id == ACPI_ADR_SPACE_GPIO)) &&
+	    context && field_obj) {
+
+		/* Get the Connection (resource_template) buffer */
+
+		context->connection = field_obj->field.resource_buffer;
+		context->length = field_obj->field.resource_length;
+		context->access_length = field_obj->field.access_length;
+	}
+
 	if (!(handler_desc->address_space.handler_flags &
 	      ACPI_ADDR_HANDLER_DEFAULT_INSTALLED)) {
 		/*
@@ -469,7 +492,7 @@ acpi_ev_address_space_dispatch(union acpi_operand_object *region_obj,
 
 	status = handler(function,
 			 (region_obj->region.address + region_offset),
-			 bit_width, value, handler_desc->address_space.context,
+			 bit_width, value, context,
 			 region_obj2->extra.region_context);
 
 	if (ACPI_FAILURE(status)) {
@@ -817,11 +840,11 @@ acpi_ev_install_handler(acpi_handle obj_handle,
  *
  * FUNCTION:    acpi_ev_install_space_handler
  *
- * PARAMETERS:  Node            - Namespace node for the device
+ * PARAMETERS:  node            - Namespace node for the device
  *              space_id        - The address space ID
- *              Handler         - Address of the handler
- *              Setup           - Address of the setup function
- *              Context         - Value passed to the handler on each access
+ *              handler         - Address of the handler
+ *              setup           - Address of the setup function
+ *              context         - Value passed to the handler on each access
  *
  * RETURN:      Status
  *
@@ -1038,7 +1061,7 @@ acpi_ev_install_space_handler(struct acpi_namespace_node * node,
  *
  * FUNCTION:    acpi_ev_execute_reg_methods
  *
- * PARAMETERS:  Node            - Namespace node for the device
+ * PARAMETERS:  node            - Namespace node for the device
  *              space_id        - The address space ID
  *
  * RETURN:      Status
@@ -1081,7 +1104,7 @@ acpi_ev_execute_reg_methods(struct acpi_namespace_node *node,
  *
  * PARAMETERS:  walk_namespace callback
  *
- * DESCRIPTION: Run _REG method for region objects of the requested space_iD
+ * DESCRIPTION: Run _REG method for region objects of the requested spaceID
  *
  ******************************************************************************/
 

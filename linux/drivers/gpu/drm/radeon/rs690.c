@@ -25,13 +25,13 @@
  *          Alex Deucher
  *          Jerome Glisse
  */
-#include "drmP.h"
+#include <drm/drmP.h>
 #include "radeon.h"
 #include "radeon_asic.h"
 #include "atom.h"
 #include "rs690d.h"
 
-static int rs690_mc_wait_for_idle(struct radeon_device *rdev)
+int rs690_mc_wait_for_idle(struct radeon_device *rdev)
 {
 	unsigned i;
 	uint32_t tmp;
@@ -145,7 +145,7 @@ void rs690_pm_info(struct radeon_device *rdev)
 	rdev->pm.sideport_bandwidth.full = dfixed_div(rdev->pm.sideport_bandwidth, tmp);
 }
 
-void rs690_mc_init(struct radeon_device *rdev)
+static void rs690_mc_init(struct radeon_device *rdev)
 {
 	u64 base;
 
@@ -224,7 +224,7 @@ struct rs690_watermark {
 	fixed20_12 sclk;
 };
 
-void rs690_crtc_bandwidth_compute(struct radeon_device *rdev,
+static void rs690_crtc_bandwidth_compute(struct radeon_device *rdev,
 				  struct radeon_crtc *crtc,
 				  struct rs690_watermark *wm)
 {
@@ -581,7 +581,7 @@ void rs690_mc_wreg(struct radeon_device *rdev, uint32_t reg, uint32_t v)
 	WREG32(R_000078_MC_INDEX, 0x7F);
 }
 
-void rs690_mc_program(struct radeon_device *rdev)
+static void rs690_mc_program(struct radeon_device *rdev)
 {
 	struct rv515_mc_save save;
 
@@ -621,7 +621,19 @@ static int rs690_startup(struct radeon_device *rdev)
 	if (r)
 		return r;
 
+	r = radeon_fence_driver_start_ring(rdev, RADEON_RING_TYPE_GFX_INDEX);
+	if (r) {
+		dev_err(rdev->dev, "failed initializing CP fences (%d).\n", r);
+		return r;
+	}
+
 	/* Enable IRQ */
+	if (!rdev->irq.installed) {
+		r = radeon_irq_kms_init(rdev);
+		if (r)
+			return r;
+	}
+
 	rs600_irq_set(rdev);
 	rdev->config.r300.hdp_cntl = RREG32(RADEON_HOST_PATH_CNTL);
 	/* 1M ring buffer */
@@ -630,9 +642,10 @@ static int rs690_startup(struct radeon_device *rdev)
 		dev_err(rdev->dev, "failed initializing CP (%d).\n", r);
 		return r;
 	}
-	r = r100_ib_init(rdev);
+
+	r = radeon_ib_pool_init(rdev);
 	if (r) {
-		dev_err(rdev->dev, "failed initializing IB (%d).\n", r);
+		dev_err(rdev->dev, "IB initialization failed (%d).\n", r);
 		return r;
 	}
 
@@ -647,6 +660,8 @@ static int rs690_startup(struct radeon_device *rdev)
 
 int rs690_resume(struct radeon_device *rdev)
 {
+	int r;
+
 	/* Make sur GART are not working */
 	rs400_gart_disable(rdev);
 	/* Resume clock before doing reset */
@@ -663,7 +678,13 @@ int rs690_resume(struct radeon_device *rdev)
 	rv515_clock_startup(rdev);
 	/* Initialize surface registers */
 	radeon_surface_init(rdev);
-	return rs690_startup(rdev);
+
+	rdev->accel_working = true;
+	r = rs690_startup(rdev);
+	if (r) {
+		rdev->accel_working = false;
+	}
+	return r;
 }
 
 int rs690_suspend(struct radeon_device *rdev)
@@ -681,7 +702,7 @@ void rs690_fini(struct radeon_device *rdev)
 	r600_audio_fini(rdev);
 	r100_cp_fini(rdev);
 	radeon_wb_fini(rdev);
-	r100_ib_fini(rdev);
+	radeon_ib_pool_fini(rdev);
 	radeon_gem_fini(rdev);
 	rs400_gart_fini(rdev);
 	radeon_irq_kms_fini(rdev);
@@ -738,9 +759,6 @@ int rs690_init(struct radeon_device *rdev)
 	r = radeon_fence_driver_init(rdev);
 	if (r)
 		return r;
-	r = radeon_irq_kms_init(rdev);
-	if (r)
-		return r;
 	/* Memory manager */
 	r = radeon_bo_init(rdev);
 	if (r)
@@ -749,6 +767,7 @@ int rs690_init(struct radeon_device *rdev)
 	if (r)
 		return r;
 	rs600_set_safe_registers(rdev);
+
 	rdev->accel_working = true;
 	r = rs690_startup(rdev);
 	if (r) {
@@ -756,7 +775,7 @@ int rs690_init(struct radeon_device *rdev)
 		dev_err(rdev->dev, "Disabling GPU acceleration\n");
 		r100_cp_fini(rdev);
 		radeon_wb_fini(rdev);
-		r100_ib_fini(rdev);
+		radeon_ib_pool_fini(rdev);
 		rs400_gart_fini(rdev);
 		radeon_irq_kms_fini(rdev);
 		rdev->accel_working = false;

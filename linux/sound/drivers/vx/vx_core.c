@@ -26,6 +26,7 @@
 #include <linux/init.h>
 #include <linux/device.h>
 #include <linux/firmware.h>
+#include <linux/module.h>
 #include <sound/core.h>
 #include <sound/pcm.h>
 #include <sound/asoundef.h>
@@ -724,7 +725,7 @@ EXPORT_SYMBOL(snd_vx_dsp_load);
 /*
  * suspend
  */
-int snd_vx_suspend(struct vx_core *chip, pm_message_t state)
+int snd_vx_suspend(struct vx_core *chip)
 {
 	unsigned int i;
 

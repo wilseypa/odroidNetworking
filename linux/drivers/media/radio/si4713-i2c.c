@@ -29,6 +29,7 @@
 #include <linux/slab.h>
 #include <linux/gpio.h>
 #include <linux/regulator/consumer.h>
+#include <linux/module.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-ioctl.h>
 #include <media/v4l2-common.h>
@@ -1008,7 +1009,7 @@ static int si4713_choose_econtrol_action(struct si4713_device *sdev, u32 id,
 
 	default:
 		rval = -EINVAL;
-	};
+	}
 
 	return rval;
 }
@@ -1080,7 +1081,7 @@ static int si4713_write_econtrol_string(struct si4713_device *sdev,
 	default:
 		rval = -EINVAL;
 		break;
-	};
+	}
 
 exit:
 	return rval;
@@ -1129,7 +1130,7 @@ static int si4713_write_econtrol_tune(struct si4713_device *sdev,
 	default:
 		rval = -EINVAL;
 		goto unlock;
-	};
+	}
 
 	if (sdev->power_state)
 		rval = si4713_tx_tune_power(sdev, power, antcap);
@@ -1212,7 +1213,7 @@ exit:
 }
 
 static int si4713_s_frequency(struct v4l2_subdev *sd, struct v4l2_frequency *f);
-static int si4713_s_modulator(struct v4l2_subdev *sd, struct v4l2_modulator *);
+static int si4713_s_modulator(struct v4l2_subdev *sd, const struct v4l2_modulator *);
 /*
  * si4713_setup - Sets the device up with current configuration.
  * @sdev: si4713_device structure for the device we are communicating
@@ -1419,7 +1420,7 @@ static int si4713_read_econtrol_string(struct si4713_device *sdev,
 	default:
 		rval = -EINVAL;
 		break;
-	};
+	}
 
 exit:
 	return rval;
@@ -1472,7 +1473,7 @@ static int si4713_read_econtrol_tune(struct si4713_device *sdev,
 		break;
 	default:
 		rval = -EINVAL;
-	};
+	}
 
 unlock:
 	mutex_unlock(&sdev->mutex);
@@ -1697,7 +1698,7 @@ static int si4713_queryctrl(struct v4l2_subdev *sd, struct v4l2_queryctrl *qc)
 	default:
 		rval = -EINVAL;
 		break;
-	};
+	}
 
 	return rval;
 }
@@ -1768,7 +1769,7 @@ exit:
 }
 
 /* si4713_ioctl - deal with private ioctls (only rnl for now) */
-long si4713_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
+static long si4713_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 {
 	struct si4713_device *sdev = to_si4713_device(sd);
 	struct si4713_rnl *rnl = arg;
@@ -1872,7 +1873,7 @@ exit:
 }
 
 /* si4713_s_modulator - set modulator attributes */
-static int si4713_s_modulator(struct v4l2_subdev *sd, struct v4l2_modulator *vm)
+static int si4713_s_modulator(struct v4l2_subdev *sd, const struct v4l2_modulator *vm)
 {
 	struct si4713_device *sdev = to_si4713_device(sd);
 	int rval = 0;
@@ -2105,17 +2106,4 @@ static struct i2c_driver si4713_i2c_driver = {
 	.id_table       = si4713_id,
 };
 
-/* Module Interface */
-static int __init si4713_module_init(void)
-{
-	return i2c_add_driver(&si4713_i2c_driver);
-}
-
-static void __exit si4713_module_exit(void)
-{
-	i2c_del_driver(&si4713_i2c_driver);
-}
-
-module_init(si4713_module_init);
-module_exit(si4713_module_exit);
-
+module_i2c_driver(si4713_i2c_driver);

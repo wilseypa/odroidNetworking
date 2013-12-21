@@ -54,7 +54,7 @@ static int gpio_charger_get_property(struct power_supply *psy,
 
 	switch (psp) {
 	case POWER_SUPPLY_PROP_ONLINE:
-		val->intval = gpio_get_value(pdata->gpio);
+		val->intval = gpio_get_value_cansleep(pdata->gpio);
 		val->intval ^= pdata->gpio_active_low;
 		break;
 	default:
@@ -68,7 +68,7 @@ static enum power_supply_property gpio_charger_properties[] = {
 	POWER_SUPPLY_PROP_ONLINE,
 };
 
-static int __devinit gpio_charger_probe(struct platform_device *pdev)
+static int gpio_charger_probe(struct platform_device *pdev)
 {
 	const struct gpio_charger_platform_data *pdata = pdev->dev.platform_data;
 	struct gpio_charger *gpio_charger;
@@ -127,7 +127,7 @@ static int __devinit gpio_charger_probe(struct platform_device *pdev)
 		ret = request_any_context_irq(irq, gpio_charger_irq,
 				IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING,
 				dev_name(&pdev->dev), charger);
-		if (ret)
+		if (ret < 0)
 			dev_warn(&pdev->dev, "Failed to request irq: %d\n", ret);
 		else
 			gpio_charger->irq = irq;
@@ -144,7 +144,7 @@ err_free:
 	return ret;
 }
 
-static int __devexit gpio_charger_remove(struct platform_device *pdev)
+static int gpio_charger_remove(struct platform_device *pdev)
 {
 	struct gpio_charger *gpio_charger = platform_get_drvdata(pdev);
 
@@ -177,7 +177,7 @@ static SIMPLE_DEV_PM_OPS(gpio_charger_pm_ops, NULL, gpio_charger_resume);
 
 static struct platform_driver gpio_charger_driver = {
 	.probe = gpio_charger_probe,
-	.remove = __devexit_p(gpio_charger_remove),
+	.remove = gpio_charger_remove,
 	.driver = {
 		.name = "gpio-charger",
 		.owner = THIS_MODULE,
@@ -185,17 +185,7 @@ static struct platform_driver gpio_charger_driver = {
 	},
 };
 
-static int __init gpio_charger_init(void)
-{
-	return platform_driver_register(&gpio_charger_driver);
-}
-module_init(gpio_charger_init);
-
-static void __exit gpio_charger_exit(void)
-{
-	platform_driver_unregister(&gpio_charger_driver);
-}
-module_exit(gpio_charger_exit);
+module_platform_driver(gpio_charger_driver);
 
 MODULE_AUTHOR("Lars-Peter Clausen <lars@metafoo.de>");
 MODULE_DESCRIPTION("Driver for chargers which report their online status through a GPIO");

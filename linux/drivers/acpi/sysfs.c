@@ -149,12 +149,12 @@ static int param_get_debug_level(char *buffer, const struct kernel_param *kp)
 	return result;
 }
 
-static struct kernel_param_ops param_ops_debug_layer = {
+static const struct kernel_param_ops param_ops_debug_layer = {
 	.set = param_set_uint,
 	.get = param_get_debug_layer,
 };
 
-static struct kernel_param_ops param_ops_debug_level = {
+static const struct kernel_param_ops param_ops_debug_level = {
 	.set = param_set_uint,
 	.get = param_get_debug_level,
 };
@@ -173,7 +173,7 @@ static int param_set_trace_state(const char *val, struct kernel_param *kp)
 {
 	int result = 0;
 
-	if (!strncmp(val, "enable", strlen("enable"))) {
+	if (!strncmp(val, "enable", sizeof("enable") - 1)) {
 		result = acpi_debug_trace(trace_method_name, trace_debug_level,
 					  trace_debug_layer, 0);
 		if (result)
@@ -181,7 +181,7 @@ static int param_set_trace_state(const char *val, struct kernel_param *kp)
 		goto exit;
 	}
 
-	if (!strncmp(val, "disable", strlen("disable"))) {
+	if (!strncmp(val, "disable", sizeof("disable") - 1)) {
 		int name = 0;
 		result = acpi_debug_trace((char *)&name, trace_debug_level,
 					  trace_debug_layer, 0);
@@ -476,7 +476,7 @@ static void fixed_event_count(u32 event_number)
 	return;
 }
 
-static void acpi_gbl_event_handler(u32 event_type, acpi_handle device,
+static void acpi_global_event_handler(u32 event_type, acpi_handle device,
 	u32 event_number, void *context)
 {
 	if (event_type == ACPI_EVENT_TYPE_GPE)
@@ -638,7 +638,7 @@ void acpi_irq_stats_init(void)
 	if (all_counters == NULL)
 		goto fail;
 
-	status = acpi_install_global_event_handler(acpi_gbl_event_handler, NULL);
+	status = acpi_install_global_event_handler(acpi_global_event_handler, NULL);
 	if (ACPI_FAILURE(status))
 		goto fail;
 
@@ -706,11 +706,23 @@ static void __exit interrupt_stats_exit(void)
 	return;
 }
 
+static ssize_t
+acpi_show_profile(struct device *dev, struct device_attribute *attr,
+		  char *buf)
+{
+	return sprintf(buf, "%d\n", acpi_gbl_FADT.preferred_profile);
+}
+
+static const struct device_attribute pm_profile_attr =
+	__ATTR(pm_profile, S_IRUGO, acpi_show_profile, NULL);
+
 int __init acpi_sysfs_init(void)
 {
 	int result;
 
 	result = acpi_tables_sysfs_init();
-
+	if (result)
+		return result;
+	result = sysfs_create_file(acpi_kobj, &pm_profile_attr.attr);
 	return result;
 }

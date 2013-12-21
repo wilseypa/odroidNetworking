@@ -329,7 +329,7 @@ static const struct rtc_class_ops ds1286_ops = {
 	.alarm_irq_enable = ds1286_alarm_irq_enable,
 };
 
-static int __devinit ds1286_probe(struct platform_device *pdev)
+static int ds1286_probe(struct platform_device *pdev)
 {
 	struct rtc_device *rtc;
 	struct resource *res;
@@ -343,7 +343,7 @@ static int __devinit ds1286_probe(struct platform_device *pdev)
 	if (!priv)
 		return -ENOMEM;
 
-	priv->size = res->end - res->start + 1;
+	priv->size = resource_size(res);
 	if (!request_mem_region(res->start, priv->size, pdev->name)) {
 		ret = -EBUSY;
 		goto out;
@@ -376,7 +376,7 @@ out:
 	return ret;
 }
 
-static int __devexit ds1286_remove(struct platform_device *pdev)
+static int ds1286_remove(struct platform_device *pdev)
 {
 	struct ds1286_priv *priv = platform_get_drvdata(pdev);
 
@@ -393,24 +393,13 @@ static struct platform_driver ds1286_platform_driver = {
 		.owner	= THIS_MODULE,
 	},
 	.probe		= ds1286_probe,
-	.remove		= __devexit_p(ds1286_remove),
+	.remove		= ds1286_remove,
 };
 
-static int __init ds1286_init(void)
-{
-	return platform_driver_register(&ds1286_platform_driver);
-}
-
-static void __exit ds1286_exit(void)
-{
-	platform_driver_unregister(&ds1286_platform_driver);
-}
+module_platform_driver(ds1286_platform_driver);
 
 MODULE_AUTHOR("Thomas Bogendoerfer <tsbogend@alpha.franken.de>");
 MODULE_DESCRIPTION("DS1286 RTC driver");
 MODULE_LICENSE("GPL");
 MODULE_VERSION(DRV_VERSION);
 MODULE_ALIAS("platform:rtc-ds1286");
-
-module_init(ds1286_init);
-module_exit(ds1286_exit);

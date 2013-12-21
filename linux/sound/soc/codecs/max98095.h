@@ -175,10 +175,22 @@
 
 /* MAX98095 Registers Bit Fields */
 
+/* M98095_007_JACK_AUTO_STS */
+	#define M98095_MIC_IN			(1<<3)
+	#define M98095_LO_IN			(1<<5)
+	#define M98095_HP_IN			(1<<6)
+	#define M98095_DDONE			(1<<7)
+
 /* M98095_00F_HOST_CFG */
 	#define M98095_SEG                      (1<<0)
 	#define M98095_XTEN                     (1<<1)
 	#define M98095_MDLLEN                   (1<<2)
+
+/* M98095_013_JACK_INT_EN */
+	#define M98095_IMIC_IN			(1<<3)
+	#define M98095_ILO_IN			(1<<5)
+	#define M98095_IHP_IN			(1<<6)
+	#define M98095_IDDONE			(1<<7)
 
 /* M98095_027_DAI1_CLKMODE, M98095_031_DAI2_CLKMODE, M98095_03B_DAI3_CLKMODE */
 	#define M98095_CLKMODE_MASK             0xFF
@@ -224,40 +236,8 @@
 	#define M98095_DAI2M_TO_DACM            (1<<1)
 	#define M98095_DAI3M_TO_DACM            (1<<0)
 
-/* M98095_04C_MIX_HP_LEFT */
-	#define M98095_DACL_TO_HPL              (1<<0)
-
-/* M98095_04D_MIX_HP_RIGHT */
-	#define M98095_DACR_TO_HPR              (1<<0)
-
-/* M98095_04E_CFG_HP */
+/* M98095_04E_MIX_HP_CFG */
 	#define M98095_HPNORMAL                 (3<<4)
-
-/* M98095_04F_MIX_RCV */
-	#define M98095_DACR_TO_RCV            (1<<5)
-	#define M98095_MIC2_TO_RCV            (1<<4)
-	#define M98095_MIC1_TO_RCV            (1<<3)
-	#define M98095_IN2_TO_RCV             (1<<2)
-	#define M98095_IN1_TO_RCV             (1<<1)
-	#define M98095_DACL_TO_RCV            (1<<0)
-
-/* M98095_050_MIX_SPK_LEFT */
-	#define M98095_DACR_TO_SPKL            (1<<6)
-	#define M98095_MIC2_TO_SPKL            (1<<5)
-	#define M98095_MIC1_TO_SPKL            (1<<4)
-	#define M98095_DACM_TO_SPKL            (1<<3)
-	#define M98095_IN2_TO_SPKL             (1<<2)
-	#define M98095_IN1_TO_SPKL             (1<<1)
-	#define M98095_DACL_TO_SPKL            (1<<0)
-
-/* M98095_051_MIX_SPK_RIGHT */
-	#define M98095_DACL_TO_SPKR            (1<<6)
-	#define M98095_MIC2_TO_SPKR            (1<<5)
-	#define M98095_MIC1_TO_SPKR            (1<<4)
-	#define M98095_DACM_TO_SPKR            (1<<3)
-	#define M98095_IN2_TO_SPKR             (1<<2)
-	#define M98095_IN1_TO_SPKR             (1<<1)
-	#define M98095_DACR_TO_SPKR            (1<<0)
 
 /* M98095_05F_LVL_MIC1, M98095_060_LVL_MIC2 */
 	#define M98095_MICPRE_MASK              (3<<5)
@@ -287,10 +267,15 @@
 	#define M98095_EQ2EN                    (1<<1)
 	#define M98095_EQ1EN                    (1<<0)
 
+/* M98095_089_JACK_DET_AUTO */
+	#define M98095_PIN5EN			(1<<2)
+	#define M98095_JDEN			(1<<7)
+
 /* M98095_090_PWR_EN_IN */
 	#define M98095_INEN                     (1<<7)
 	#define M98095_MB2EN                    (1<<3)
 	#define M98095_MB1EN                    (1<<2)
+	#define M98095_MBEN                     (3<<2)
 	#define M98095_ADREN                    (1<<1)
 	#define M98095_ADLEN                    (1<<0)
 
@@ -300,7 +285,6 @@
 	#define M98095_SPLEN                    (1<<5)
 	#define M98095_SPREN                    (1<<4)
 	#define M98095_RECEN                    (1<<3)
-	#define M98095_DAMEN                    (1<<2)
 	#define M98095_DALEN                    (1<<1)
 	#define M98095_DAREN                    (1<<0)
 
@@ -328,54 +312,10 @@
 #define M98095_174_DAI1_BQ_BASE             0x74
 #define M98095_17E_DAI2_BQ_BASE             0x7E
 
-//---------------------------------------------------------------------------
-//---------------------------------------------------------------------------
-enum playback_path {OFF, REV, SPK, HP, SPK_HP, TV_OUT};
-enum record_path   {MAIN, EAR, MIC_OFF};
+/* Default Delay used in Slew Rate Calculation for Jack detection */
+#define M98095_DEFAULT_SLEW_DELAY		0x18
 
-struct max98095_cdata {
-	unsigned int rate;
-	unsigned int fmt;
-	int eq_sel;
-	int bq_sel;
-};
-
-struct max98095_priv {
-	struct snd_soc_codec *codec;
-	void *control_data;
-	struct max98095_pdata *pdata;
-	unsigned int sysclk;
-	struct max98095_cdata dai;
-	const char **eq_texts;
-	const char **bq_texts;
-	struct soc_enum eq_enum;
-	struct soc_enum bq_enum;
-	int eq_textcnt;
-	int bq_textcnt;
-	u8 lin_state;
-	unsigned int mic1pre;
-	unsigned int mic2pre;
-
-	struct delayed_work		work;
-	enum playback_path 	cur_path;
-	enum record_path 	rec_path;
-};
-
-#define MAX98095_NONE	0
-#define MAX98095_SPK	1
-#define MAX98095_HP		2
-
-extern struct snd_soc_codec *max98095_codec;
-
-void max98095_set_playback_speaker(struct snd_soc_codec *codec);
-void max98095_set_playback_headset(struct snd_soc_codec *codec);
-void max98095_set_playback_earpiece(struct snd_soc_codec *codec);
-void max98095_set_playback_speaker_headset(struct snd_soc_codec *codec);
-void max98095_disable_playback_path(struct snd_soc_codec *codec, enum playback_path path);
-
-void max98095_set_record_main_mic(struct snd_soc_codec *codec);
-void max98095_set_record_headset_mic(struct snd_soc_codec *codec);
-
-void max98095_disable_record_path(struct snd_soc_codec *codec, enum record_path rec_path);
+extern int max98095_jack_detect(struct snd_soc_codec *codec,
+	struct snd_soc_jack *hp_jack, struct snd_soc_jack *mic_jack);
 
 #endif

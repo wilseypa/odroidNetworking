@@ -56,6 +56,10 @@ static char config[MAX_PARAM_LENGTH];
 module_param_string(netconsole, config, MAX_PARAM_LENGTH, 0);
 MODULE_PARM_DESC(netconsole, " netconsole=[src-port]@[src-ip]/[dev],[tgt-port]@<tgt-ip>/[tgt-macaddr]");
 
+static bool oops_only = false;
+module_param(oops_only, bool, 0600);
+MODULE_PARM_DESC(oops_only, "Only log oops messages");
+
 #ifndef	MODULE
 static int __init option_setup(char *opt)
 {
@@ -169,10 +173,8 @@ static struct netconsole_target *alloc_param_target(char *target_config)
 	 * Note that these targets get their config_item fields zeroed-out.
 	 */
 	nt = kzalloc(sizeof(*nt), GFP_KERNEL);
-	if (!nt) {
-		printk(KERN_ERR "netconsole: failed to allocate memory\n");
+	if (!nt)
 		goto fail;
-	}
 
 	nt->np.name = "netconsole";
 	strlcpy(nt->np.dev_name, "eth0", IFNAMSIZ);
@@ -551,10 +553,8 @@ static struct config_item *make_netconsole_target(struct config_group *group,
 	 * Target is disabled at creation (enabled == 0).
 	 */
 	nt = kzalloc(sizeof(*nt), GFP_KERNEL);
-	if (!nt) {
-		printk(KERN_ERR "netconsole: failed to allocate memory\n");
+	if (!nt)
 		return ERR_PTR(-ENOMEM);
-	}
 
 	nt->np.name = "netconsole";
 	strlcpy(nt->np.dev_name, "eth0", IFNAMSIZ);
@@ -690,6 +690,8 @@ static void write_msg(struct console *con, const char *msg, unsigned int len)
 	struct netconsole_target *nt;
 	const char *tmp;
 
+	if (oops_only && !oops_in_progress)
+		return;
 	/* Avoid taking lock and disabling interrupts unnecessarily */
 	if (list_empty(&target_list))
 		return;
@@ -801,5 +803,11 @@ static void __exit cleanup_netconsole(void)
 	}
 }
 
-module_init(init_netconsole);
+/*
+ * Use late_initcall to ensure netconsole is
+ * initialized after network device driver if built-in.
+ *
+ * late_initcall() and module_init() are identical if built as module.
+ */
+late_initcall(init_netconsole);
 module_exit(cleanup_netconsole);

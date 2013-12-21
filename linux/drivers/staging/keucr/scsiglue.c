@@ -144,7 +144,7 @@ static int command_abort(struct scsi_cmnd *srb)
 	scsi_lock(us_to_host(us));
 	if (us->srb != srb) {
 		scsi_unlock(us_to_host(us));
-		printk ("-- nothing to abort\n");
+		printk("-- nothing to abort\n");
 		return FAILED;
 	}
 
@@ -230,7 +230,10 @@ void usb_stor_report_bus_reset(struct us_data *us)
 /* we use this macro to help us write into the buffer */
 #undef SPRINTF
 #define SPRINTF(args...) \
-	do { if (pos < buffer+length) pos += sprintf(pos, ## args); } while (0)
+	do { \
+		if (pos < buffer+length) \
+			pos += sprintf(pos, ## args); \
+	} while (0)
 
 /*
  * proc_info()
@@ -279,7 +282,10 @@ static int proc_info(struct Scsi_Host *host, char *buffer, char **start,
 		pos += sprintf(pos, "       Quirks:");
 
 #define US_FLAG(name, value) \
-	if (us->fflags & value) pos += sprintf(pos, " " #name);
+	do { \
+		if (us->fflags & value) \
+			pos += sprintf(pos, " " #name); \
+	} while (0);
 US_DO_ALL_FLAGS
 #undef US_FLAG
 

@@ -28,8 +28,10 @@ extern unsigned int nf_conntrack_in(struct net *net,
 extern int nf_conntrack_init(struct net *net);
 extern void nf_conntrack_cleanup(struct net *net);
 
-extern int nf_conntrack_proto_init(void);
-extern void nf_conntrack_proto_fini(void);
+extern int nf_conntrack_proto_init(struct net *net);
+extern void nf_conntrack_proto_fini(struct net *net);
+
+extern void nf_conntrack_cleanup_end(void);
 
 extern bool
 nf_ct_get_tuple(const struct sk_buff *skb,

@@ -385,8 +385,8 @@ static struct i2c_device_id rv3029c2_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, rv3029c2_id);
 
-static int __devinit
-rv3029c2_probe(struct i2c_client *client, const struct i2c_device_id *id)
+static int rv3029c2_probe(struct i2c_client *client,
+			  const struct i2c_device_id *id)
 {
 	struct rtc_device *rtc;
 	int rc = 0;
@@ -418,7 +418,7 @@ exit_unregister:
 	return rc;
 }
 
-static int __devexit rv3029c2_remove(struct i2c_client *client)
+static int rv3029c2_remove(struct i2c_client *client)
 {
 	struct rtc_device *rtc = i2c_get_clientdata(client);
 
@@ -432,22 +432,11 @@ static struct i2c_driver rv3029c2_driver = {
 		.name = "rtc-rv3029c2",
 	},
 	.probe = rv3029c2_probe,
-	.remove = __devexit_p(rv3029c2_remove),
+	.remove = rv3029c2_remove,
 	.id_table = rv3029c2_id,
 };
 
-static int __init rv3029c2_init(void)
-{
-	return i2c_add_driver(&rv3029c2_driver);
-}
-
-static void __exit rv3029c2_exit(void)
-{
-	i2c_del_driver(&rv3029c2_driver);
-}
-
-module_init(rv3029c2_init);
-module_exit(rv3029c2_exit);
+module_i2c_driver(rv3029c2_driver);
 
 MODULE_AUTHOR("Gregory Hermant <gregory.hermant@calao-systems.com>");
 MODULE_DESCRIPTION("Micro Crystal RV3029C2 RTC driver");

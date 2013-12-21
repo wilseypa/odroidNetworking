@@ -29,11 +29,10 @@
 #include <asm/pgtable.h>
 #include <asm/r4kcache.h>
 #include <asm/sections.h>
-#include <asm/system.h>
 #include <asm/mmu_context.h>
 #include <asm/war.h>
 #include <asm/cacheflush.h> /* for run_uncached() */
-
+#include <asm/traps.h>
 
 /*
  * Special Variant of smp_call_function for use by cache functions:
@@ -498,7 +497,7 @@ static inline void local_r4k_flush_cache_page(void *args)
 		if (map_coherent)
 			vaddr = kmap_coherent(page, addr);
 		else
-			vaddr = kmap_atomic(page, KM_USER0);
+			vaddr = kmap_atomic(page);
 		addr = (unsigned long)vaddr;
 	}
 
@@ -521,7 +520,7 @@ static inline void local_r4k_flush_cache_page(void *args)
 		if (map_coherent)
 			kunmap_coherent();
 		else
-			kunmap_atomic(vaddr, KM_USER0);
+			kunmap_atomic(vaddr);
 	}
 }
 
@@ -604,6 +603,7 @@ static void r4k_dma_cache_wback_inv(unsigned long addr, unsigned long size)
 			r4k_blast_scache();
 		else
 			blast_scache_range(addr, addr + size);
+		__sync();
 		return;
 	}
 
@@ -620,6 +620,7 @@ static void r4k_dma_cache_wback_inv(unsigned long addr, unsigned long size)
 	}
 
 	bc_wback_inv(addr, size);
+	__sync();
 }
 
 static void r4k_dma_cache_inv(unsigned long addr, unsigned long size)
@@ -631,9 +632,6 @@ static void r4k_dma_cache_inv(unsigned long addr, unsigned long size)
 		if (size >= scache_size)
 			r4k_blast_scache();
 		else {
-			unsigned long lsize = cpu_scache_line_size();
-			unsigned long almask = ~(lsize - 1);
-
 			/*
 			 * There is no clearly documented alignment requirement
 			 * for the cache instruction on MIPS processors and
@@ -642,27 +640,21 @@ static void r4k_dma_cache_inv(unsigned long addr, unsigned long size)
 			 * hit ops with insufficient alignment.  Solved by
 			 * aligning the address to cache line size.
 			 */
-			cache_op(Hit_Writeback_Inv_SD, addr & almask);
-			cache_op(Hit_Writeback_Inv_SD,
-				 (addr + size - 1) & almask);
 			blast_inv_scache_range(addr, addr + size);
 		}
+		__sync();
 		return;
 	}
 
 	if (cpu_has_safe_index_cacheops && size >= dcache_size) {
 		r4k_blast_dcache();
 	} else {
-		unsigned long lsize = cpu_dcache_line_size();
-		unsigned long almask = ~(lsize - 1);
-
 		R4600_HIT_CACHEOP_WAR_IMPL;
-		cache_op(Hit_Writeback_Inv_D, addr & almask);
-		cache_op(Hit_Writeback_Inv_D, (addr + size - 1)  & almask);
 		blast_inv_dcache_range(addr, addr + size);
 	}
 
 	bc_inv(addr, size);
+	__sync();
 }
 #endif /* CONFIG_DMA_NONCOHERENT */
 
@@ -718,6 +710,39 @@ static void r4k_flush_icache_all(void)
 		r4k_blast_icache();
 }
 
+struct flush_kernel_vmap_range_args {
+	unsigned long	vaddr;
+	int		size;
+};
+
+static inline void local_r4k_flush_kernel_vmap_range(void *args)
+{
+	struct flush_kernel_vmap_range_args *vmra = args;
+	unsigned long vaddr = vmra->vaddr;
+	int size = vmra->size;
+
+	/*
+	 * Aliases only affect the primary caches so don't bother with
+	 * S-caches or T-caches.
+	 */
+	if (cpu_has_safe_index_cacheops && size >= dcache_size)
+		r4k_blast_dcache();
+	else {
+		R4600_HIT_CACHEOP_WAR_IMPL;
+		blast_dcache_range(vaddr, vaddr + size);
+	}
+}
+
+static void r4k_flush_kernel_vmap_range(unsigned long vaddr, int size)
+{
+	struct flush_kernel_vmap_range_args args;
+
+	args.vaddr = (unsigned long) vaddr;
+	args.size = size;
+
+	r4k_on_each_cpu(local_r4k_flush_kernel_vmap_range, &args);
+}
+
 static inline void rm7k_erratum31(void)
 {
 	const unsigned long ic_lsize = 32;
@@ -747,6 +772,25 @@ static inline void rm7k_erratum31(void)
 			".set pop\n"
 			:
 			: "r" (addr), "i" (Index_Store_Tag_I), "i" (Fill));
+	}
+}
+
+static inline void alias_74k_erratum(struct cpuinfo_mips *c)
+{
+	/*
+	 * Early versions of the 74K do not update the cache tags on a
+	 * vtag miss/ptag hit which can occur in the case of KSEG0/KUSEG
+	 * aliases. In this case it is better to treat the cache as always
+	 * having aliases.
+	 */
+	if ((c->processor_id & 0xff) <= PRID_REV_ENCODE_332(2, 4, 0))
+		c->dcache.flags |= MIPS_CACHE_VTAG;
+	if ((c->processor_id & 0xff) == PRID_REV_ENCODE_332(2, 4, 0))
+		write_c0_config6(read_c0_config6() | MIPS_CONF6_SYND);
+	if (((c->processor_id & 0xff00) == PRID_IMP_1074K) &&
+	    ((c->processor_id & 0xff) <= PRID_REV_ENCODE_332(1, 1, 0))) {
+		c->dcache.flags |= MIPS_CACHE_VTAG;
+		write_c0_config6(read_c0_config6() | MIPS_CONF6_SYND);
 	}
 }
 
@@ -892,7 +936,6 @@ static void __cpuinit probe_pcache(void)
 	case CPU_RM7000:
 		rm7k_erratum31();
 
-	case CPU_RM9000:
 		icache_size = 1 << (12 + ((config & CONF_IC) >> 9));
 		c->icache.linesz = 16 << ((config & CONF_IB) >> 5);
 		c->icache.ways = 4;
@@ -903,9 +946,7 @@ static void __cpuinit probe_pcache(void)
 		c->dcache.ways = 4;
 		c->dcache.waybit = __ffs(dcache_size / c->dcache.ways);
 
-#if !defined(CONFIG_SMP) || !defined(RM9000_CDEX_SMP_WAR)
 		c->options |= MIPS_CPU_CACHE_CDEX_P;
-#endif
 		c->options |= MIPS_CPU_PREFETCH;
 		break;
 
@@ -941,7 +982,7 @@ static void __cpuinit probe_pcache(void)
 			c->icache.linesz = 2 << lsize;
 		else
 			c->icache.linesz = lsize;
-		c->icache.sets = 64 << ((config1 >> 22) & 7);
+		c->icache.sets = 32 << (((config1 >> 22) + 1) & 7);
 		c->icache.ways = 1 + ((config1 >> 16) & 7);
 
 		icache_size = c->icache.sets *
@@ -961,7 +1002,7 @@ static void __cpuinit probe_pcache(void)
 			c->dcache.linesz = 2 << lsize;
 		else
 			c->dcache.linesz= lsize;
-		c->dcache.sets = 64 << ((config1 >> 13) & 7);
+		c->dcache.sets = 32 << (((config1 >> 13) + 1) & 7);
 		c->dcache.ways = 1 + ((config1 >> 7) & 7);
 
 		dcache_size = c->dcache.sets *
@@ -1015,10 +1056,13 @@ static void __cpuinit probe_pcache(void)
 	case CPU_R14000:
 		break;
 
+	case CPU_M14KC:
 	case CPU_24K:
 	case CPU_34K:
 	case CPU_74K:
 	case CPU_1004K:
+		if (c->cputype == CPU_74K)
+			alias_74k_erratum(c);
 		if ((read_c0_config7() & (1 << 16))) {
 			/* effectively physically indexed dcache,
 			   thus no virtual aliases. */
@@ -1187,7 +1231,6 @@ static void __cpuinit setup_scache(void)
                 return;
 
 	case CPU_RM7000:
-	case CPU_RM9000:
 #ifdef CONFIG_RM7000_CPU_SCACHE
 		rm7k_sc_init();
 #endif
@@ -1198,6 +1241,9 @@ static void __cpuinit setup_scache(void)
 		loongson2_sc_init();
 		return;
 #endif
+	case CPU_XLP:
+		/* don't need to worry about L2, fully coherent */
+		return;
 
 	default:
 		if (c->isa_level == MIPS_CPU_ISA_M32R1 ||
@@ -1287,10 +1333,10 @@ static int __init cca_setup(char *str)
 {
 	get_option(&str, &cca);
 
-	return 1;
+	return 0;
 }
 
-__setup("cca=", cca_setup);
+early_param("cca", cca_setup);
 
 static void __cpuinit coherency_setup(void)
 {
@@ -1340,16 +1386,14 @@ static int __init setcoherentio(char *str)
 {
 	coherentio = 1;
 
-	return 1;
+	return 0;
 }
 
-__setup("coherentio", setcoherentio);
+early_param("coherentio", setcoherentio);
 #endif
 
-void __cpuinit r4k_cache_init(void)
+static void __cpuinit r4k_cache_error_setup(void)
 {
-	extern void build_clear_page(void);
-	extern void build_copy_page(void);
 	extern char __weak except_vec2_generic;
 	extern char __weak except_vec2_sb1;
 	struct cpuinfo_mips *c = &current_cpu_data;
@@ -1364,6 +1408,13 @@ void __cpuinit r4k_cache_init(void)
 		set_uncached_handler(0x100, &except_vec2_generic, 0x80);
 		break;
 	}
+}
+
+void __cpuinit r4k_cache_init(void)
+{
+	extern void build_clear_page(void);
+	extern void build_copy_page(void);
+	struct cpuinfo_mips *c = &current_cpu_data;
 
 	probe_pcache();
 	setup_scache();
@@ -1399,6 +1450,8 @@ void __cpuinit r4k_cache_init(void)
 	flush_cache_page	= r4k_flush_cache_page;
 	flush_cache_range	= r4k_flush_cache_range;
 
+	__flush_kernel_vmap_range = r4k_flush_kernel_vmap_range;
+
 	flush_cache_sigtramp	= r4k_flush_cache_sigtramp;
 	flush_icache_all	= r4k_flush_icache_all;
 	local_flush_data_cache_page	= local_r4k_flush_data_cache_page;
@@ -1424,4 +1477,5 @@ void __cpuinit r4k_cache_init(void)
 	local_r4k___flush_cache_all(NULL);
 #endif
 	coherency_setup();
+	board_cache_error_setup = r4k_cache_error_setup;
 }

@@ -16,6 +16,8 @@
 #include <xen/xen.h>
 
 #include "xenfs.h"
+#include "../privcmd.h"
+#include "../xenbus/xenbus_comms.h"
 
 #include <asm/xen/hypervisor.h>
 
@@ -28,7 +30,8 @@ static struct inode *xenfs_make_inode(struct super_block *sb, int mode)
 
 	if (ret) {
 		ret->i_mode = mode;
-		ret->i_uid = ret->i_gid = 0;
+		ret->i_uid = GLOBAL_ROOT_UID;
+		ret->i_gid = GLOBAL_ROOT_GID;
 		ret->i_blocks = 0;
 		ret->i_atime = ret->i_mtime = ret->i_ctime = CURRENT_TIME;
 	}
@@ -82,9 +85,9 @@ static int xenfs_fill_super(struct super_block *sb, void *data, int silent)
 {
 	static struct tree_descr xenfs_files[] = {
 		[1] = {},
-		{ "xenbus", &xenbus_file_ops, S_IRUSR|S_IWUSR },
+		{ "xenbus", &xen_xenbus_fops, S_IRUSR|S_IWUSR },
 		{ "capabilities", &capabilities_file_ops, S_IRUGO },
-		{ "privcmd", &privcmd_file_ops, S_IRUSR|S_IWUSR },
+		{ "privcmd", &xen_privcmd_fops, S_IRUSR|S_IWUSR },
 		{""},
 	};
 	int rc;

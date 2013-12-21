@@ -372,7 +372,7 @@ bool KeybRemoveKey (
     int  i;
 
     if (is_broadcast_ether_addr(pbyBSSID)) {
-        // dealte all key
+        // delete all keys
         if ((dwKeyIndex & PAIRWISE_KEY) != 0) {
             for (i=0;i<MAX_KEY_TABLE;i++) {
                 pTable->KeyTable[i].PairwiseKey.bKeyValid = false;
@@ -654,6 +654,9 @@ bool KeybSetDefaultKey (
     } else if ((dwKeyIndex & 0x000000FF) >= MAX_GROUP_KEY) {
         return (false);
     }
+
+    if (uKeyLength > MAX_KEY_LEN)
+	    return false;
 
     pTable->KeyTable[MAX_KEY_TABLE-1].bInUse = true;
     for(ii=0;ii<ETH_ALEN;ii++)

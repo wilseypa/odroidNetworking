@@ -42,10 +42,6 @@
 #define ARP_REQ  	(TX<<5)
 #define ARP_RESP 	(TX<<6)
 
-// dhcp.c
-//#define DHCP TX
-//#define DHCP_REQ (DHCP<<7)
-
 // Leakybucket.c
 #define TOKEN_COUNTS (TX<<8)
 #define CHECK_TOKENS (TX<<9)
@@ -131,7 +127,7 @@ DriverEntry.c, bcmfwup.c, ChipDetectTask.c, HaltnReset.c, InterfaceDDR.c */
 
 // TODO - put PHS_SEND in Tx PHS_RECEIVE in Rx path ?
 #define PHS_SEND    	(OTHERS<<16)
-#define PHS_RECIEVE 	(OTHERS<<17)
+#define PHS_RECEIVE 	(OTHERS<<17)
 #define PHS_MODULE 	    (OTHERS<<18)
 
 #define INTF_INIT    	(OTHERS<<19)
@@ -147,7 +143,6 @@ DriverEntry.c, bcmfwup.c, ChipDetectTask.c, HaltnReset.c, InterfaceDDR.c */
 
 #define HOST_MIBS   	(OTHERS << 28)
 #define CONN_MSG    	(CMHOST << 29)
-//#define OTHERS_MISC		(OTHERS << 29)	// ProcSupport.c
 /*-----------------END SUBTYPEs------------------------------------------*/
 
 

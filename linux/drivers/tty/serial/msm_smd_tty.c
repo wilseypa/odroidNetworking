@@ -203,7 +203,6 @@ static int __init smd_tty_init(void)
 	if (smd_tty_driver == 0)
 		return -ENOMEM;
 
-	smd_tty_driver->owner = THIS_MODULE;
 	smd_tty_driver->driver_name = "smd_tty_driver";
 	smd_tty_driver->name = "smd";
 	smd_tty_driver->major = 0;
@@ -224,9 +223,11 @@ static int __init smd_tty_init(void)
 		return ret;
 
 	for (i = 0; i < smd_tty_channels_len; i++) {
-		tty_port_init(&smd_tty[smd_tty_channels[i].id].port);
-		smd_tty[smd_tty_channels[i].id].port.ops = &smd_tty_port_ops;
-		tty_register_device(smd_tty_driver, smd_tty_channels[i].id, 0);
+		struct tty_port *port = &smd_tty[smd_tty_channels[i].id].port;
+		tty_port_init(port);
+		port->ops = &smd_tty_port_ops;
+		tty_port_register_device(port, smd_tty_driver,
+				smd_tty_channels[i].id, NULL);
 	}
 
 	return 0;

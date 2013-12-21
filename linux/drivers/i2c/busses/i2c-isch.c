@@ -47,7 +47,7 @@
 #define SMBBLKDAT	(0x20 + sch_smba)
 
 /* Other settings */
-#define MAX_TIMEOUT	500
+#define MAX_RETRIES	5000
 
 /* I2C constants */
 #define SCH_QUICK		0x00
@@ -68,7 +68,7 @@ static int sch_transaction(void)
 {
 	int temp;
 	int result = 0;
-	int timeout = 0;
+	int retries = 0;
 
 	dev_dbg(&sch_adapter.dev, "Transaction (pre): CNT=%02x, CMD=%02x, "
 		"ADD=%02x, DAT0=%02x, DAT1=%02x\n", inb(SMBHSTCNT),
@@ -100,12 +100,12 @@ static int sch_transaction(void)
 	outb(inb(SMBHSTCNT) | 0x10, SMBHSTCNT);
 
 	do {
-		msleep(1);
+		usleep_range(100, 200);
 		temp = inb(SMBHSTSTS) & 0x0f;
-	} while ((temp & 0x08) && (timeout++ < MAX_TIMEOUT));
+	} while ((temp & 0x08) && (retries++ < MAX_RETRIES));
 
 	/* If the SMBus is still busy, we give up */
-	if (timeout > MAX_TIMEOUT) {
+	if (retries > MAX_RETRIES) {
 		dev_err(&sch_adapter.dev, "SMBus Timeout!\n");
 		result = -ETIMEDOUT;
 	}
@@ -249,7 +249,7 @@ static struct i2c_adapter sch_adapter = {
 	.algo		= &smbus_algorithm,
 };
 
-static int __devinit smbus_sch_probe(struct platform_device *dev)
+static int smbus_sch_probe(struct platform_device *dev)
 {
 	struct resource *res;
 	int retval;
@@ -284,7 +284,7 @@ static int __devinit smbus_sch_probe(struct platform_device *dev)
 	return retval;
 }
 
-static int __devexit smbus_sch_remove(struct platform_device *pdev)
+static int smbus_sch_remove(struct platform_device *pdev)
 {
 	struct resource *res;
 	if (sch_smba) {
@@ -303,23 +303,12 @@ static struct platform_driver smbus_sch_driver = {
 		.owner = THIS_MODULE,
 	},
 	.probe		= smbus_sch_probe,
-	.remove		= __devexit_p(smbus_sch_remove),
+	.remove		= smbus_sch_remove,
 };
 
-static int __init i2c_sch_init(void)
-{
-	return platform_driver_register(&smbus_sch_driver);
-}
-
-static void __exit i2c_sch_exit(void)
-{
-	platform_driver_unregister(&smbus_sch_driver);
-}
+module_platform_driver(smbus_sch_driver);
 
 MODULE_AUTHOR("Jacob Pan <jacob.jun.pan@intel.com>");
 MODULE_DESCRIPTION("Intel SCH SMBus driver");
 MODULE_LICENSE("GPL");
-
-module_init(i2c_sch_init);
-module_exit(i2c_sch_exit);
 MODULE_ALIAS("platform:isch_smbus");

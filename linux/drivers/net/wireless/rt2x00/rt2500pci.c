@@ -205,7 +205,7 @@ static int rt2500pci_rfkill_poll(struct rt2x00_dev *rt2x00dev)
 	u32 reg;
 
 	rt2x00pci_register_read(rt2x00dev, GPIOCSR, &reg);
-	return rt2x00_get_field32(reg, GPIOCSR_BIT0);
+	return rt2x00_get_field32(reg, GPIOCSR_VAL0);
 }
 
 #ifdef CONFIG_RT2X00_LIB_LEDS
@@ -735,11 +735,6 @@ static void rt2500pci_start_queue(struct data_queue *queue)
 		rt2x00pci_register_write(rt2x00dev, RXCSR0, reg);
 		break;
 	case QID_BEACON:
-		/*
-		 * Allow the tbtt tasklet to be scheduled.
-		 */
-		tasklet_enable(&rt2x00dev->tbtt_tasklet);
-
 		rt2x00pci_register_read(rt2x00dev, CSR14, &reg);
 		rt2x00_set_field32(&reg, CSR14_TSF_COUNT, 1);
 		rt2x00_set_field32(&reg, CSR14_TBCN, 1);
@@ -805,7 +800,7 @@ static void rt2500pci_stop_queue(struct data_queue *queue)
 		/*
 		 * Wait for possibly running tbtt tasklets.
 		 */
-		tasklet_disable(&rt2x00dev->tbtt_tasklet);
+		tasklet_kill(&rt2x00dev->tbtt_tasklet);
 		break;
 	default:
 		break;
@@ -1137,12 +1132,6 @@ static void rt2500pci_toggle_irq(struct rt2x00_dev *rt2x00dev,
 	if (state == STATE_RADIO_IRQ_ON) {
 		rt2x00pci_register_read(rt2x00dev, CSR7, &reg);
 		rt2x00pci_register_write(rt2x00dev, CSR7, reg);
-
-		/*
-		 * Enable tasklets.
-		 */
-		tasklet_enable(&rt2x00dev->txstatus_tasklet);
-		tasklet_enable(&rt2x00dev->rxdone_tasklet);
 	}
 
 	/*
@@ -1165,8 +1154,9 @@ static void rt2500pci_toggle_irq(struct rt2x00_dev *rt2x00dev,
 		/*
 		 * Ensure that all tasklets are finished.
 		 */
-		tasklet_disable(&rt2x00dev->txstatus_tasklet);
-		tasklet_disable(&rt2x00dev->rxdone_tasklet);
+		tasklet_kill(&rt2x00dev->txstatus_tasklet);
+		tasklet_kill(&rt2x00dev->rxdone_tasklet);
+		tasklet_kill(&rt2x00dev->tbtt_tasklet);
 	}
 }
 
@@ -1479,22 +1469,25 @@ static void rt2500pci_txstatus_tasklet(unsigned long data)
 	/*
 	 * Enable all TXDONE interrupts again.
 	 */
-	spin_lock_irq(&rt2x00dev->irqmask_lock);
+	if (test_bit(DEVICE_STATE_ENABLED_RADIO, &rt2x00dev->flags)) {
+		spin_lock_irq(&rt2x00dev->irqmask_lock);
 
-	rt2x00pci_register_read(rt2x00dev, CSR8, &reg);
-	rt2x00_set_field32(&reg, CSR8_TXDONE_TXRING, 0);
-	rt2x00_set_field32(&reg, CSR8_TXDONE_ATIMRING, 0);
-	rt2x00_set_field32(&reg, CSR8_TXDONE_PRIORING, 0);
-	rt2x00pci_register_write(rt2x00dev, CSR8, reg);
+		rt2x00pci_register_read(rt2x00dev, CSR8, &reg);
+		rt2x00_set_field32(&reg, CSR8_TXDONE_TXRING, 0);
+		rt2x00_set_field32(&reg, CSR8_TXDONE_ATIMRING, 0);
+		rt2x00_set_field32(&reg, CSR8_TXDONE_PRIORING, 0);
+		rt2x00pci_register_write(rt2x00dev, CSR8, reg);
 
-	spin_unlock_irq(&rt2x00dev->irqmask_lock);
+		spin_unlock_irq(&rt2x00dev->irqmask_lock);
+	}
 }
 
 static void rt2500pci_tbtt_tasklet(unsigned long data)
 {
 	struct rt2x00_dev *rt2x00dev = (struct rt2x00_dev *)data;
 	rt2x00lib_beacondone(rt2x00dev);
-	rt2500pci_enable_interrupt(rt2x00dev, CSR8_TBCN_EXPIRE);
+	if (test_bit(DEVICE_STATE_ENABLED_RADIO, &rt2x00dev->flags))
+		rt2500pci_enable_interrupt(rt2x00dev, CSR8_TBCN_EXPIRE);
 }
 
 static void rt2500pci_rxdone_tasklet(unsigned long data)
@@ -1502,7 +1495,7 @@ static void rt2500pci_rxdone_tasklet(unsigned long data)
 	struct rt2x00_dev *rt2x00dev = (struct rt2x00_dev *)data;
 	if (rt2x00pci_rxdone(rt2x00dev))
 		tasklet_schedule(&rt2x00dev->rxdone_tasklet);
-	else
+	else if (test_bit(DEVICE_STATE_ENABLED_RADIO, &rt2x00dev->flags))
 		rt2500pci_enable_interrupt(rt2x00dev, CSR8_RXDONE);
 }
 
@@ -1592,7 +1585,7 @@ static int rt2500pci_validate_eeprom(struct rt2x00_dev *rt2x00dev)
 	 */
 	mac = rt2x00_eeprom_addr(rt2x00dev, EEPROM_MAC_ADDR_0);
 	if (!is_valid_ether_addr(mac)) {
-		random_ether_addr(mac);
+		eth_random_addr(mac);
 		EEPROM(rt2x00dev, "MAC: %pM\n", mac);
 	}
 
@@ -1982,7 +1975,8 @@ static int rt2500pci_probe_hw(struct rt2x00_dev *rt2x00dev)
 /*
  * IEEE80211 stack callback functions.
  */
-static u64 rt2500pci_get_tsf(struct ieee80211_hw *hw)
+static u64 rt2500pci_get_tsf(struct ieee80211_hw *hw,
+			     struct ieee80211_vif *vif)
 {
 	struct rt2x00_dev *rt2x00dev = hw->priv;
 	u64 tsf;
@@ -2025,6 +2019,7 @@ static const struct ieee80211_ops rt2500pci_mac80211_ops = {
 	.set_antenna		= rt2x00mac_set_antenna,
 	.get_antenna		= rt2x00mac_get_antenna,
 	.get_ringparam		= rt2x00mac_get_ringparam,
+	.tx_frames_pending	= rt2x00mac_tx_frames_pending,
 };
 
 static const struct rt2x00lib_ops rt2500pci_rt2x00_ops = {
@@ -2086,7 +2081,6 @@ static const struct data_queue_desc rt2500pci_queue_atim = {
 
 static const struct rt2x00_ops rt2500pci_ops = {
 	.name			= KBUILD_MODNAME,
-	.max_sta_intf		= 1,
 	.max_ap_intf		= 1,
 	.eeprom_size		= EEPROM_SIZE,
 	.rf_size		= RF_SIZE,
@@ -2128,20 +2122,9 @@ static struct pci_driver rt2500pci_driver = {
 	.name		= KBUILD_MODNAME,
 	.id_table	= rt2500pci_device_table,
 	.probe		= rt2500pci_probe,
-	.remove		= __devexit_p(rt2x00pci_remove),
+	.remove		= rt2x00pci_remove,
 	.suspend	= rt2x00pci_suspend,
 	.resume		= rt2x00pci_resume,
 };
 
-static int __init rt2500pci_init(void)
-{
-	return pci_register_driver(&rt2500pci_driver);
-}
-
-static void __exit rt2500pci_exit(void)
-{
-	pci_unregister_driver(&rt2500pci_driver);
-}
-
-module_init(rt2500pci_init);
-module_exit(rt2500pci_exit);
+module_pci_driver(rt2500pci_driver);

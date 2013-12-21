@@ -87,14 +87,20 @@
 #ifdef CONFIG_QUOTA
 /* Amount of blocks needed for quota update - we know that the structure was
  * allocated so we need to update only data block */
-#define EXT4_QUOTA_TRANS_BLOCKS(sb) (test_opt(sb, QUOTA) ? 1 : 0)
+#define EXT4_QUOTA_TRANS_BLOCKS(sb) ((test_opt(sb, QUOTA) ||\
+		EXT4_HAS_RO_COMPAT_FEATURE(sb, EXT4_FEATURE_RO_COMPAT_QUOTA)) ?\
+		1 : 0)
 /* Amount of blocks needed for quota insert/delete - we do some block writes
  * but inode, sb and group updates are done only once */
-#define EXT4_QUOTA_INIT_BLOCKS(sb) (test_opt(sb, QUOTA) ? (DQUOT_INIT_ALLOC*\
-		(EXT4_SINGLEDATA_TRANS_BLOCKS(sb)-3)+3+DQUOT_INIT_REWRITE) : 0)
+#define EXT4_QUOTA_INIT_BLOCKS(sb) ((test_opt(sb, QUOTA) ||\
+		EXT4_HAS_RO_COMPAT_FEATURE(sb, EXT4_FEATURE_RO_COMPAT_QUOTA)) ?\
+		(DQUOT_INIT_ALLOC*(EXT4_SINGLEDATA_TRANS_BLOCKS(sb)-3)\
+		 +3+DQUOT_INIT_REWRITE) : 0)
 
-#define EXT4_QUOTA_DEL_BLOCKS(sb) (test_opt(sb, QUOTA) ? (DQUOT_DEL_ALLOC*\
-		(EXT4_SINGLEDATA_TRANS_BLOCKS(sb)-3)+3+DQUOT_DEL_REWRITE) : 0)
+#define EXT4_QUOTA_DEL_BLOCKS(sb) ((test_opt(sb, QUOTA) ||\
+		EXT4_HAS_RO_COMPAT_FEATURE(sb, EXT4_FEATURE_RO_COMPAT_QUOTA)) ?\
+		(DQUOT_DEL_ALLOC*(EXT4_SINGLEDATA_TRANS_BLOCKS(sb)-3)\
+		 +3+DQUOT_DEL_REWRITE) : 0)
 #else
 #define EXT4_QUOTA_TRANS_BLOCKS(sb) 0
 #define EXT4_QUOTA_INIT_BLOCKS(sb) 0
@@ -103,6 +109,82 @@
 #define EXT4_MAXQUOTAS_TRANS_BLOCKS(sb) (MAXQUOTAS*EXT4_QUOTA_TRANS_BLOCKS(sb))
 #define EXT4_MAXQUOTAS_INIT_BLOCKS(sb) (MAXQUOTAS*EXT4_QUOTA_INIT_BLOCKS(sb))
 #define EXT4_MAXQUOTAS_DEL_BLOCKS(sb) (MAXQUOTAS*EXT4_QUOTA_DEL_BLOCKS(sb))
+
+/**
+ *   struct ext4_journal_cb_entry - Base structure for callback information.
+ *
+ *   This struct is a 'seed' structure for a using with your own callback
+ *   structs. If you are using callbacks you must allocate one of these
+ *   or another struct of your own definition which has this struct
+ *   as it's first element and pass it to ext4_journal_callback_add().
+ */
+struct ext4_journal_cb_entry {
+	/* list information for other callbacks attached to the same handle */
+	struct list_head jce_list;
+
+	/*  Function to call with this callback structure */
+	void (*jce_func)(struct super_block *sb,
+			 struct ext4_journal_cb_entry *jce, int error);
+
+	/* user data goes here */
+};
+
+/**
+ * ext4_journal_callback_add: add a function to call after transaction commit
+ * @handle: active journal transaction handle to register callback on
+ * @func: callback function to call after the transaction has committed:
+ *        @sb: superblock of current filesystem for transaction
+ *        @jce: returned journal callback data
+ *        @rc: journal state at commit (0 = transaction committed properly)
+ * @jce: journal callback data (internal and function private data struct)
+ *
+ * The registered function will be called in the context of the journal thread
+ * after the transaction for which the handle was created has completed.
+ *
+ * No locks are held when the callback function is called, so it is safe to
+ * call blocking functions from within the callback, but the callback should
+ * not block or run for too long, or the filesystem will be blocked waiting for
+ * the next transaction to commit. No journaling functions can be used, or
+ * there is a risk of deadlock.
+ *
+ * There is no guaranteed calling order of multiple registered callbacks on
+ * the same transaction.
+ */
+static inline void ext4_journal_callback_add(handle_t *handle,
+			void (*func)(struct super_block *sb,
+				     struct ext4_journal_cb_entry *jce,
+				     int rc),
+			struct ext4_journal_cb_entry *jce)
+{
+	struct ext4_sb_info *sbi =
+			EXT4_SB(handle->h_transaction->t_journal->j_private);
+
+	/* Add the jce to transaction's private list */
+	jce->jce_func = func;
+	spin_lock(&sbi->s_md_lock);
+	list_add_tail(&jce->jce_list, &handle->h_transaction->t_private_list);
+	spin_unlock(&sbi->s_md_lock);
+}
+
+/**
+ * ext4_journal_callback_del: delete a registered callback
+ * @handle: active journal transaction handle on which callback was registered
+ * @jce: registered journal callback entry to unregister
+ * Return true if object was sucessfully removed
+ */
+static inline bool ext4_journal_callback_try_del(handle_t *handle,
+					     struct ext4_journal_cb_entry *jce)
+{
+	bool deleted;
+	struct ext4_sb_info *sbi =
+			EXT4_SB(handle->h_transaction->t_journal->j_private);
+
+	spin_lock(&sbi->s_md_lock);
+	deleted = !list_empty(&jce->jce_list);
+	list_del_init(&jce->jce_list);
+	spin_unlock(&sbi->s_md_lock);
+	return deleted;
+}
 
 int
 ext4_mark_iloc_dirty(handle_t *handle,
@@ -174,13 +256,6 @@ static inline void ext4_handle_sync(handle_t *handle)
 {
 	if (ext4_handle_valid(handle))
 		handle->h_sync = 1;
-}
-
-static inline void ext4_handle_release_buffer(handle_t *handle,
-						struct buffer_head *bh)
-{
-	if (ext4_handle_valid(handle))
-		jbd2_journal_release_buffer(handle, bh);
 }
 
 static inline int ext4_handle_is_aborted(handle_t *handle)

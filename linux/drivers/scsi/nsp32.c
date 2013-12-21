@@ -38,7 +38,6 @@
 #include <linux/dma-mapping.h>
 
 #include <asm/dma.h>
-#include <asm/system.h>
 #include <asm/io.h>
 
 #include <scsi/scsi.h>
@@ -59,11 +58,11 @@ MODULE_PARM_DESC(trans_mode, "transfer mode (0: BIOS(default) 1: Async 2: Ultra2
 #define ASYNC_MODE    1
 #define ULTRA20M_MODE 2
 
-static int       auto_param = 0;	/* default: ON */
+static bool      auto_param = 0;	/* default: ON */
 module_param     (auto_param, bool, 0);
 MODULE_PARM_DESC(auto_param, "AutoParameter mode (0: ON(default) 1: OFF)");
 
-static int       disc_priv  = 1;	/* default: OFF */
+static bool      disc_priv  = 1;	/* default: OFF */
 module_param     (disc_priv, bool, 0);
 MODULE_PARM_DESC(disc_priv,  "disconnection privilege mode (0: ON 1: OFF(default))");
 
@@ -77,7 +76,7 @@ static const char *nsp32_release_version = "1.2";
 /****************************************************************************
  * Supported hardware
  */
-static struct pci_device_id nsp32_pci_table[] __devinitdata = {
+static struct pci_device_id nsp32_pci_table[] = {
 	{
 		.vendor      = PCI_VENDOR_ID_IODATA,
 		.device      = PCI_DEVICE_ID_NINJASCSI_32BI_CBSC_II,
@@ -187,10 +186,10 @@ static nsp32_sync_table nsp32_sync_table_pci[] = {
  * function declaration
  */
 /* module entry point */
-static int  __devinit nsp32_probe (struct pci_dev *, const struct pci_device_id *);
-static void __devexit nsp32_remove(struct pci_dev *);
-static int  __init    init_nsp32  (void);
-static void __exit    exit_nsp32  (void);
+static int         nsp32_probe (struct pci_dev *, const struct pci_device_id *);
+static void        nsp32_remove(struct pci_dev *);
+static int  __init init_nsp32  (void);
+static void __exit exit_nsp32  (void);
 
 /* struct struct scsi_host_template */
 static int         nsp32_proc_info   (struct Scsi_Host *, char *, char **, off_t, int, int);
@@ -3383,7 +3382,7 @@ static int nsp32_resume(struct pci_dev *pdev)
 /************************************************************************
  * PCI/Cardbus probe/remove routine
  */
-static int __devinit nsp32_probe(struct pci_dev *pdev, const struct pci_device_id *id)
+static int nsp32_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 {
 	int ret;
 	nsp32_hw_data *data = &nsp32_data_base;
@@ -3419,7 +3418,7 @@ static int __devinit nsp32_probe(struct pci_dev *pdev, const struct pci_device_i
 	return ret;
 }
 
-static void __devexit nsp32_remove(struct pci_dev *pdev)
+static void nsp32_remove(struct pci_dev *pdev)
 {
 	struct Scsi_Host *host = pci_get_drvdata(pdev);
 
@@ -3436,7 +3435,7 @@ static struct pci_driver nsp32_driver = {
 	.name		= "nsp32",
 	.id_table	= nsp32_pci_table,
 	.probe		= nsp32_probe,
-	.remove		= __devexit_p(nsp32_remove),
+	.remove		= nsp32_remove,
 #ifdef CONFIG_PM
 	.suspend	= nsp32_suspend, 
 	.resume		= nsp32_resume, 

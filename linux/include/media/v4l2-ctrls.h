@@ -22,14 +22,19 @@
 #define _V4L2_CTRLS_H
 
 #include <linux/list.h>
-#include <linux/device.h>
+#include <linux/mutex.h>
 #include <linux/videodev2.h>
 
 /* forward references */
+struct file;
 struct v4l2_ctrl_handler;
+struct v4l2_ctrl_helper;
 struct v4l2_ctrl;
 struct video_device;
 struct v4l2_subdev;
+struct v4l2_subscribed_event;
+struct v4l2_fh;
+struct poll_table_struct;
 
 /** struct v4l2_ctrl_ops - The control operations that the driver has to provide.
   * @g_volatile_ctrl: Get a new value for this control. Generally only relevant
@@ -51,6 +56,7 @@ struct v4l2_ctrl_ops {
 
 /** struct v4l2_ctrl - The control structure.
   * @node:	The list node.
+  * @ev_subs:	The list of control event subscriptions.
   * @handler:	The handler that owns the control.
   * @cluster:	Point to start of cluster array.
   * @ncontrols:	Number of controls in cluster array.
@@ -61,10 +67,17 @@ struct v4l2_ctrl_ops {
   * @is_private: If set, then this control is private to its handler and it
   *		will not be added to any other handlers. Drivers can set
   *		this flag.
-  * @is_volatile: If set, then this control is volatile. This means that the
-  *		control's current value cannot be cached and needs to be
-  *		retrieved through the g_volatile_ctrl op. Drivers can set
-  *		this flag.
+  * @is_auto:   If set, then this control selects whether the other cluster
+  *		members are in 'automatic' mode or 'manual' mode. This is
+  *		used for autogain/gain type clusters. Drivers should never
+  *		set this flag directly.
+  * @has_volatiles: If set, then one or more members of the cluster are volatile.
+  *		Drivers should never touch this flag.
+  * @manual_mode_value: If the is_auto flag is set, then this is the value
+  *		of the auto control that determines if that control is in
+  *		manual mode. So if the value of the auto control equals this
+  *		value, then the whole cluster is in manual mode. Drivers should
+  *		never set this flag directly.
   * @ops:	The control ops.
   * @id:	The control ID.
   * @name:	The control name.
@@ -97,6 +110,7 @@ struct v4l2_ctrl_ops {
 struct v4l2_ctrl {
 	/* Administrative fields */
 	struct list_head node;
+	struct list_head ev_subs;
 	struct v4l2_ctrl_handler *handler;
 	struct v4l2_ctrl **cluster;
 	unsigned ncontrols;
@@ -104,7 +118,9 @@ struct v4l2_ctrl {
 
 	unsigned int is_new:1;
 	unsigned int is_private:1;
-	unsigned int is_volatile:1;
+	unsigned int is_auto:1;
+	unsigned int has_volatiles:1;
+	unsigned int manual_mode_value:8;
 
 	const struct v4l2_ctrl_ops *ops;
 	u32 id;
@@ -115,7 +131,10 @@ struct v4l2_ctrl {
 		u32 step;
 		u32 menu_skip_mask;
 	};
-	const char * const *qmenu;
+	union {
+		const char * const *qmenu;
+		const s64 *qmenu_int;
+	};
 	unsigned long flags;
 	union {
 		s32 val;
@@ -134,6 +153,7 @@ struct v4l2_ctrl {
   * @node:	List node for the sorted list.
   * @next:	Single-link list node for the hash.
   * @ctrl:	The actual control information.
+  * @helper:	Pointer to helper struct. Used internally in prepare_ext_ctrls().
   *
   * Each control handler has a list of these refs. The list_head is used to
   * keep a sorted-by-control-ID list of all controls, while the next pointer
@@ -143,12 +163,15 @@ struct v4l2_ctrl_ref {
 	struct list_head node;
 	struct v4l2_ctrl_ref *next;
 	struct v4l2_ctrl *ctrl;
+	struct v4l2_ctrl_helper *helper;
 };
 
 /** struct v4l2_ctrl_handler - The control handler keeps track of all the
   * controls: both the controls owned by the handler and those inherited
   * from other handlers.
+  * @_lock:	Default for "lock".
   * @lock:	Lock to control access to this handler and its controls.
+  *		May be replaced by the user right after init.
   * @ctrls:	The list of controls owned by this handler.
   * @ctrl_refs:	The list of control references.
   * @cached:	The last found control reference. It is common that the same
@@ -159,7 +182,8 @@ struct v4l2_ctrl_ref {
   * @error:	The error code of the first failed control addition.
   */
 struct v4l2_ctrl_handler {
-	struct mutex lock;
+	struct mutex _lock;
+	struct mutex *lock;
 	struct list_head ctrls;
 	struct list_head ctrl_refs;
 	struct v4l2_ctrl_ref *cached;
@@ -190,9 +214,6 @@ struct v4l2_ctrl_handler {
   *		must be NULL.
   * @is_private: If set, then this control is private to its handler and it
   *		will not be added to any other handlers.
-  * @is_volatile: If set, then this control is volatile. This means that the
-  *		control's current value cannot be cached and needs to be
-  *		retrieved through the g_volatile_ctrl op.
   */
 struct v4l2_ctrl_config {
 	const struct v4l2_ctrl_ops *ops;
@@ -206,8 +227,8 @@ struct v4l2_ctrl_config {
 	u32 flags;
 	u32 menu_skip_mask;
 	const char * const *qmenu;
+	const s64 *qmenu_int;
 	unsigned int is_private:1;
-	unsigned int is_volatile:1;
 };
 
 /** v4l2_ctrl_fill() - Fill in the control fields based on the control ID.
@@ -331,6 +352,46 @@ struct v4l2_ctrl *v4l2_ctrl_new_std_menu(struct v4l2_ctrl_handler *hdl,
 			const struct v4l2_ctrl_ops *ops,
 			u32 id, s32 max, s32 mask, s32 def);
 
+/** v4l2_ctrl_new_std_menu_items() - Create a new standard V4L2 menu control
+  * with driver specific menu.
+  * @hdl:	The control handler.
+  * @ops:	The control ops.
+  * @id:	The control ID.
+  * @max:	The control's maximum value.
+  * @mask:	The control's skip mask for menu controls. This makes it
+  *		easy to skip menu items that are not valid. If bit X is set,
+  *		then menu item X is skipped. Of course, this only works for
+  *		menus with <= 32 menu items. There are no menus that come
+  *		close to that number, so this is OK. Should we ever need more,
+  *		then this will have to be extended to a u64 or a bit array.
+  * @def:	The control's default value.
+  * @qmenu:	The new menu.
+  *
+  * Same as v4l2_ctrl_new_std_menu(), but @qmenu will be the driver specific
+  * menu of this control.
+  *
+  */
+struct v4l2_ctrl *v4l2_ctrl_new_std_menu_items(struct v4l2_ctrl_handler *hdl,
+			const struct v4l2_ctrl_ops *ops, u32 id, s32 max,
+			s32 mask, s32 def, const char * const *qmenu);
+
+/** v4l2_ctrl_new_int_menu() - Create a new standard V4L2 integer menu control.
+  * @hdl:	The control handler.
+  * @ops:	The control ops.
+  * @id:	The control ID.
+  * @max:	The control's maximum value.
+  * @def:	The control's default value.
+  * @qmenu_int:	The control's menu entries.
+  *
+  * Same as v4l2_ctrl_new_std_menu(), but @mask is set to 0 and it additionaly
+  * takes as an argument an array of integers determining the menu items.
+  *
+  * If @id refers to a non-integer-menu control, then this function will return NULL.
+  */
+struct v4l2_ctrl *v4l2_ctrl_new_int_menu(struct v4l2_ctrl_handler *hdl,
+			const struct v4l2_ctrl_ops *ops,
+			u32 id, s32 max, s32 def, const s64 *qmenu_int);
+
 /** v4l2_ctrl_add_ctrl() - Add a control from another handler to this handler.
   * @hdl:	The control handler.
   * @ctrl:	The control to add.
@@ -347,20 +408,67 @@ struct v4l2_ctrl *v4l2_ctrl_add_ctrl(struct v4l2_ctrl_handler *hdl,
   * @hdl:	The control handler.
   * @add:	The control handler whose controls you want to add to
   *		the @hdl control handler.
+  * @filter:	This function will filter which controls should be added.
   *
-  * Does nothing if either of the two is a NULL pointer.
+  * Does nothing if either of the two handlers is a NULL pointer.
+  * If @filter is NULL, then all controls are added. Otherwise only those
+  * controls for which @filter returns true will be added.
   * In case of an error @hdl->error will be set to the error code (if it
   * wasn't set already).
   */
 int v4l2_ctrl_add_handler(struct v4l2_ctrl_handler *hdl,
-			  struct v4l2_ctrl_handler *add);
+			  struct v4l2_ctrl_handler *add,
+			  bool (*filter)(const struct v4l2_ctrl *ctrl));
 
+/** v4l2_ctrl_radio_filter() - Standard filter for radio controls.
+  * @ctrl:	The control that is filtered.
+  *
+  * This will return true for any controls that are valid for radio device
+  * nodes. Those are all of the V4L2_CID_AUDIO_* user controls and all FM
+  * transmitter class controls.
+  *
+  * This function is to be used with v4l2_ctrl_add_handler().
+  */
+bool v4l2_ctrl_radio_filter(const struct v4l2_ctrl *ctrl);
 
 /** v4l2_ctrl_cluster() - Mark all controls in the cluster as belonging to that cluster.
   * @ncontrols:	The number of controls in this cluster.
   * @controls: 	The cluster control array of size @ncontrols.
   */
 void v4l2_ctrl_cluster(unsigned ncontrols, struct v4l2_ctrl **controls);
+
+
+/** v4l2_ctrl_auto_cluster() - Mark all controls in the cluster as belonging to
+  * that cluster and set it up for autofoo/foo-type handling.
+  * @ncontrols:	The number of controls in this cluster.
+  * @controls:	The cluster control array of size @ncontrols. The first control
+  *		must be the 'auto' control (e.g. autogain, autoexposure, etc.)
+  * @manual_val: The value for the first control in the cluster that equals the
+  *		manual setting.
+  * @set_volatile: If true, then all controls except the first auto control will
+  *		be volatile.
+  *
+  * Use for control groups where one control selects some automatic feature and
+  * the other controls are only active whenever the automatic feature is turned
+  * off (manual mode). Typical examples: autogain vs gain, auto-whitebalance vs
+  * red and blue balance, etc.
+  *
+  * The behavior of such controls is as follows:
+  *
+  * When the autofoo control is set to automatic, then any manual controls
+  * are set to inactive and any reads will call g_volatile_ctrl (if the control
+  * was marked volatile).
+  *
+  * When the autofoo control is set to manual, then any manual controls will
+  * be marked active, and any reads will just return the current value without
+  * going through g_volatile_ctrl.
+  *
+  * In addition, this function will set the V4L2_CTRL_FLAG_UPDATE flag
+  * on the autofoo control and V4L2_CTRL_FLAG_INACTIVE on the foo control(s)
+  * if autofoo is in auto mode.
+  */
+void v4l2_ctrl_auto_cluster(unsigned ncontrols, struct v4l2_ctrl **controls,
+			u8 manual_val, bool set_volatile);
 
 
 /** v4l2_ctrl_find() - Find a control with the given ID.
@@ -379,9 +487,9 @@ struct v4l2_ctrl *v4l2_ctrl_find(struct v4l2_ctrl_handler *hdl, u32 id);
   * This sets or clears the V4L2_CTRL_FLAG_INACTIVE flag atomically.
   * Does nothing if @ctrl == NULL.
   * This will usually be called from within the s_ctrl op.
+  * The V4L2_EVENT_CTRL event will be generated afterwards.
   *
-  * This function can be called regardless of whether the control handler
-  * is locked or not.
+  * This function assumes that the control handler is locked.
   */
 void v4l2_ctrl_activate(struct v4l2_ctrl *ctrl, bool active);
 
@@ -391,11 +499,12 @@ void v4l2_ctrl_activate(struct v4l2_ctrl *ctrl, bool active);
   *
   * This sets or clears the V4L2_CTRL_FLAG_GRABBED flag atomically.
   * Does nothing if @ctrl == NULL.
+  * The V4L2_EVENT_CTRL event will be generated afterwards.
   * This will usually be called when starting or stopping streaming in the
   * driver.
   *
-  * This function can be called regardless of whether the control handler
-  * is locked or not.
+  * This function assumes that the control handler is not locked and will
+  * take the lock itself.
   */
 void v4l2_ctrl_grab(struct v4l2_ctrl *ctrl, bool grabbed);
 
@@ -405,7 +514,7 @@ void v4l2_ctrl_grab(struct v4l2_ctrl *ctrl, bool grabbed);
   */
 static inline void v4l2_ctrl_lock(struct v4l2_ctrl *ctrl)
 {
-	mutex_lock(&ctrl->handler->lock);
+	mutex_lock(ctrl->handler->lock);
 }
 
 /** v4l2_ctrl_lock() - Helper function to unlock the handler
@@ -414,7 +523,7 @@ static inline void v4l2_ctrl_lock(struct v4l2_ctrl *ctrl)
   */
 static inline void v4l2_ctrl_unlock(struct v4l2_ctrl *ctrl)
 {
-	mutex_unlock(&ctrl->handler->lock);
+	mutex_unlock(ctrl->handler->lock);
 }
 
 /** v4l2_ctrl_g_ctrl() - Helper function to get the control's value from within a driver.
@@ -440,15 +549,56 @@ s32 v4l2_ctrl_g_ctrl(struct v4l2_ctrl *ctrl);
   */
 int v4l2_ctrl_s_ctrl(struct v4l2_ctrl *ctrl, s32 val);
 
+/** v4l2_ctrl_g_ctrl_int64() - Helper function to get a 64-bit control's value from within a driver.
+  * @ctrl:	The control.
+  *
+  * This returns the control's value safely by going through the control
+  * framework. This function will lock the control's handler, so it cannot be
+  * used from within the &v4l2_ctrl_ops functions.
+  *
+  * This function is for 64-bit integer type controls only.
+  */
+s64 v4l2_ctrl_g_ctrl_int64(struct v4l2_ctrl *ctrl);
+
+/** v4l2_ctrl_s_ctrl_int64() - Helper function to set a 64-bit control's value from within a driver.
+  * @ctrl:	The control.
+  * @val:	The new value.
+  *
+  * This set the control's new value safely by going through the control
+  * framework. This function will lock the control's handler, so it cannot be
+  * used from within the &v4l2_ctrl_ops functions.
+  *
+  * This function is for 64-bit integer type controls only.
+  */
+int v4l2_ctrl_s_ctrl_int64(struct v4l2_ctrl *ctrl, s64 val);
+
+/* Internal helper functions that deal with control events. */
+extern const struct v4l2_subscribed_event_ops v4l2_ctrl_sub_ev_ops;
+void v4l2_ctrl_replace(struct v4l2_event *old, const struct v4l2_event *new);
+void v4l2_ctrl_merge(const struct v4l2_event *old, struct v4l2_event *new);
+
+/* Can be used as a vidioc_log_status function that just dumps all controls
+   associated with the filehandle. */
+int v4l2_ctrl_log_status(struct file *file, void *fh);
+
+/* Can be used as a vidioc_subscribe_event function that just subscribes
+   control events. */
+int v4l2_ctrl_subscribe_event(struct v4l2_fh *fh,
+				const struct v4l2_event_subscription *sub);
+
+/* Can be used as a poll function that just polls for control events. */
+unsigned int v4l2_ctrl_poll(struct file *file, struct poll_table_struct *wait);
 
 /* Helpers for ioctl_ops. If hdl == NULL then they will all return -EINVAL. */
 int v4l2_queryctrl(struct v4l2_ctrl_handler *hdl, struct v4l2_queryctrl *qc);
 int v4l2_querymenu(struct v4l2_ctrl_handler *hdl, struct v4l2_querymenu *qm);
 int v4l2_g_ctrl(struct v4l2_ctrl_handler *hdl, struct v4l2_control *ctrl);
-int v4l2_s_ctrl(struct v4l2_ctrl_handler *hdl, struct v4l2_control *ctrl);
+int v4l2_s_ctrl(struct v4l2_fh *fh, struct v4l2_ctrl_handler *hdl,
+						struct v4l2_control *ctrl);
 int v4l2_g_ext_ctrls(struct v4l2_ctrl_handler *hdl, struct v4l2_ext_controls *c);
 int v4l2_try_ext_ctrls(struct v4l2_ctrl_handler *hdl, struct v4l2_ext_controls *c);
-int v4l2_s_ext_ctrls(struct v4l2_ctrl_handler *hdl, struct v4l2_ext_controls *c);
+int v4l2_s_ext_ctrls(struct v4l2_fh *fh, struct v4l2_ctrl_handler *hdl,
+						struct v4l2_ext_controls *c);
 
 /* Helpers for subdevices. If the associated ctrl_handler == NULL then they
    will all return -EINVAL. */

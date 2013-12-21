@@ -12,12 +12,15 @@
  */
 
 #include <linux/platform_device.h>
-#include <linux/serial_core.h>
-#include <linux/console.h>
 #include <linux/serial.h>
+#include <linux/serial_core.h>
+#include <linux/tty.h>
+#include <linux/tty_flip.h>
+#include <linux/console.h>
 #include <linux/irq.h>
 #include <linux/io.h>
 #include <linux/of.h>
+#include <linux/module.h>
 
 #define XUARTPS_TTY_NAME	"ttyPS"
 #define XUARTPS_NAME		"xuartps"
@@ -936,22 +939,18 @@ static struct uart_driver xuartps_uart_driver = {
  *
  * Returns 0 on success, negative error otherwise
  **/
-static int __devinit xuartps_probe(struct platform_device *pdev)
+static int xuartps_probe(struct platform_device *pdev)
 {
 	int rc;
 	struct uart_port *port;
 	struct resource *res, *res2;
 	int clk = 0;
 
-#ifdef CONFIG_OF
 	const unsigned int *prop;
 
 	prop = of_get_property(pdev->dev.of_node, "clock", NULL);
 	if (prop)
 		clk = be32_to_cpup(prop);
-#else
-	clk = *((unsigned int *)(pdev->dev.platform_data));
-#endif
 	if (!clk) {
 		dev_err(&pdev->dev, "no clock specified\n");
 		return -ENODEV;
@@ -998,7 +997,7 @@ static int __devinit xuartps_probe(struct platform_device *pdev)
  *
  * Returns 0 on success, negative error otherwise
  **/
-static int __devexit xuartps_remove(struct platform_device *pdev)
+static int xuartps_remove(struct platform_device *pdev)
 {
 	struct uart_port *port = dev_get_drvdata(&pdev->dev);
 	int rc = 0;
@@ -1041,16 +1040,11 @@ static int xuartps_resume(struct platform_device *pdev)
 }
 
 /* Match table for of_platform binding */
-
-#ifdef CONFIG_OF
-static struct of_device_id xuartps_of_match[] __devinitdata = {
+static struct of_device_id xuartps_of_match[] = {
 	{ .compatible = "xlnx,xuartps", },
 	{}
 };
 MODULE_DEVICE_TABLE(of, xuartps_of_match);
-#else
-#define xuartps_of_match NULL
-#endif
 
 static struct platform_driver xuartps_platform_driver = {
 	.probe   = xuartps_probe,		/* Probe method */

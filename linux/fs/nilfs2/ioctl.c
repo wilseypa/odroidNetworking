@@ -27,7 +27,7 @@
 #include <linux/uaccess.h>	/* copy_from_user(), copy_to_user() */
 #include <linux/vmalloc.h>
 #include <linux/compat.h>	/* compat_ptr() */
-#include <linux/mount.h>	/* mnt_want_write(), mnt_drop_write() */
+#include <linux/mount.h>	/* mnt_want_write_file(), mnt_drop_write_file() */
 #include <linux/buffer_head.h>
 #include <linux/nilfs2_fs.h>
 #include "nilfs.h"
@@ -119,7 +119,7 @@ static int nilfs_ioctl_setflags(struct inode *inode, struct file *filp,
 	if (get_user(flags, (int __user *)argp))
 		return -EFAULT;
 
-	ret = mnt_want_write(filp->f_path.mnt);
+	ret = mnt_want_write_file(filp);
 	if (ret)
 		return ret;
 
@@ -154,7 +154,7 @@ static int nilfs_ioctl_setflags(struct inode *inode, struct file *filp,
 	ret = nilfs_transaction_commit(inode->i_sb);
 out:
 	mutex_unlock(&inode->i_mutex);
-	mnt_drop_write(filp->f_path.mnt);
+	mnt_drop_write_file(filp);
 	return ret;
 }
 
@@ -174,7 +174,7 @@ static int nilfs_ioctl_change_cpmode(struct inode *inode, struct file *filp,
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	ret = mnt_want_write(filp->f_path.mnt);
+	ret = mnt_want_write_file(filp);
 	if (ret)
 		return ret;
 
@@ -194,7 +194,7 @@ static int nilfs_ioctl_change_cpmode(struct inode *inode, struct file *filp,
 
 	mutex_unlock(&nilfs->ns_snapshot_mount_mutex);
 out:
-	mnt_drop_write(filp->f_path.mnt);
+	mnt_drop_write_file(filp);
 	return ret;
 }
 
@@ -210,7 +210,7 @@ nilfs_ioctl_delete_checkpoint(struct inode *inode, struct file *filp,
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	ret = mnt_want_write(filp->f_path.mnt);
+	ret = mnt_want_write_file(filp);
 	if (ret)
 		return ret;
 
@@ -225,7 +225,7 @@ nilfs_ioctl_delete_checkpoint(struct inode *inode, struct file *filp,
 	else
 		nilfs_transaction_commit(inode->i_sb); /* never fails */
 out:
-	mnt_drop_write(filp->f_path.mnt);
+	mnt_drop_write_file(filp);
 	return ret;
 }
 
@@ -591,7 +591,7 @@ static int nilfs_ioctl_clean_segments(struct inode *inode, struct file *filp,
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	ret = mnt_want_write(filp->f_path.mnt);
+	ret = mnt_want_write_file(filp);
 	if (ret)
 		return ret;
 
@@ -602,6 +602,8 @@ static int nilfs_ioctl_clean_segments(struct inode *inode, struct file *filp,
 	ret = -EINVAL;
 	nsegs = argv[4].v_nmembs;
 	if (argv[4].v_size != argsz[4])
+		goto out;
+	if (nsegs > UINT_MAX / sizeof(__u64))
 		goto out;
 
 	/*
@@ -623,6 +625,9 @@ static int nilfs_ioctl_clean_segments(struct inode *inode, struct file *filp,
 			goto out_free;
 
 		if (argv[n].v_nmembs > nsegs * nilfs->ns_blocks_per_segment)
+			goto out_free;
+
+		if (argv[n].v_nmembs >= UINT_MAX / argv[n].v_size)
 			goto out_free;
 
 		len = argv[n].v_size * argv[n].v_nmembs;
@@ -655,8 +660,6 @@ static int nilfs_ioctl_clean_segments(struct inode *inode, struct file *filp,
 		goto out_free;
 	}
 
-	vfs_check_frozen(inode->i_sb, SB_FREEZE_WRITE);
-
 	ret = nilfs_ioctl_move_blocks(inode->i_sb, &argv[0], kbufs[0]);
 	if (ret < 0)
 		printk(KERN_ERR "NILFS: GC failed during preparation: "
@@ -675,7 +678,7 @@ out_free:
 		vfree(kbufs[n]);
 	kfree(kbufs[4]);
 out:
-	mnt_drop_write(filp->f_path.mnt);
+	mnt_drop_write_file(filp);
 	return ret;
 }
 
@@ -690,8 +693,14 @@ static int nilfs_ioctl_sync(struct inode *inode, struct file *filp,
 	if (ret < 0)
 		return ret;
 
+	nilfs = inode->i_sb->s_fs_info;
+	if (nilfs_test_opt(nilfs, BARRIER)) {
+		ret = blkdev_issue_flush(inode->i_sb->s_bdev, GFP_KERNEL, NULL);
+		if (ret == -EIO)
+			return ret;
+	}
+
 	if (argp != NULL) {
-		nilfs = inode->i_sb->s_fs_info;
 		down_read(&nilfs->ns_segctor_sem);
 		cno = nilfs->ns_cno - 1;
 		up_read(&nilfs->ns_segctor_sem);
@@ -710,7 +719,7 @@ static int nilfs_ioctl_resize(struct inode *inode, struct file *filp,
 	if (!capable(CAP_SYS_ADMIN))
 		goto out;
 
-	ret = mnt_want_write(filp->f_path.mnt);
+	ret = mnt_want_write_file(filp);
 	if (ret)
 		goto out;
 
@@ -721,7 +730,7 @@ static int nilfs_ioctl_resize(struct inode *inode, struct file *filp,
 	ret = nilfs_resize_fs(inode->i_sb, newsize);
 
 out_drop_write:
-	mnt_drop_write(filp->f_path.mnt);
+	mnt_drop_write_file(filp);
 out:
 	return ret;
 }

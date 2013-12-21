@@ -27,6 +27,8 @@
 #include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/slab.h>
+#include <linux/of.h>
+#include <linux/of_device.h>
 
 #include <mach/hardware.h>
 
@@ -174,14 +176,14 @@ static int pxa_rtc_open(struct device *dev)
 	struct pxa_rtc *pxa_rtc = dev_get_drvdata(dev);
 	int ret;
 
-	ret = request_irq(pxa_rtc->irq_1Hz, pxa_rtc_irq, IRQF_DISABLED,
+	ret = request_irq(pxa_rtc->irq_1Hz, pxa_rtc_irq, 0,
 			  "rtc 1Hz", dev);
 	if (ret < 0) {
 		dev_err(dev, "can't get irq %i, err %d\n", pxa_rtc->irq_1Hz,
 			ret);
 		goto err_irq_1Hz;
 	}
-	ret = request_irq(pxa_rtc->irq_Alrm, pxa_rtc_irq, IRQF_DISABLED,
+	ret = request_irq(pxa_rtc->irq_Alrm, pxa_rtc_irq, 0,
 			  "rtc Alrm", dev);
 	if (ret < 0) {
 		dev_err(dev, "can't get irq %i, err %d\n", pxa_rtc->irq_Alrm,
@@ -396,6 +398,14 @@ static int __exit pxa_rtc_remove(struct platform_device *pdev)
 	return 0;
 }
 
+#ifdef CONFIG_OF
+static struct of_device_id pxa_rtc_dt_ids[] = {
+	{ .compatible = "marvell,pxa-rtc" },
+	{}
+};
+MODULE_DEVICE_TABLE(of, pxa_rtc_dt_ids);
+#endif
+
 #ifdef CONFIG_PM
 static int pxa_rtc_suspend(struct device *dev)
 {
@@ -425,6 +435,7 @@ static struct platform_driver pxa_rtc_driver = {
 	.remove		= __exit_p(pxa_rtc_remove),
 	.driver		= {
 		.name	= "pxa-rtc",
+		.of_match_table = of_match_ptr(pxa_rtc_dt_ids),
 #ifdef CONFIG_PM
 		.pm	= &pxa_rtc_pm_ops,
 #endif

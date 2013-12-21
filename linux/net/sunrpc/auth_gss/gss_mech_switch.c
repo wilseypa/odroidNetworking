@@ -141,7 +141,7 @@ gss_mech_get(struct gss_api_mech *gm)
 EXPORT_SYMBOL_GPL(gss_mech_get);
 
 struct gss_api_mech *
-gss_mech_get_by_name(const char *name)
+_gss_mech_get_by_name(const char *name)
 {
 	struct gss_api_mech	*pos, *gm = NULL;
 
@@ -158,6 +158,17 @@ gss_mech_get_by_name(const char *name)
 
 }
 
+struct gss_api_mech * gss_mech_get_by_name(const char *name)
+{
+	struct gss_api_mech *gm = NULL;
+
+	gm = _gss_mech_get_by_name(name);
+	if (!gm) {
+		request_module("rpc-auth-gss-%s", name);
+		gm = _gss_mech_get_by_name(name);
+	}
+	return gm;
+}
 EXPORT_SYMBOL_GPL(gss_mech_get_by_name);
 
 struct gss_api_mech *
@@ -194,10 +205,9 @@ mech_supports_pseudoflavor(struct gss_api_mech *gm, u32 pseudoflavor)
 	return 0;
 }
 
-struct gss_api_mech *
-gss_mech_get_by_pseudoflavor(u32 pseudoflavor)
+struct gss_api_mech *_gss_mech_get_by_pseudoflavor(u32 pseudoflavor)
 {
-	struct gss_api_mech *pos, *gm = NULL;
+	struct gss_api_mech *gm = NULL, *pos;
 
 	spin_lock(&registered_mechs_lock);
 	list_for_each_entry(pos, &registered_mechs, gm_list) {
@@ -213,23 +223,50 @@ gss_mech_get_by_pseudoflavor(u32 pseudoflavor)
 	return gm;
 }
 
+struct gss_api_mech *
+gss_mech_get_by_pseudoflavor(u32 pseudoflavor)
+{
+	struct gss_api_mech *gm;
+
+	gm = _gss_mech_get_by_pseudoflavor(pseudoflavor);
+
+	if (!gm) {
+		request_module("rpc-auth-gss-%u", pseudoflavor);
+		gm = _gss_mech_get_by_pseudoflavor(pseudoflavor);
+	}
+	return gm;
+}
+
 EXPORT_SYMBOL_GPL(gss_mech_get_by_pseudoflavor);
 
-int gss_mech_list_pseudoflavors(rpc_authflavor_t *array_ptr)
+/**
+ * gss_mech_list_pseudoflavors - Discover registered GSS pseudoflavors
+ * @array: array to fill in
+ * @size: size of "array"
+ *
+ * Returns the number of array items filled in, or a negative errno.
+ *
+ * The returned array is not sorted by any policy.  Callers should not
+ * rely on the order of the items in the returned array.
+ */
+int gss_mech_list_pseudoflavors(rpc_authflavor_t *array_ptr, int size)
 {
 	struct gss_api_mech *pos = NULL;
-	int i = 0;
+	int j, i = 0;
 
 	spin_lock(&registered_mechs_lock);
 	list_for_each_entry(pos, &registered_mechs, gm_list) {
-		array_ptr[i] = pos->gm_pfs->pseudoflavor;
-		i++;
+		for (j = 0; j < pos->gm_pf_num; j++) {
+			if (i >= size) {
+				spin_unlock(&registered_mechs_lock);
+				return -ENOMEM;
+			}
+			array_ptr[i++] = pos->gm_pfs[j].pseudoflavor;
+		}
 	}
 	spin_unlock(&registered_mechs_lock);
 	return i;
 }
-
-EXPORT_SYMBOL_GPL(gss_mech_list_pseudoflavors);
 
 u32
 gss_svc_to_pseudoflavor(struct gss_api_mech *gm, u32 service)

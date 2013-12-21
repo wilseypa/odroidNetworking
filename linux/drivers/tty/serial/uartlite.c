@@ -15,6 +15,7 @@
 #include <linux/serial.h>
 #include <linux/serial_core.h>
 #include <linux/tty.h>
+#include <linux/tty_flip.h>
 #include <linux/delay.h>
 #include <linux/interrupt.h>
 #include <linux/init.h>
@@ -215,8 +216,7 @@ static int ulite_startup(struct uart_port *port)
 {
 	int ret;
 
-	ret = request_irq(port->irq, ulite_isr,
-			  IRQF_SHARED | IRQF_SAMPLE_RANDOM, "uartlite", port);
+	ret = request_irq(port->irq, ulite_isr, IRQF_SHARED, "uartlite", port);
 	if (ret)
 		return ret;
 
@@ -408,7 +408,7 @@ static void ulite_console_write(struct console *co, const char *s,
 		spin_unlock_irqrestore(&port->lock, flags);
 }
 
-static int __devinit ulite_console_setup(struct console *co, char *options)
+static int ulite_console_setup(struct console *co, char *options)
 {
 	struct uart_port *port;
 	int baud = 9600;
@@ -486,7 +486,7 @@ static struct uart_driver ulite_uart_driver = {
  *
  * Returns: 0 on success, <0 otherwise
  */
-static int __devinit ulite_assign(struct device *dev, int id, u32 base, int irq)
+static int ulite_assign(struct device *dev, int id, u32 base, int irq)
 {
 	struct uart_port *port;
 	int rc;
@@ -542,7 +542,7 @@ static int __devinit ulite_assign(struct device *dev, int id, u32 base, int irq)
  *
  * @dev: pointer to device structure
  */
-static int __devexit ulite_release(struct device *dev)
+static int ulite_release(struct device *dev)
 {
 	struct uart_port *port = dev_get_drvdata(dev);
 	int rc = 0;
@@ -562,17 +562,15 @@ static int __devexit ulite_release(struct device *dev)
 
 #if defined(CONFIG_OF)
 /* Match table for of_platform binding */
-static struct of_device_id ulite_of_match[] __devinitdata = {
+static struct of_device_id ulite_of_match[] = {
 	{ .compatible = "xlnx,opb-uartlite-1.00.b", },
 	{ .compatible = "xlnx,xps-uartlite-1.00.a", },
 	{}
 };
 MODULE_DEVICE_TABLE(of, ulite_of_match);
-#else /* CONFIG_OF */
-#define ulite_of_match NULL
 #endif /* CONFIG_OF */
 
-static int __devinit ulite_probe(struct platform_device *pdev)
+static int ulite_probe(struct platform_device *pdev)
 {
 	struct resource *res, *res2;
 	int id = pdev->id;
@@ -595,7 +593,7 @@ static int __devinit ulite_probe(struct platform_device *pdev)
 	return ulite_assign(&pdev->dev, id, res->start, res2->start);
 }
 
-static int __devexit ulite_remove(struct platform_device *pdev)
+static int ulite_remove(struct platform_device *pdev)
 {
 	return ulite_release(&pdev->dev);
 }
@@ -605,11 +603,11 @@ MODULE_ALIAS("platform:uartlite");
 
 static struct platform_driver ulite_platform_driver = {
 	.probe = ulite_probe,
-	.remove = __devexit_p(ulite_remove),
+	.remove = ulite_remove,
 	.driver = {
 		.owner = THIS_MODULE,
 		.name  = "uartlite",
-		.of_match_table = ulite_of_match,
+		.of_match_table = of_match_ptr(ulite_of_match),
 	},
 };
 

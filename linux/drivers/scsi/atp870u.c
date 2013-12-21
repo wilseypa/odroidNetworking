@@ -30,7 +30,6 @@
 #include <linux/blkdev.h>
 #include <linux/dma-mapping.h>
 #include <linux/slab.h>
-#include <asm/system.h>
 #include <asm/io.h>
 
 #include <scsi/scsi.h>
@@ -2592,7 +2591,7 @@ static int atp870u_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	 * this than via the PCI device table
 	 */
 	if (ent->device == PCI_DEVICE_ID_ARTOP_AEC7610) {
-		error = pci_read_config_byte(pdev, PCI_CLASS_REVISION, &atpdev->chip_ver);
+		atpdev->chip_ver = pdev->revision;
 		if (atpdev->chip_ver < 2)
 			goto err_eio;
 	}
@@ -2611,7 +2610,7 @@ static int atp870u_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	base_io &= 0xfffffff8;
 
 	if ((ent->device == ATP880_DEVID1)||(ent->device == ATP880_DEVID2)) {
-		error = pci_read_config_byte(pdev, PCI_CLASS_REVISION, &atpdev->chip_ver);
+		atpdev->chip_ver = pdev->revision;
 		pci_write_config_byte(pdev, PCI_LATENCY_TIMER, 0x80);//JCC082803
 
 		host_id = inb(base_io + 0x39);
@@ -3211,7 +3210,7 @@ static struct pci_driver atp870u_driver = {
 	.id_table	= atp870u_id_table,
 	.name		= "atp870u",
 	.probe		= atp870u_probe,
-	.remove		= __devexit_p(atp870u_remove),
+	.remove		= atp870u_remove,
 };
 
 static int __init atp870u_init(void)

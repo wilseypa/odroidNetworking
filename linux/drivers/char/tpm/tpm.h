@@ -28,8 +28,16 @@
 #include <linux/io.h>
 #include <linux/tpm.h>
 
+enum tpm_const {
+	TPM_MINOR = 224,	/* officially assigned */
+	TPM_BUFSIZE = 4096,
+	TPM_NUM_DEVICES = 256,
+	TPM_RETRY = 50,		/* 5 seconds */
+};
+
 enum tpm_timeout {
 	TPM_TIMEOUT = 5,	/* msecs */
+	TPM_TIMEOUT_RETRY = 100 /* msecs */
 };
 
 /* TPM addresses */
@@ -38,6 +46,12 @@ enum tpm_addr {
 	TPM_ADDR = 0x4E,
 };
 
+#define TPM_WARN_RETRY          0x800
+#define TPM_WARN_DOING_SELFTEST 0x802
+#define TPM_ERR_DEACTIVATED     0x6
+#define TPM_ERR_DISABLED        0x7
+
+#define TPM_HEADER_SIZE		10
 extern ssize_t tpm_show_pubek(struct device *, struct device_attribute *attr,
 				char *);
 extern ssize_t tpm_show_pcrs(struct device *, struct device_attribute *attr,
@@ -56,6 +70,10 @@ extern ssize_t tpm_show_owned(struct device *, struct device_attribute *attr,
 				char *);
 extern ssize_t tpm_show_temp_deactivated(struct device *,
 					 struct device_attribute *attr, char *);
+extern ssize_t tpm_show_durations(struct device *,
+				  struct device_attribute *attr, char *);
+extern ssize_t tpm_show_timeouts(struct device *,
+				 struct device_attribute *attr, char *);
 
 struct tpm_chip;
 
@@ -67,6 +85,7 @@ struct tpm_vendor_specific {
 	unsigned long base;		/* TPM base address */
 
 	int irq;
+	int probed_irq;
 
 	int region_size;
 	int have_region;
@@ -81,11 +100,16 @@ struct tpm_vendor_specific {
 	struct list_head list;
 	int locality;
 	unsigned long timeout_a, timeout_b, timeout_c, timeout_d; /* jiffies */
+	bool timeout_adjusted;
 	unsigned long duration[3]; /* jiffies */
+	bool duration_adjusted;
+	void *data;
 
 	wait_queue_head_t read_queue;
 	wait_queue_head_t int_queue;
 };
+
+#define TPM_VID_INTEL    0x8086
 
 struct tpm_chip {
 	struct device *dev;	/* Device stuff */
@@ -255,6 +279,21 @@ struct tpm_pcrextend_in {
 	u8	hash[TPM_DIGEST_SIZE];
 }__attribute__((packed));
 
+/* 128 bytes is an arbitrary cap. This could be as large as TPM_BUFSIZE - 18
+ * bytes, but 128 is still a relatively large number of random bytes and
+ * anything much bigger causes users of struct tpm_cmd_t to start getting
+ * compiler warnings about stack frame size. */
+#define TPM_MAX_RNG_DATA	128
+
+struct tpm_getrandom_out {
+	__be32 rng_data_len;
+	u8     rng_data[TPM_MAX_RNG_DATA];
+}__attribute__((packed));
+
+struct tpm_getrandom_in {
+	__be32 num_bytes;
+}__attribute__((packed));
+
 typedef union {
 	struct	tpm_getcap_params_out getcap_out;
 	struct	tpm_readpubek_params_out readpubek_out;
@@ -263,6 +302,8 @@ typedef union {
 	struct	tpm_pcrread_in	pcrread_in;
 	struct	tpm_pcrread_out	pcrread_out;
 	struct	tpm_pcrextend_in pcrextend_in;
+	struct	tpm_getrandom_in getrandom_in;
+	struct	tpm_getrandom_out getrandom_out;
 } tpm_cmd_params;
 
 struct tpm_cmd_t {
@@ -272,9 +313,9 @@ struct tpm_cmd_t {
 
 ssize_t	tpm_getcap(struct device *, __be32, cap_t *, const char *);
 
-extern void tpm_get_timeouts(struct tpm_chip *);
+extern int tpm_get_timeouts(struct tpm_chip *);
 extern void tpm_gen_interrupt(struct tpm_chip *);
-extern void tpm_continue_selftest(struct tpm_chip *);
+extern int tpm_do_selftest(struct tpm_chip *);
 extern unsigned long tpm_calc_ordinal_duration(struct tpm_chip *, u32);
 extern struct tpm_chip* tpm_register_hardware(struct device *,
 				 const struct tpm_vendor_specific *);
@@ -285,18 +326,21 @@ extern ssize_t tpm_write(struct file *, const char __user *, size_t,
 			 loff_t *);
 extern ssize_t tpm_read(struct file *, char __user *, size_t, loff_t *);
 extern void tpm_remove_hardware(struct device *);
-extern int tpm_pm_suspend(struct device *, pm_message_t);
+extern int tpm_pm_suspend(struct device *);
 extern int tpm_pm_resume(struct device *);
+extern int wait_for_tpm_stat(struct tpm_chip *, u8, unsigned long,
+			     wait_queue_head_t *);
 
 #ifdef CONFIG_ACPI
-extern struct dentry ** tpm_bios_log_setup(char *);
-extern void tpm_bios_log_teardown(struct dentry **);
+extern int tpm_add_ppi(struct kobject *);
+extern void tpm_remove_ppi(struct kobject *);
 #else
-static inline struct dentry ** tpm_bios_log_setup(char *name)
+static inline int tpm_add_ppi(struct kobject *parent)
 {
-	return NULL;
+	return 0;
 }
-static inline void tpm_bios_log_teardown(struct dentry **dir)
+
+static inline void tpm_remove_ppi(struct kobject *parent)
 {
 }
 #endif

@@ -26,6 +26,7 @@
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/string.h>
+#include <linux/export.h>
 #include <linux/types.h>
 #include <linux/mman.h>
 #include <linux/mm.h>
@@ -50,14 +51,22 @@
 #include <asm/processor.h>
 #include <asm/cputable.h>
 #include <asm/sections.h>
-#include <asm/system.h>
-#include <asm/abs_addr.h>
 #include <asm/firmware.h>
 
 #include "mmu_decl.h"
 
-unsigned long ioremap_bot = IOREMAP_BASE;
+/* Some sanity checking */
+#if TASK_SIZE_USER64 > PGTABLE_RANGE
+#error TASK_SIZE_USER64 exceeds pagetable range
+#endif
 
+#ifdef CONFIG_PPC_STD_MMU_64
+#if TASK_SIZE_USER64 > (1UL << (ESID_BITS + SID_SHIFT))
+#error TASK_SIZE_USER64 exceeds user VSID range
+#endif
+#endif
+
+unsigned long ioremap_bot = IOREMAP_BASE;
 
 #ifdef CONFIG_PPC_MMU_NOHASH
 static void *early_alloc_pgtable(unsigned long size)

@@ -14,61 +14,60 @@
 #include <linux/init.h>
 #include <linux/platform_device.h>
 #include <linux/amba/bus.h>
+#include <linux/amba/mmci.h>
 #include <linux/interrupt.h>
 #include <linux/gpio.h>
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/nand.h>
+#include <linux/mtd/fsmc.h>
 #include <linux/mtd/onenand.h>
 #include <linux/mtd/partitions.h>
+#include <linux/i2c.h>
 #include <linux/io.h>
+#include <linux/pinctrl/machine.h>
+#include <linux/platform_data/pinctrl-nomadik.h>
+#include <linux/platform_data/clocksource-nomadik-mtu.h>
+#include <asm/hardware/vic.h>
 #include <asm/sizes.h>
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
-#include <asm/mach/irq.h>
 #include <asm/mach/flash.h>
+#include <asm/mach/time.h>
+#include <mach/irqs.h>
 
-#include <plat/mtu.h>
-
-#include <mach/setup.h>
-#include <mach/nand.h>
-#include <mach/fsmc.h>
+#include "cpu-8815.h"
 
 /* Initial value for SRC control register: all timers use MXTAL/8 source */
 #define SRC_CR_INIT_MASK	0x00007fff
 #define SRC_CR_INIT_VAL		0x2aaa8000
 
+#define ALE_OFF 0x1000000
+#define CLE_OFF 0x800000
+
 /* These addresses span 16MB, so use three individual pages */
 static struct resource nhk8815_nand_resources[] = {
 	{
+		.name = "nand_data",
+		.start = 0x40000000,
+		.end = 0x40000000 + SZ_16K - 1,
+		.flags = IORESOURCE_MEM,
+	}, {
 		.name = "nand_addr",
-		.start = NAND_IO_ADDR,
-		.end = NAND_IO_ADDR + 0xfff,
+		.start = 0x40000000 + ALE_OFF,
+		.end = 0x40000000 +ALE_OFF + SZ_16K - 1,
 		.flags = IORESOURCE_MEM,
 	}, {
 		.name = "nand_cmd",
-		.start = NAND_IO_CMD,
-		.end = NAND_IO_CMD + 0xfff,
+		.start = 0x40000000 + CLE_OFF,
+		.end = 0x40000000 + CLE_OFF + SZ_16K - 1,
 		.flags = IORESOURCE_MEM,
 	}, {
-		.name = "nand_data",
-		.start = NAND_IO_DATA,
-		.end = NAND_IO_DATA + 0xfff,
+		.name  = "fsmc_regs",
+		.start = NOMADIK_FSMC_BASE,
+		.end   = NOMADIK_FSMC_BASE + SZ_4K - 1,
 		.flags = IORESOURCE_MEM,
-	}
+	},
 };
-
-static int nhk8815_nand_init(void)
-{
-	/* FSMC setup for nand chip select (8-bit nand in 8815NHK) */
-	writel(0x0000000E, FSMC_PCR(0));
-	writel(0x000D0A00, FSMC_PMEM(0));
-	writel(0x00100A00, FSMC_PATT(0));
-
-	/* enable access to the chip select area */
-	writel(readl(FSMC_PCR(0)) | 0x04, FSMC_PCR(0));
-
-	return 0;
-}
 
 /*
  * These partitions are the same as those used in the 2.6.20 release
@@ -103,21 +102,28 @@ static struct mtd_partition nhk8815_partitions[] = {
 	}
 };
 
-static struct nomadik_nand_platform_data nhk8815_nand_data = {
-	.parts		= nhk8815_partitions,
-	.nparts		= ARRAY_SIZE(nhk8815_partitions),
-	.options	= NAND_COPYBACK | NAND_CACHEPRG | NAND_NO_PADDING \
-			| NAND_NO_READRDY | NAND_NO_AUTOINCR,
-	.init		= nhk8815_nand_init,
+static struct fsmc_nand_timings nhk8815_nand_timings = {
+	.thiz	= 0,
+	.thold	= 0x10,
+	.twait	= 0x0A,
+	.tset	= 0,
+};
+
+static struct fsmc_nand_platform_data nhk8815_nand_platform_data = {
+	.nand_timings = &nhk8815_nand_timings,
+	.partitions = nhk8815_partitions,
+	.nr_partitions = ARRAY_SIZE(nhk8815_partitions),
+	.width = FSMC_NAND_BW8,
 };
 
 static struct platform_device nhk8815_nand_device = {
-	.name		= "nomadik_nand",
-	.dev		= {
-		.platform_data = &nhk8815_nand_data,
+	.name = "fsmc-nand",
+	.id = -1,
+	.resource = nhk8815_nand_resources,
+	.num_resources = ARRAY_SIZE(nhk8815_nand_resources),
+	.dev = {
+		.platform_data = &nhk8815_nand_platform_data,
 	},
-	.resource	= nhk8815_nand_resources,
-	.num_resources	= ARRAY_SIZE(nhk8815_nand_resources),
 };
 
 /* These are the partitions for the OneNand device, different from above */
@@ -172,6 +178,10 @@ static struct platform_device nhk8815_onenand_device = {
 	.num_resources	= ARRAY_SIZE(nhk8815_onenand_resource),
 };
 
+/* bus control reg. and bus timing reg. for CS0..CS3 */
+#define FSMC_BCR(x)	(NOMADIK_FSMC_VA + (x << 3))
+#define FSMC_BTR(x)	(NOMADIK_FSMC_VA + (x << 3) + 0x04)
+
 static void __init nhk8815_onenand_init(void)
 {
 #ifdef CONFIG_MTD_ONENAND
@@ -181,25 +191,28 @@ static void __init nhk8815_onenand_init(void)
 #endif
 }
 
-#define __MEM_4K_RESOURCE(x) \
-	.res = {.start = (x), .end = (x) + SZ_4K - 1, .flags = IORESOURCE_MEM}
-
-static struct amba_device uart0_device = {
-	.dev = { .init_name = "uart0" },
-	__MEM_4K_RESOURCE(NOMADIK_UART0_BASE),
-	.irq = {IRQ_UART0, NO_IRQ},
+static struct mmci_platform_data mmcsd_plat_data = {
+	.ocr_mask = MMC_VDD_29_30,
+	.f_max = 48000000,
+	.gpio_wp = -1,
+	.gpio_cd = 111,
+	.cd_invert = true,
+	.capabilities = MMC_CAP_MMC_HIGHSPEED |
+	MMC_CAP_SD_HIGHSPEED | MMC_CAP_4_BIT_DATA,
 };
 
-static struct amba_device uart1_device = {
-	.dev = { .init_name = "uart1" },
-	__MEM_4K_RESOURCE(NOMADIK_UART1_BASE),
-	.irq = {IRQ_UART1, NO_IRQ},
-};
+static int __init nhk8815_mmcsd_init(void)
+{
+	int ret;
 
-static struct amba_device *amba_devs[] __initdata = {
-	&uart0_device,
-	&uart1_device,
-};
+	ret = gpio_request(112, "card detect bias");
+	if (ret)
+		return ret;
+	gpio_direction_output(112, 0);
+	amba_apb_device_add(NULL, "mmci", NOMADIK_SDI_BASE, SZ_4K, IRQ_SDMMC, 0, &mmcsd_plat_data, 0x10180180);
+	return 0;
+}
+module_init(nhk8815_mmcsd_init);
 
 static struct resource nhk8815_eth_resources[] = {
 	{
@@ -251,34 +264,96 @@ static void __init nomadik_timer_init(void)
 	src_cr |= SRC_CR_INIT_VAL;
 	writel(src_cr, io_p2v(NOMADIK_SRC_BASE));
 
-	/* Save global pointer to mtu, used by platform timer code */
-	mtu_base = io_p2v(NOMADIK_MTU0_BASE);
-
-	nmdk_timer_init();
+	nmdk_timer_init(io_p2v(NOMADIK_MTU0_BASE), IRQ_MTU0);
 }
 
 static struct sys_timer nomadik_timer = {
 	.init	= nomadik_timer_init,
 };
 
+static struct i2c_board_info __initdata nhk8815_i2c0_devices[] = {
+	{
+		I2C_BOARD_INFO("stw4811", 0x2d),
+	},
+};
+
+static struct i2c_board_info __initdata nhk8815_i2c1_devices[] = {
+	{
+		I2C_BOARD_INFO("camera", 0x10),
+	},
+	{
+		I2C_BOARD_INFO("stw5095", 0x1a),
+	},
+	{
+		I2C_BOARD_INFO("lis3lv02dl", 0x1d),
+	},
+};
+
+static struct i2c_board_info __initdata nhk8815_i2c2_devices[] = {
+	{
+		I2C_BOARD_INFO("stw4811-usb", 0x2d),
+	},
+};
+
+static unsigned long out_low[] = { PIN_OUTPUT_LOW };
+static unsigned long out_high[] = { PIN_OUTPUT_HIGH };
+static unsigned long in_nopull[] = { PIN_INPUT_NOPULL };
+static unsigned long in_pullup[] = { PIN_INPUT_PULLUP };
+
+static struct pinctrl_map __initdata nhk8815_pinmap[] = {
+	PIN_MAP_MUX_GROUP_DEFAULT("uart0", "pinctrl-stn8815", "u0_a_1", "u0"),
+	PIN_MAP_MUX_GROUP_DEFAULT("uart1", "pinctrl-stn8815", "u1_a_1", "u1"),
+	/* Hog in MMC/SD card mux */
+	PIN_MAP_MUX_GROUP_HOG_DEFAULT("pinctrl-stn8815", "mmcsd_a_1", "mmcsd"),
+	/* MCCLK */
+	PIN_MAP_CONFIGS_PIN_HOG_DEFAULT("pinctrl-stn8815", "GPIO8_B10", out_low),
+	/* MCCMD */
+	PIN_MAP_CONFIGS_PIN_HOG_DEFAULT("pinctrl-stn8815", "GPIO9_A10", in_pullup),
+	/* MCCMDDIR */
+	PIN_MAP_CONFIGS_PIN_HOG_DEFAULT("pinctrl-stn8815", "GPIO10_C11", out_high),
+	/* MCDAT3-0 */
+	PIN_MAP_CONFIGS_PIN_HOG_DEFAULT("pinctrl-stn8815", "GPIO11_B11", in_pullup),
+	PIN_MAP_CONFIGS_PIN_HOG_DEFAULT("pinctrl-stn8815", "GPIO12_A11", in_pullup),
+	PIN_MAP_CONFIGS_PIN_HOG_DEFAULT("pinctrl-stn8815", "GPIO13_C12", in_pullup),
+	PIN_MAP_CONFIGS_PIN_HOG_DEFAULT("pinctrl-stn8815", "GPIO14_B12", in_pullup),
+	/* MCDAT0DIR */
+	PIN_MAP_CONFIGS_PIN_HOG_DEFAULT("pinctrl-stn8815", "GPIO15_A12", out_high),
+	/* MCDAT31DIR */
+	PIN_MAP_CONFIGS_PIN_HOG_DEFAULT("pinctrl-stn8815", "GPIO16_C13", out_high),
+	/* MCMSFBCLK */
+	PIN_MAP_CONFIGS_PIN_HOG_DEFAULT("pinctrl-stn8815", "GPIO24_C15", in_pullup),
+	/* CD input GPIO */
+	PIN_MAP_CONFIGS_PIN_HOG_DEFAULT("pinctrl-stn8815", "GPIO111_H21", in_nopull),
+	/* CD bias drive */
+	PIN_MAP_CONFIGS_PIN_HOG_DEFAULT("pinctrl-stn8815", "GPIO112_J21", out_low),
+};
+
 static void __init nhk8815_platform_init(void)
 {
-	int i;
-
+	pinctrl_register_mappings(nhk8815_pinmap, ARRAY_SIZE(nhk8815_pinmap));
 	cpu8815_platform_init();
 	nhk8815_onenand_init();
 	platform_add_devices(nhk8815_platform_devices,
 			     ARRAY_SIZE(nhk8815_platform_devices));
 
-	for (i = 0; i < ARRAY_SIZE(amba_devs); i++)
-		amba_device_register(amba_devs[i], &iomem_resource);
+	amba_apb_device_add(NULL, "uart0", NOMADIK_UART0_BASE, SZ_4K, IRQ_UART0, 0, NULL, 0);
+	amba_apb_device_add(NULL, "uart1", NOMADIK_UART1_BASE, SZ_4K, IRQ_UART1, 0, NULL, 0);
+
+	i2c_register_board_info(0, nhk8815_i2c0_devices,
+				ARRAY_SIZE(nhk8815_i2c0_devices));
+	i2c_register_board_info(1, nhk8815_i2c1_devices,
+				ARRAY_SIZE(nhk8815_i2c1_devices));
+	i2c_register_board_info(2, nhk8815_i2c2_devices,
+				ARRAY_SIZE(nhk8815_i2c2_devices));
 }
 
 MACHINE_START(NOMADIK, "NHK8815")
 	/* Maintainer: ST MicroElectronics */
-	.boot_params	= 0x100,
+	.atag_offset	= 0x100,
 	.map_io		= cpu8815_map_io,
 	.init_irq	= cpu8815_init_irq,
+	.handle_irq	= vic_handle_irq,
 	.timer		= &nomadik_timer,
 	.init_machine	= nhk8815_platform_init,
+	.restart	= cpu8815_restart,
 MACHINE_END

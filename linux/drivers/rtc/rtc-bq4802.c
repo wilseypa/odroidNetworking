@@ -140,7 +140,7 @@ static const struct rtc_class_ops bq4802_ops = {
 	.set_time	= bq4802_set_time,
 };
 
-static int __devinit bq4802_probe(struct platform_device *pdev)
+static int bq4802_probe(struct platform_device *pdev)
 {
 	struct bq4802 *p = kzalloc(sizeof(*p), GFP_KERNEL);
 	int err = -ENOMEM;
@@ -191,7 +191,7 @@ out_free:
 	goto out;
 }
 
-static int __devexit bq4802_remove(struct platform_device *pdev)
+static int bq4802_remove(struct platform_device *pdev)
 {
 	struct bq4802 *p = platform_get_drvdata(pdev);
 
@@ -215,18 +215,7 @@ static struct platform_driver bq4802_driver = {
 		.owner	= THIS_MODULE,
 	},
 	.probe		= bq4802_probe,
-	.remove		= __devexit_p(bq4802_remove),
+	.remove		= bq4802_remove,
 };
 
-static int __init bq4802_init(void)
-{
-	return platform_driver_register(&bq4802_driver);
-}
-
-static void __exit bq4802_exit(void)
-{
-	platform_driver_unregister(&bq4802_driver);
-}
-
-module_init(bq4802_init);
-module_exit(bq4802_exit);
+module_platform_driver(bq4802_driver);

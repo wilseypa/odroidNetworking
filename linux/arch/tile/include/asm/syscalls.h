@@ -43,15 +43,15 @@ long sys32_fadvise64(int fd, u32 offset_lo, u32 offset_hi,
 		     u32 len, int advice);
 int sys32_fadvise64_64(int fd, u32 offset_lo, u32 offset_hi,
 		       u32 len_lo, u32 len_hi, int advice);
-long sys_flush_cache(void);
+long sys_cacheflush(unsigned long addr, unsigned long len,
+		    unsigned long flags);
 #ifndef __tilegx__  /* No mmap() in the 32-bit kernel. */
 #define sys_mmap sys_mmap
 #endif
 
 #ifndef __tilegx__
 /* mm/fault.c */
-long sys_cmpxchg_badaddr(unsigned long address, struct pt_regs *);
-long _sys_cmpxchg_badaddr(unsigned long address);
+long sys_cmpxchg_badaddr(unsigned long address);
 #endif
 
 #ifdef CONFIG_COMPAT
@@ -62,14 +62,16 @@ long sys_truncate64(const char __user *path, loff_t length);
 long sys_ftruncate64(unsigned int fd, loff_t length);
 #endif
 
+/* Provide versions of standard syscalls that use current_pt_regs(). */
+long sys_rt_sigreturn(void);
+long sys_sigaltstack(const stack_t __user *, stack_t __user *);
+#define sys_rt_sigreturn sys_rt_sigreturn
+#define sys_sigaltstack sys_sigaltstack
+
 /* These are the intvec*.S trampolines. */
-long _sys_sigaltstack(const stack_t __user *, stack_t __user *);
 long _sys_rt_sigreturn(void);
 long _sys_clone(unsigned long clone_flags, unsigned long newsp,
 		void __user *parent_tid, void __user *child_tid);
-long _sys_execve(const char __user *filename,
-		 const char __user *const __user *argv,
-		 const char __user *const __user *envp);
 
 #include <asm-generic/syscalls.h>
 

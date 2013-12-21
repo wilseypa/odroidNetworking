@@ -105,7 +105,7 @@ static const struct rtc_class_ops ds3234_rtc_ops = {
 	.set_time	= ds3234_set_time,
 };
 
-static int __devinit ds3234_probe(struct spi_device *spi)
+static int ds3234_probe(struct spi_device *spi)
 {
 	struct rtc_device *rtc;
 	unsigned char tmp;
@@ -156,7 +156,7 @@ static int __devinit ds3234_probe(struct spi_device *spi)
 	return 0;
 }
 
-static int __devexit ds3234_remove(struct spi_device *spi)
+static int ds3234_remove(struct spi_device *spi)
 {
 	struct rtc_device *rtc = spi_get_drvdata(spi);
 
@@ -170,20 +170,10 @@ static struct spi_driver ds3234_driver = {
 		.owner	= THIS_MODULE,
 	},
 	.probe	 = ds3234_probe,
-	.remove = __devexit_p(ds3234_remove),
+	.remove = ds3234_remove,
 };
 
-static __init int ds3234_init(void)
-{
-	return spi_register_driver(&ds3234_driver);
-}
-module_init(ds3234_init);
-
-static __exit void ds3234_exit(void)
-{
-	spi_unregister_driver(&ds3234_driver);
-}
-module_exit(ds3234_exit);
+module_spi_driver(ds3234_driver);
 
 MODULE_DESCRIPTION("DS3234 SPI RTC driver");
 MODULE_AUTHOR("Dennis Aberilla <denzzzhome@yahoo.com>");

@@ -68,7 +68,7 @@ static int als_wait_for_data_ready(struct device *dev)
 		ret = i2c_smbus_read_byte_data(client, 0x86);
 	} while (!(ret & 0x80) && retry--);
 
-	if (!retry) {
+	if (retry < 0) {
 		dev_warn(dev, "timeout waiting for data ready\n");
 		return -ETIMEDOUT;
 	}
@@ -254,7 +254,7 @@ als_error1:
 	return res;
 }
 
-static int __devexit apds9802als_remove(struct i2c_client *client)
+static int apds9802als_remove(struct i2c_client *client)
 {
 	struct als_data *data = i2c_get_clientdata(client);
 
@@ -326,23 +326,13 @@ static struct i2c_driver apds9802als_driver = {
 		.pm = APDS9802ALS_PM_OPS,
 	},
 	.probe = apds9802als_probe,
-	.remove = __devexit_p(apds9802als_remove),
+	.remove = apds9802als_remove,
 	.suspend = apds9802als_suspend,
 	.resume = apds9802als_resume,
 	.id_table = apds9802als_id,
 };
 
-static int __init sensor_apds9802als_init(void)
-{
-	return i2c_add_driver(&apds9802als_driver);
-}
-
-static void  __exit sensor_apds9802als_exit(void)
-{
-	i2c_del_driver(&apds9802als_driver);
-}
-module_init(sensor_apds9802als_init);
-module_exit(sensor_apds9802als_exit);
+module_i2c_driver(apds9802als_driver);
 
 MODULE_AUTHOR("Anantha Narayanan <Anantha.Narayanan@intel.com");
 MODULE_DESCRIPTION("Avago apds9802als ALS Driver");

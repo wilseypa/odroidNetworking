@@ -1,11 +1,10 @@
 /*
- * File...........: linux/drivers/s390/block/dasd_ioctl.c
  * Author(s)......: Holger Smolinski <Holger.Smolinski@de.ibm.com>
  *		    Horst Hummel <Horst.Hummel@de.ibm.com>
  *		    Carsten Otte <Cotte@de.ibm.com>
  *		    Martin Schwidefsky <schwidefsky@de.ibm.com>
  * Bugreports.to..: <Linux390@de.ibm.com>
- * (C) IBM Corporation, IBM Deutschland Entwicklung GmbH, 1999-2001
+ * Copyright IBM Corp. 1999, 2001
  *
  * i/o controls for the dasd driver.
  */
@@ -20,6 +19,7 @@
 #include <linux/slab.h>
 #include <asm/compat.h>
 #include <asm/ccwdev.h>
+#include <asm/schid.h>
 #include <asm/cmb.h>
 #include <asm/uaccess.h>
 
@@ -240,7 +240,7 @@ dasd_ioctl_format(struct block_device *bdev, void __user *argp)
  */
 static int dasd_ioctl_reset_profile(struct dasd_block *block)
 {
-	memset(&block->profile, 0, sizeof(struct dasd_profile_info_t));
+	dasd_profile_reset(&block->profile);
 	return 0;
 }
 
@@ -249,22 +249,56 @@ static int dasd_ioctl_reset_profile(struct dasd_block *block)
  */
 static int dasd_ioctl_read_profile(struct dasd_block *block, void __user *argp)
 {
-	if (dasd_profile_level == DASD_PROFILE_OFF)
-		return -EIO;
-	if (copy_to_user(argp, &block->profile,
-			 sizeof(struct dasd_profile_info_t)))
-		return -EFAULT;
-	return 0;
+	struct dasd_profile_info_t *data;
+	int rc = 0;
+
+	data = kmalloc(sizeof(*data), GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
+
+	spin_lock_bh(&block->profile.lock);
+	if (block->profile.data) {
+		data->dasd_io_reqs = block->profile.data->dasd_io_reqs;
+		data->dasd_io_sects = block->profile.data->dasd_io_sects;
+		memcpy(data->dasd_io_secs, block->profile.data->dasd_io_secs,
+		       sizeof(data->dasd_io_secs));
+		memcpy(data->dasd_io_times, block->profile.data->dasd_io_times,
+		       sizeof(data->dasd_io_times));
+		memcpy(data->dasd_io_timps, block->profile.data->dasd_io_timps,
+		       sizeof(data->dasd_io_timps));
+		memcpy(data->dasd_io_time1, block->profile.data->dasd_io_time1,
+		       sizeof(data->dasd_io_time1));
+		memcpy(data->dasd_io_time2, block->profile.data->dasd_io_time2,
+		       sizeof(data->dasd_io_time2));
+		memcpy(data->dasd_io_time2ps,
+		       block->profile.data->dasd_io_time2ps,
+		       sizeof(data->dasd_io_time2ps));
+		memcpy(data->dasd_io_time3, block->profile.data->dasd_io_time3,
+		       sizeof(data->dasd_io_time3));
+		memcpy(data->dasd_io_nr_req,
+		       block->profile.data->dasd_io_nr_req,
+		       sizeof(data->dasd_io_nr_req));
+		spin_unlock_bh(&block->profile.lock);
+	} else {
+		spin_unlock_bh(&block->profile.lock);
+		rc = -EIO;
+		goto out;
+	}
+	if (copy_to_user(argp, data, sizeof(*data)))
+		rc = -EFAULT;
+out:
+	kfree(data);
+	return rc;
 }
 #else
 static int dasd_ioctl_reset_profile(struct dasd_block *block)
 {
-	return -ENOSYS;
+	return -ENOTTY;
 }
 
 static int dasd_ioctl_read_profile(struct dasd_block *block, void __user *argp)
 {
-	return -ENOSYS;
+	return -ENOTTY;
 }
 #endif
 
@@ -275,11 +309,12 @@ static int dasd_ioctl_information(struct dasd_block *block,
 				  unsigned int cmd, void __user *argp)
 {
 	struct dasd_information2_t *dasd_info;
-	unsigned long flags;
-	int rc;
+	struct subchannel_id sch_id;
+	struct ccw_dev_id dev_id;
 	struct dasd_device *base;
 	struct ccw_device *cdev;
-	struct ccw_dev_id dev_id;
+	unsigned long flags;
+	int rc;
 
 	base = block->base;
 	if (!base->discipline || !base->discipline->fill_info)
@@ -297,9 +332,10 @@ static int dasd_ioctl_information(struct dasd_block *block,
 
 	cdev = base->cdev;
 	ccw_device_get_id(cdev, &dev_id);
+	ccw_device_get_schid(cdev, &sch_id);
 
 	dasd_info->devno = dev_id.devno;
-	dasd_info->schid = _ccw_device_get_subchannel_number(base->cdev);
+	dasd_info->schid = sch_id.sch_no;
 	dasd_info->cu_type = cdev->id.cu_type;
 	dasd_info->cu_model = cdev->id.cu_model;
 	dasd_info->dev_type = cdev->id.dev_type;
@@ -465,12 +501,9 @@ int dasd_ioctl(struct block_device *bdev, fmode_t mode,
 		break;
 	default:
 		/* if the discipline has an ioctl method try it. */
-		if (base->discipline->ioctl) {
+		rc = -ENOTTY;
+		if (base->discipline->ioctl)
 			rc = base->discipline->ioctl(block, cmd, argp);
-			if (rc == -ENOIOCTLCMD)
-				rc = -EINVAL;
-		} else
-			rc = -EINVAL;
 	}
 	dasd_put_device(base);
 	return rc;

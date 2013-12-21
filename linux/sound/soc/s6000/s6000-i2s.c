@@ -409,7 +409,7 @@ static int s6000_i2s_dai_probe(struct snd_soc_dai *dai)
 			 SNDRV_PCM_RATE_8000_192000)
 #define S6000_I2S_FORMATS (SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S32_LE)
 
-static struct snd_soc_dai_ops s6000_i2s_dai_ops = {
+static const struct snd_soc_dai_ops s6000_i2s_dai_ops = {
 	.set_fmt = s6000_i2s_set_dai_fmt,
 	.set_clkdiv = s6000_i2s_set_clkdiv,
 	.hw_params = s6000_i2s_hw_params,
@@ -436,7 +436,7 @@ static struct snd_soc_dai_driver s6000_i2s_dai = {
 	.ops = &s6000_i2s_dai_ops,
 };
 
-static int __devinit s6000_i2s_probe(struct platform_device *pdev)
+static int s6000_i2s_probe(struct platform_device *pdev)
 {
 	struct s6000_i2s_dev *dev;
 	struct resource *scbmem, *sifmem, *region, *dma1, *dma2;
@@ -566,7 +566,7 @@ err_release_none:
 	return ret;
 }
 
-static void __devexit s6000_i2s_remove(struct platform_device *pdev)
+static void s6000_i2s_remove(struct platform_device *pdev)
 {
 	struct s6000_i2s_dev *dev = dev_get_drvdata(&pdev->dev);
 	struct resource *region;
@@ -597,24 +597,14 @@ static void __devexit s6000_i2s_remove(struct platform_device *pdev)
 
 static struct platform_driver s6000_i2s_driver = {
 	.probe  = s6000_i2s_probe,
-	.remove = __devexit_p(s6000_i2s_remove),
+	.remove = s6000_i2s_remove,
 	.driver = {
 		.name   = "s6000-i2s",
 		.owner  = THIS_MODULE,
 	},
 };
 
-static int __init s6000_i2s_init(void)
-{
-	return platform_driver_register(&s6000_i2s_driver);
-}
-module_init(s6000_i2s_init);
-
-static void __exit s6000_i2s_exit(void)
-{
-	platform_driver_unregister(&s6000_i2s_driver);
-}
-module_exit(s6000_i2s_exit);
+module_platform_driver(s6000_i2s_driver);
 
 MODULE_AUTHOR("Daniel Gloeckner");
 MODULE_DESCRIPTION("Stretch s6000 family I2S SoC Interface");

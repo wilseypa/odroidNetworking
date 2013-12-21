@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2011, Intel Corp.
+ * Copyright (C) 2000 - 2012, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -96,8 +96,8 @@ acpi_status acpi_ns_initialize_objects(void)
 	/* Walk entire namespace from the supplied root */
 
 	status = acpi_walk_namespace(ACPI_TYPE_ANY, ACPI_ROOT_OBJECT,
-				     ACPI_UINT32_MAX, acpi_ns_init_one_object, NULL,
-				     &info, NULL);
+				     ACPI_UINT32_MAX, acpi_ns_init_one_object,
+				     NULL, &info, NULL);
 	if (ACPI_FAILURE(status)) {
 		ACPI_EXCEPTION((AE_INFO, status, "During WalkNamespace"));
 	}
@@ -224,8 +224,8 @@ acpi_status acpi_ns_initialize_devices(void)
  * FUNCTION:    acpi_ns_init_one_object
  *
  * PARAMETERS:  obj_handle      - Node
- *              Level           - Current nesting level
- *              Context         - Points to a init info struct
+ *              level           - Current nesting level
+ *              context         - Points to a init info struct
  *              return_value    - Not used
  *
  * RETURN:      Status
@@ -530,7 +530,7 @@ acpi_ns_init_one_device(acpi_handle obj_handle,
 			 * we will not run _INI, but we continue to examine the children
 			 * of this device.
 			 *
-			 * From the ACPI spec, description of _STA: (Note - no mention
+			 * From the ACPI spec, description of _STA: (note - no mention
 			 * of whether to run _INI or not on the device in question)
 			 *
 			 * "_STA may return bit 0 clear (not present) with bit 3 set

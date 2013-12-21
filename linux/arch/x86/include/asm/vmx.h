@@ -1,6 +1,3 @@
-#ifndef VMX_H
-#define VMX_H
-
 /*
  * vmx.h: VMX Architecture related definitions
  * Copyright (c) 2004, Intel Corporation.
@@ -24,8 +21,12 @@
  *    Yaniv Kamay <yaniv@qumranet.com>
  *
  */
+#ifndef VMX_H
+#define VMX_H
+
 
 #include <linux/types.h>
+#include <uapi/asm/vmx.h>
 
 /*
  * Definitions of Primary Processor-Based VM-Execution Controls.
@@ -60,6 +61,7 @@
 #define SECONDARY_EXEC_WBINVD_EXITING		0x00000040
 #define SECONDARY_EXEC_UNRESTRICTED_GUEST	0x00000080
 #define SECONDARY_EXEC_PAUSE_LOOP_EXITING	0x00000400
+#define SECONDARY_EXEC_ENABLE_INVPCID		0x00001000
 
 
 #define PIN_BASED_EXT_INTR_MASK                 0x00000001
@@ -132,6 +134,8 @@ enum vmcs_field {
 	GUEST_IA32_PAT_HIGH		= 0x00002805,
 	GUEST_IA32_EFER			= 0x00002806,
 	GUEST_IA32_EFER_HIGH		= 0x00002807,
+	GUEST_IA32_PERF_GLOBAL_CTRL	= 0x00002808,
+	GUEST_IA32_PERF_GLOBAL_CTRL_HIGH= 0x00002809,
 	GUEST_PDPTR0                    = 0x0000280a,
 	GUEST_PDPTR0_HIGH               = 0x0000280b,
 	GUEST_PDPTR1                    = 0x0000280c,
@@ -144,6 +148,8 @@ enum vmcs_field {
 	HOST_IA32_PAT_HIGH		= 0x00002c01,
 	HOST_IA32_EFER			= 0x00002c02,
 	HOST_IA32_EFER_HIGH		= 0x00002c03,
+	HOST_IA32_PERF_GLOBAL_CTRL	= 0x00002c04,
+	HOST_IA32_PERF_GLOBAL_CTRL_HIGH	= 0x00002c05,
 	PIN_BASED_VM_EXEC_CONTROL       = 0x00004000,
 	CPU_BASED_VM_EXEC_CONTROL       = 0x00004002,
 	EXCEPTION_BITMAP                = 0x00004004,
@@ -236,48 +242,6 @@ enum vmcs_field {
 	HOST_RIP                        = 0x00006c16,
 };
 
-#define VMX_EXIT_REASONS_FAILED_VMENTRY         0x80000000
-
-#define EXIT_REASON_EXCEPTION_NMI       0
-#define EXIT_REASON_EXTERNAL_INTERRUPT  1
-#define EXIT_REASON_TRIPLE_FAULT        2
-
-#define EXIT_REASON_PENDING_INTERRUPT   7
-#define EXIT_REASON_NMI_WINDOW		8
-#define EXIT_REASON_TASK_SWITCH         9
-#define EXIT_REASON_CPUID               10
-#define EXIT_REASON_HLT                 12
-#define EXIT_REASON_INVD                13
-#define EXIT_REASON_INVLPG              14
-#define EXIT_REASON_RDPMC               15
-#define EXIT_REASON_RDTSC               16
-#define EXIT_REASON_VMCALL              18
-#define EXIT_REASON_VMCLEAR             19
-#define EXIT_REASON_VMLAUNCH            20
-#define EXIT_REASON_VMPTRLD             21
-#define EXIT_REASON_VMPTRST             22
-#define EXIT_REASON_VMREAD              23
-#define EXIT_REASON_VMRESUME            24
-#define EXIT_REASON_VMWRITE             25
-#define EXIT_REASON_VMOFF               26
-#define EXIT_REASON_VMON                27
-#define EXIT_REASON_CR_ACCESS           28
-#define EXIT_REASON_DR_ACCESS           29
-#define EXIT_REASON_IO_INSTRUCTION      30
-#define EXIT_REASON_MSR_READ            31
-#define EXIT_REASON_MSR_WRITE           32
-#define EXIT_REASON_INVALID_STATE	33
-#define EXIT_REASON_MWAIT_INSTRUCTION   36
-#define EXIT_REASON_MONITOR_INSTRUCTION 39
-#define EXIT_REASON_PAUSE_INSTRUCTION   40
-#define EXIT_REASON_MCE_DURING_VMENTRY	 41
-#define EXIT_REASON_TPR_BELOW_THRESHOLD 43
-#define EXIT_REASON_APIC_ACCESS         44
-#define EXIT_REASON_EPT_VIOLATION       48
-#define EXIT_REASON_EPT_MISCONFIG       49
-#define EXIT_REASON_WBINVD		54
-#define EXIT_REASON_XSETBV		55
-
 /*
  * Interruption-information format
  */
@@ -346,6 +310,18 @@ enum vmcs_field {
 #define DEBUG_REG_ACCESS_REG(eq)        (((eq) >> 8) & 0xf) /* 11:8, general purpose reg. */
 
 
+/*
+ * Exit Qualifications for APIC-Access
+ */
+#define APIC_ACCESS_OFFSET              0xfff   /* 11:0, offset within the APIC page */
+#define APIC_ACCESS_TYPE                0xf000  /* 15:12, access type */
+#define TYPE_LINEAR_APIC_INST_READ      (0 << 12)
+#define TYPE_LINEAR_APIC_INST_WRITE     (1 << 12)
+#define TYPE_LINEAR_APIC_INST_FETCH     (2 << 12)
+#define TYPE_LINEAR_APIC_EVENT          (3 << 12)
+#define TYPE_PHYSICAL_APIC_EVENT        (10 << 12)
+#define TYPE_PHYSICAL_APIC_INST         (15 << 12)
+
 /* segment AR */
 #define SEGMENT_AR_L_MASK (1 << 13)
 
@@ -388,7 +364,7 @@ enum vmcs_field {
 #define VMX_EPTP_WB_BIT				(1ull << 14)
 #define VMX_EPT_2MB_PAGE_BIT			(1ull << 16)
 #define VMX_EPT_1GB_PAGE_BIT			(1ull << 17)
-#define VMX_EPT_EXTENT_INDIVIDUAL_BIT		(1ull << 24)
+#define VMX_EPT_AD_BIT				    (1ull << 21)
 #define VMX_EPT_EXTENT_CONTEXT_BIT		(1ull << 25)
 #define VMX_EPT_EXTENT_GLOBAL_BIT		(1ull << 26)
 
@@ -399,11 +375,14 @@ enum vmcs_field {
 #define VMX_EPT_MAX_GAW				0x4
 #define VMX_EPT_MT_EPTE_SHIFT			3
 #define VMX_EPT_GAW_EPTP_SHIFT			3
+#define VMX_EPT_AD_ENABLE_BIT			(1ull << 6)
 #define VMX_EPT_DEFAULT_MT			0x6ull
 #define VMX_EPT_READABLE_MASK			0x1ull
 #define VMX_EPT_WRITABLE_MASK			0x2ull
 #define VMX_EPT_EXECUTABLE_MASK			0x4ull
 #define VMX_EPT_IPAT_BIT    			(1ull << 6)
+#define VMX_EPT_ACCESS_BIT				(1ull << 8)
+#define VMX_EPT_DIRTY_BIT				(1ull << 9)
 
 #define VMX_EPT_IDENTITY_PAGETABLE_ADDR		0xfffbc000ul
 
@@ -425,5 +404,44 @@ struct vmx_msr_entry {
 	u32 reserved;
 	u64 value;
 } __aligned(16);
+
+/*
+ * Exit Qualifications for entry failure during or after loading guest state
+ */
+#define ENTRY_FAIL_DEFAULT		0
+#define ENTRY_FAIL_PDPTE		2
+#define ENTRY_FAIL_NMI			3
+#define ENTRY_FAIL_VMCS_LINK_PTR	4
+
+/*
+ * VM-instruction error numbers
+ */
+enum vm_instruction_error_number {
+	VMXERR_VMCALL_IN_VMX_ROOT_OPERATION = 1,
+	VMXERR_VMCLEAR_INVALID_ADDRESS = 2,
+	VMXERR_VMCLEAR_VMXON_POINTER = 3,
+	VMXERR_VMLAUNCH_NONCLEAR_VMCS = 4,
+	VMXERR_VMRESUME_NONLAUNCHED_VMCS = 5,
+	VMXERR_VMRESUME_AFTER_VMXOFF = 6,
+	VMXERR_ENTRY_INVALID_CONTROL_FIELD = 7,
+	VMXERR_ENTRY_INVALID_HOST_STATE_FIELD = 8,
+	VMXERR_VMPTRLD_INVALID_ADDRESS = 9,
+	VMXERR_VMPTRLD_VMXON_POINTER = 10,
+	VMXERR_VMPTRLD_INCORRECT_VMCS_REVISION_ID = 11,
+	VMXERR_UNSUPPORTED_VMCS_COMPONENT = 12,
+	VMXERR_VMWRITE_READ_ONLY_VMCS_COMPONENT = 13,
+	VMXERR_VMXON_IN_VMX_ROOT_OPERATION = 15,
+	VMXERR_ENTRY_INVALID_EXECUTIVE_VMCS_POINTER = 16,
+	VMXERR_ENTRY_NONLAUNCHED_EXECUTIVE_VMCS = 17,
+	VMXERR_ENTRY_EXECUTIVE_VMCS_POINTER_NOT_VMXON_POINTER = 18,
+	VMXERR_VMCALL_NONCLEAR_VMCS = 19,
+	VMXERR_VMCALL_INVALID_VM_EXIT_CONTROL_FIELDS = 20,
+	VMXERR_VMCALL_INCORRECT_MSEG_REVISION_ID = 22,
+	VMXERR_VMXOFF_UNDER_DUAL_MONITOR_TREATMENT_OF_SMIS_AND_SMM = 23,
+	VMXERR_VMCALL_INVALID_SMM_MONITOR_FEATURES = 24,
+	VMXERR_ENTRY_INVALID_VM_EXECUTION_CONTROL_FIELDS_IN_EXECUTIVE_VMCS = 25,
+	VMXERR_ENTRY_EVENTS_BLOCKED_BY_MOV_SS = 26,
+	VMXERR_INVALID_OPERAND_TO_INVEPT_INVVPID = 28,
+};
 
 #endif

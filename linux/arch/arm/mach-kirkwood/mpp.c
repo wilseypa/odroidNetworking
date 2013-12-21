@@ -7,12 +7,10 @@
  * License version 2.  This program is licensed "as is" without any
  * warranty of any kind, whether express or implied.
  */
-
+#include <linux/gpio.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
-#include <linux/mbus.h>
 #include <linux/io.h>
-#include <asm/gpio.h>
 #include <mach/hardware.h>
 #include <plat/mpp.h>
 #include "common.h"
@@ -32,8 +30,8 @@ static unsigned int __init kirkwood_variant(void)
 	if (dev == MV88F6180_DEV_ID)
 		return MPP_F6180_MASK;
 
-	printk(KERN_ERR "MPP setup: unknown kirkwood variant "
-			"(dev %#x rev %#x)\n", dev, rev);
+	pr_err("MPP setup: unknown kirkwood variant (dev %#x rev %#x)\n",
+	       dev, rev);
 	return 0;
 }
 

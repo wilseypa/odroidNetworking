@@ -87,9 +87,16 @@ static struct posix_acl *f2fs_acl_from_disk(const char *value, size_t size)
 			break;
 
 		case ACL_USER:
+			acl->a_entries[i].e_uid =
+				make_kuid(&init_user_ns,
+						le32_to_cpu(entry->e_id));
+			entry = (struct f2fs_acl_entry *)((char *)entry +
+					sizeof(struct f2fs_acl_entry));
+			break;
 		case ACL_GROUP:
-			acl->a_entries[i].e_id =
-						le32_to_cpu(entry->e_id);
+			acl->a_entries[i].e_gid =
+				make_kgid(&init_user_ns,
+						le32_to_cpu(entry->e_id));
 			entry = (struct f2fs_acl_entry *)((char *)entry +
 					sizeof(struct f2fs_acl_entry));
 			break;
@@ -126,8 +133,16 @@ static void *f2fs_acl_to_disk(const struct posix_acl *acl, size_t *size)
 
 		switch (acl->a_entries[i].e_tag) {
 		case ACL_USER:
+			entry->e_id = cpu_to_le32(
+					from_kuid(&init_user_ns,
+						acl->a_entries[i].e_uid));
+			entry = (struct f2fs_acl_entry *)((char *)entry +
+					sizeof(struct f2fs_acl_entry));
+			break;
 		case ACL_GROUP:
-			entry->e_id = cpu_to_le32(acl->a_entries[i].e_id);
+			entry->e_id = cpu_to_le32(
+					from_kgid(&init_user_ns,
+						acl->a_entries[i].e_gid));
 			entry = (struct f2fs_acl_entry *)((char *)entry +
 					sizeof(struct f2fs_acl_entry));
 			break;
@@ -176,15 +191,14 @@ struct posix_acl *f2fs_get_acl(struct inode *inode, int type)
 		retval = f2fs_getxattr(inode, name_index, "", value, retval);
 	}
 
-	if (retval < 0) {
-		if (retval == -ENODATA)
-			acl = NULL;
-		else
-			acl = ERR_PTR(retval);
-	} else {
+	if (retval > 0)
 		acl = f2fs_acl_from_disk(value, retval);
-	}
+	else if (retval == -ENODATA)
+		acl = NULL;
+	else
+		acl = ERR_PTR(retval);
 	kfree(value);
+
 	if (!IS_ERR(acl))
 		set_cached_acl(inode, type, acl);
 
@@ -263,21 +277,13 @@ int f2fs_init_acl(struct inode *inode, struct inode *dir)
 	}
 
 	if (test_opt(sbi, POSIX_ACL) && acl) {
-        struct posix_acl *clone;
-        mode_t mode;
 
 		if (S_ISDIR(inode->i_mode)) {
 			error = f2fs_set_acl(inode, ACL_TYPE_DEFAULT, acl);
 			if (error)
 				goto cleanup;
 		}
-        clone = posix_acl_clone(acl, GFP_NOFS);
-        error = -ENOMEM;
-        if (!clone)
-            goto cleanup;
-
-        mode = inode->i_mode;
-        error = posix_acl_create_masq(clone, &mode);
+		error = posix_acl_create(&acl, GFP_KERNEL, &inode->i_mode);
 		if (error < 0)
 			return error;
 		if (error > 0)
@@ -291,7 +297,7 @@ cleanup:
 int f2fs_acl_chmod(struct inode *inode)
 {
 	struct f2fs_sb_info *sbi = F2FS_SB(inode->i_sb);
-	struct posix_acl *acl, *clone;
+	struct posix_acl *acl;
 	int error;
 	mode_t mode = get_inode_mode(inode);
 
@@ -304,11 +310,7 @@ int f2fs_acl_chmod(struct inode *inode)
 	if (IS_ERR(acl) || !acl)
 		return PTR_ERR(acl);
 
-	clone = posix_acl_clone(acl, GFP_KERNEL);
-	posix_acl_release(acl);
-	if (!clone)
-		return -ENOMEM;
-	error = posix_acl_chmod_masq(clone, inode->i_mode);
+	error = posix_acl_chmod(&acl, GFP_KERNEL, mode);
 	if (error)
 		return error;
 	error = f2fs_set_acl(inode, ACL_TYPE_ACCESS, acl);
@@ -352,7 +354,7 @@ static int f2fs_xattr_get_acl(struct dentry *dentry, const char *name,
 		return PTR_ERR(acl);
 	if (!acl)
 		return -ENODATA;
-	error = posix_acl_to_xattr(acl, buffer, size);
+	error = posix_acl_to_xattr(&init_user_ns, acl, buffer, size);
 	posix_acl_release(acl);
 
 	return error;
@@ -374,7 +376,7 @@ static int f2fs_xattr_set_acl(struct dentry *dentry, const char *name,
 		return -EPERM;
 
 	if (value) {
-		acl = posix_acl_from_xattr(value, size);
+		acl = posix_acl_from_xattr(&init_user_ns, value, size);
 		if (IS_ERR(acl))
 			return PTR_ERR(acl);
 		if (acl) {

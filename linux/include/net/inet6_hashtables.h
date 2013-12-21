@@ -15,7 +15,7 @@
 #define _INET6_HASHTABLES_H
 
 
-#if defined(CONFIG_IPV6) || defined (CONFIG_IPV6_MODULE)
+#if IS_ENABLED(CONFIG_IPV6)
 #include <linux/in6.h>
 #include <linux/ipv6.h>
 #include <linux/types.h>
@@ -96,19 +96,20 @@ static inline struct sock *__inet6_lookup_skb(struct inet_hashinfo *hashinfo,
 					      const __be16 sport,
 					      const __be16 dport)
 {
-	struct sock *sk;
+	struct sock *sk = skb_steal_sock(skb);
 
-	if (unlikely(sk = skb_steal_sock(skb)))
+	if (sk)
 		return sk;
-	else return __inet6_lookup(dev_net(skb_dst(skb)->dev), hashinfo,
-				   &ipv6_hdr(skb)->saddr, sport,
-				   &ipv6_hdr(skb)->daddr, ntohs(dport),
-				   inet6_iif(skb));
+
+	return __inet6_lookup(dev_net(skb_dst(skb)->dev), hashinfo,
+			      &ipv6_hdr(skb)->saddr, sport,
+			      &ipv6_hdr(skb)->daddr, ntohs(dport),
+			      inet6_iif(skb));
 }
 
 extern struct sock *inet6_lookup(struct net *net, struct inet_hashinfo *hashinfo,
 				 const struct in6_addr *saddr, const __be16 sport,
 				 const struct in6_addr *daddr, const __be16 dport,
 				 const int dif);
-#endif /* defined(CONFIG_IPV6) || defined (CONFIG_IPV6_MODULE) */
+#endif /* IS_ENABLED(CONFIG_IPV6) */
 #endif /* _INET6_HASHTABLES_H */

@@ -33,6 +33,12 @@ typedef long asiduse;
 #endif
 #endif
 
+/*
+ * VPE Management information
+ */
+
+#define MAX_SMTC_VPES	MAX_SMTC_TLBS	/* FIXME: May not always be true. */
+
 extern asiduse smtc_live_asid[MAX_SMTC_TLBS][MAX_SMTC_ASIDS];
 
 struct mm_struct;
@@ -46,6 +52,7 @@ extern void smtc_prepare_cpus(int cpus);
 extern void smtc_smp_finish(void);
 extern void smtc_boot_secondary(int cpu, struct task_struct *t);
 extern void smtc_cpus_done(void);
+extern void smtc_init_secondary(void);
 
 
 /*

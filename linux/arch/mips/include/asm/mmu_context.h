@@ -37,12 +37,6 @@ extern void tlbmiss_handler_setup_pgd(unsigned long pgd);
 		write_c0_xcontext((unsigned long) smp_processor_id() << 51); \
 	} while (0)
 
-
-static inline unsigned long get_current_pgd(void)
-{
-	return PHYS_TO_XKSEG_CACHED((read_c0_context() >> 11) & ~0xfffUL);
-}
-
 #else /* CONFIG_MIPS_PGD_C0_CONTEXT: using  pgd_current*/
 
 /*
@@ -78,12 +72,6 @@ extern unsigned long pgd_current[];
 #define ASID_INC	0x10
 #define ASID_MASK	0xff0
 
-#elif defined(CONFIG_CPU_RM9000)
-
-#define ASID_INC	0x1
-#define ASID_MASK	0xfff
-
-/* SMTC/34K debug hack - but maybe we'll keep it */
 #elif defined(CONFIG_MIPS_MT_SMTC)
 
 #define ASID_INC	0x1

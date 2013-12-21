@@ -1,0 +1,30 @@
+config MALI400
+	tristate "Mali-300/400/450 support"
+	depends on ARM
+	default y
+	select DMA_SHARED_BUFFER
+	---help---
+	  This enables support for the ARM Mali-300, Mali-400, and Mali-450
+	  GPUs.
+
+	  To compile this driver as a module, choose M here: the module will be
+	  called mali.
+
+config MALI400_DEBUG
+	bool "Enable debug in Mali driver"
+	depends on MALI400
+	---help---
+	  This enabled extra debug checks and messages in the Mali driver.
+
+config MALI400_UMP
+	bool "Enable UMP support"
+	depends on MALI400
+	---help---
+	  This enables support for the UMP memory sharing API in the Mali driver.
+
+config MALI_DVFS
+	bool "MALI DVFS"
+	depends on MALI400 && REGULATOR
+	default y
+	help
+	  This enables Mali driver DVFS.

@@ -365,7 +365,7 @@ static int isl29003_init_client(struct i2c_client *client)
  * I2C layer
  */
 
-static int __devinit isl29003_probe(struct i2c_client *client,
+static int isl29003_probe(struct i2c_client *client,
 				    const struct i2c_device_id *id)
 {
 	struct i2c_adapter *adapter = to_i2c_adapter(client->dev.parent);
@@ -401,7 +401,7 @@ exit_kfree:
 	return err;
 }
 
-static int __devexit isl29003_remove(struct i2c_client *client)
+static int isl29003_remove(struct i2c_client *client)
 {
 	sysfs_remove_group(&client->dev.kobj, &isl29003_attr_group);
 	isl29003_set_power_state(client, 0);
@@ -451,25 +451,13 @@ static struct i2c_driver isl29003_driver = {
 	.suspend = isl29003_suspend,
 	.resume	= isl29003_resume,
 	.probe	= isl29003_probe,
-	.remove	= __devexit_p(isl29003_remove),
+	.remove	= isl29003_remove,
 	.id_table = isl29003_id,
 };
 
-static int __init isl29003_init(void)
-{
-	return i2c_add_driver(&isl29003_driver);
-}
-
-static void __exit isl29003_exit(void)
-{
-	i2c_del_driver(&isl29003_driver);
-}
+module_i2c_driver(isl29003_driver);
 
 MODULE_AUTHOR("Daniel Mack <daniel@caiaq.de>");
 MODULE_DESCRIPTION("ISL29003 ambient light sensor driver");
 MODULE_LICENSE("GPL v2");
 MODULE_VERSION(DRIVER_VERSION);
-
-module_init(isl29003_init);
-module_exit(isl29003_exit);
-

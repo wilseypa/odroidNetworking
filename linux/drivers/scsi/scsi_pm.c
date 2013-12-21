@@ -6,6 +6,7 @@
  */
 
 #include <linux/pm_runtime.h>
+#include <linux/export.h>
 #include <linux/async.h>
 
 #include <scsi/scsi.h>
@@ -15,29 +16,28 @@
 
 #include "scsi_priv.h"
 
-static int scsi_dev_type_suspend(struct device *dev, pm_message_t msg)
+static int scsi_dev_type_suspend(struct device *dev, int (*cb)(struct device *))
 {
-	struct device_driver *drv;
 	int err;
 
 	err = scsi_device_quiesce(to_scsi_device(dev));
 	if (err == 0) {
-		drv = dev->driver;
-		if (drv && drv->suspend)
-			err = drv->suspend(dev, msg);
+		if (cb) {
+			err = cb(dev);
+			if (err)
+				scsi_device_resume(to_scsi_device(dev));
+		}
 	}
 	dev_dbg(dev, "scsi suspend: %d\n", err);
 	return err;
 }
 
-static int scsi_dev_type_resume(struct device *dev)
+static int scsi_dev_type_resume(struct device *dev, int (*cb)(struct device *))
 {
-	struct device_driver *drv;
 	int err = 0;
 
-	drv = dev->driver;
-	if (drv && drv->resume)
-		err = drv->resume(dev);
+	if (cb)
+		err = cb(dev);
 	scsi_device_resume(to_scsi_device(dev));
 	dev_dbg(dev, "scsi resume: %d\n", err);
 	return err;
@@ -45,21 +45,33 @@ static int scsi_dev_type_resume(struct device *dev)
 
 #ifdef CONFIG_PM_SLEEP
 
-static int scsi_bus_suspend_common(struct device *dev, pm_message_t msg)
+static int
+scsi_bus_suspend_common(struct device *dev, int (*cb)(struct device *))
 {
 	int err = 0;
 
-	if (scsi_is_sdev_device(dev))
-		err = scsi_dev_type_suspend(dev, msg);
+	if (scsi_is_sdev_device(dev)) {
+		/*
+		 * All the high-level SCSI drivers that implement runtime
+		 * PM treat runtime suspend, system suspend, and system
+		 * hibernate identically.
+		 */
+		if (pm_runtime_suspended(dev))
+			return 0;
+
+		err = scsi_dev_type_suspend(dev, cb);
+	}
+
 	return err;
 }
 
-static int scsi_bus_resume_common(struct device *dev)
+static int
+scsi_bus_resume_common(struct device *dev, int (*cb)(struct device *))
 {
 	int err = 0;
 
 	if (scsi_is_sdev_device(dev))
-		err = scsi_dev_type_resume(dev);
+		err = scsi_dev_type_resume(dev, cb);
 
 	if (err == 0) {
 		pm_runtime_disable(dev);
@@ -73,7 +85,7 @@ static int scsi_bus_prepare(struct device *dev)
 {
 	if (scsi_is_sdev_device(dev)) {
 		/* sd probing uses async_schedule.  Wait until it finishes. */
-		async_synchronize_full();
+		async_synchronize_full_domain(&scsi_sd_probe_domain);
 
 	} else if (scsi_is_host_device(dev)) {
 		/* Wait until async scanning is finished */
@@ -84,26 +96,49 @@ static int scsi_bus_prepare(struct device *dev)
 
 static int scsi_bus_suspend(struct device *dev)
 {
-	return scsi_bus_suspend_common(dev, PMSG_SUSPEND);
+	const struct dev_pm_ops *pm = dev->driver ? dev->driver->pm : NULL;
+	return scsi_bus_suspend_common(dev, pm ? pm->suspend : NULL);
+}
+
+static int scsi_bus_resume(struct device *dev)
+{
+	const struct dev_pm_ops *pm = dev->driver ? dev->driver->pm : NULL;
+	return scsi_bus_resume_common(dev, pm ? pm->resume : NULL);
 }
 
 static int scsi_bus_freeze(struct device *dev)
 {
-	return scsi_bus_suspend_common(dev, PMSG_FREEZE);
+	const struct dev_pm_ops *pm = dev->driver ? dev->driver->pm : NULL;
+	return scsi_bus_suspend_common(dev, pm ? pm->freeze : NULL);
+}
+
+static int scsi_bus_thaw(struct device *dev)
+{
+	const struct dev_pm_ops *pm = dev->driver ? dev->driver->pm : NULL;
+	return scsi_bus_resume_common(dev, pm ? pm->thaw : NULL);
 }
 
 static int scsi_bus_poweroff(struct device *dev)
 {
-	return scsi_bus_suspend_common(dev, PMSG_HIBERNATE);
+	const struct dev_pm_ops *pm = dev->driver ? dev->driver->pm : NULL;
+	return scsi_bus_suspend_common(dev, pm ? pm->poweroff : NULL);
+}
+
+static int scsi_bus_restore(struct device *dev)
+{
+	const struct dev_pm_ops *pm = dev->driver ? dev->driver->pm : NULL;
+	return scsi_bus_resume_common(dev, pm ? pm->restore : NULL);
 }
 
 #else /* CONFIG_PM_SLEEP */
 
-#define scsi_bus_resume_common		NULL
 #define scsi_bus_prepare		NULL
 #define scsi_bus_suspend		NULL
+#define scsi_bus_resume			NULL
 #define scsi_bus_freeze			NULL
+#define scsi_bus_thaw			NULL
 #define scsi_bus_poweroff		NULL
+#define scsi_bus_restore		NULL
 
 #endif /* CONFIG_PM_SLEEP */
 
@@ -112,10 +147,12 @@ static int scsi_bus_poweroff(struct device *dev)
 static int scsi_runtime_suspend(struct device *dev)
 {
 	int err = 0;
+	const struct dev_pm_ops *pm = dev->driver ? dev->driver->pm : NULL;
 
 	dev_dbg(dev, "scsi_runtime_suspend\n");
 	if (scsi_is_sdev_device(dev)) {
-		err = scsi_dev_type_suspend(dev, PMSG_AUTO_SUSPEND);
+		err = scsi_dev_type_suspend(dev,
+				pm ? pm->runtime_suspend : NULL);
 		if (err == -EAGAIN)
 			pm_schedule_suspend(dev, jiffies_to_msecs(
 				round_jiffies_up_relative(HZ/10)));
@@ -129,10 +166,11 @@ static int scsi_runtime_suspend(struct device *dev)
 static int scsi_runtime_resume(struct device *dev)
 {
 	int err = 0;
+	const struct dev_pm_ops *pm = dev->driver ? dev->driver->pm : NULL;
 
 	dev_dbg(dev, "scsi_runtime_resume\n");
 	if (scsi_is_sdev_device(dev))
-		err = scsi_dev_type_resume(dev);
+		err = scsi_dev_type_resume(dev, pm ? pm->runtime_resume : NULL);
 
 	/* Insert hooks here for targets, hosts, and transport classes */
 
@@ -159,9 +197,9 @@ int scsi_autopm_get_device(struct scsi_device *sdev)
 	int	err;
 
 	err = pm_runtime_get_sync(&sdev->sdev_gendev);
-	if (err < 0)
+	if (err < 0 && err !=-EACCES)
 		pm_runtime_put_sync(&sdev->sdev_gendev);
-	else if (err > 0)
+	else
 		err = 0;
 	return err;
 }
@@ -188,9 +226,9 @@ int scsi_autopm_get_host(struct Scsi_Host *shost)
 	int	err;
 
 	err = pm_runtime_get_sync(&shost->shost_gendev);
-	if (err < 0)
+	if (err < 0 && err !=-EACCES)
 		pm_runtime_put_sync(&shost->shost_gendev);
-	else if (err > 0)
+	else
 		err = 0;
 	return err;
 }
@@ -211,11 +249,11 @@ void scsi_autopm_put_host(struct Scsi_Host *shost)
 const struct dev_pm_ops scsi_bus_pm_ops = {
 	.prepare =		scsi_bus_prepare,
 	.suspend =		scsi_bus_suspend,
-	.resume =		scsi_bus_resume_common,
+	.resume =		scsi_bus_resume,
 	.freeze =		scsi_bus_freeze,
-	.thaw =			scsi_bus_resume_common,
+	.thaw =			scsi_bus_thaw,
 	.poweroff =		scsi_bus_poweroff,
-	.restore =		scsi_bus_resume_common,
+	.restore =		scsi_bus_restore,
 	.runtime_suspend =	scsi_runtime_suspend,
 	.runtime_resume =	scsi_runtime_resume,
 	.runtime_idle =		scsi_runtime_idle,

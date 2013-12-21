@@ -36,7 +36,7 @@
 
 #include <plat/cpu.h>
 
-#include <mach/board_rev.h>
+#define EXYNOS4412_REV_1_0	(0x10)
 
 #include "dw_mmc.h"
 
@@ -702,15 +702,17 @@ static void dw_mci_setup_bus(struct dw_mci_slot *slot)
 	u32 div;
 
 	if (slot->clock != host->current_speed) {
-		if (host->bus_hz % slot->clock)
+		if (host->bus_hz % slot->clock) {
 			/*
 			 * move the + 1 after the divide to prevent
 			 * over-clocking the card.
 			 */
 			div = ((host->bus_hz / slot->clock) >> 1) + 1;
-		else
+			pr_emerg("DWMMC: Div 1 = %d\n", div);
+		} else {
 			div = (host->bus_hz  / slot->clock) >> 1;
-
+			pr_emerg("DWMMC: Div 2 = %d\n", div);
+                }
 		dev_info(&slot->mmc->class_dev,
 			 "Bus speed (slot %d) = %dHz (slot req %dHz, actual %dHZ"
 			 " div = %d)\n", slot->id, host->bus_hz, slot->clock,
@@ -1949,6 +1951,7 @@ static void dw_mci_init_dma(struct dw_mci *host)
 	if (!host->sg_cpu) {
 		dev_err(&host->pdev->dev, "%s: could not alloc DMA memory\n",
 			__func__);
+		pr_emerg("DWMMC: Failed to allocate memory for SG Translation\n");
 		goto no_dma;
 	}
 
@@ -2045,27 +2048,28 @@ static int dw_mci_probe(struct platform_device *pdev)
 		goto err_freehost;
 	}
 
-	host->hclk = clk_get(&pdev->dev, pdata->hclk_name);
+	host->hclk = clk_get(&pdev->dev, "biu");
 	if (IS_ERR(host->hclk)) {
 		dev_err(&pdev->dev,
-				"failed to get hclk\n");
+				"failed to get hclk(biu)\n");
 		ret = PTR_ERR(host->hclk);
 		goto err_freehost;
 	}
 	clk_enable(host->hclk);
 
-	host->cclk = clk_get(&pdev->dev, pdata->cclk_name);
+	host->cclk = clk_get(&pdev->dev, "ciu");
 	if (IS_ERR(host->cclk)) {
 		dev_err(&pdev->dev,
-				"failed to get cclk\n");
+				"failed to get cclk(ciu)\n");
 		ret = PTR_ERR(host->cclk);
 		goto err_free_hclk;
 	}
 	clk_enable(host->cclk);
 
-	if ((soc_is_exynos4412() || soc_is_exynos4212())
-			&& (samsung_rev() <  EXYNOS4412_REV_1_0))
+	if ((soc_is_exynos4412() || soc_is_exynos4212()) && (samsung_rev() <  EXYNOS4412_REV_1_0)) {
 		pdata->bus_hz = 66 * 1000 * 1000;
+		pr_emerg("DWMMC: Setting Bus Hz to 66Mhz\n");
+        }
 
 	host->bus_hz = pdata->bus_hz;
 	host->quirks = pdata->quirks;

@@ -44,8 +44,6 @@ struct pk_device {
 	struct pcmidi_snd	*pm; /* pcmidi device context */
 };
 
-struct pcmidi_snd;
-
 struct pcmidi_sustain {
 	unsigned long		in_use;
 	struct pcmidi_snd	*pm;
@@ -92,7 +90,7 @@ static const char longname[] = "Prodikeys PC-MIDI Keyboard";
 
 static int index[SNDRV_CARDS] = SNDRV_DEFAULT_IDX;
 static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;
-static int enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;
+static bool enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;
 
 module_param_array(index, int, NULL, 0444);
 module_param_array(id, charp, NULL, 0444);
@@ -107,7 +105,7 @@ static ssize_t show_channel(struct device *dev,
 	struct device_attribute *attr, char *buf)
 {
 	struct hid_device *hdev = container_of(dev, struct hid_device, dev);
-	struct pk_device *pk = (struct pk_device *)hid_get_drvdata(hdev);
+	struct pk_device *pk = hid_get_drvdata(hdev);
 
 	dbg_hid("pcmidi sysfs read channel=%u\n", pk->pm->midi_channel);
 
@@ -120,7 +118,7 @@ static ssize_t store_channel(struct device *dev,
 	struct device_attribute *attr, const char *buf, size_t count)
 {
 	struct hid_device *hdev = container_of(dev, struct hid_device, dev);
-	struct pk_device *pk = (struct pk_device *)hid_get_drvdata(hdev);
+	struct pk_device *pk = hid_get_drvdata(hdev);
 
 	unsigned channel = 0;
 
@@ -144,7 +142,7 @@ static ssize_t show_sustain(struct device *dev,
  struct device_attribute *attr, char *buf)
 {
 	struct hid_device *hdev = container_of(dev, struct hid_device, dev);
-	struct pk_device *pk = (struct pk_device *)hid_get_drvdata(hdev);
+	struct pk_device *pk = hid_get_drvdata(hdev);
 
 	dbg_hid("pcmidi sysfs read sustain=%u\n", pk->pm->midi_sustain);
 
@@ -157,7 +155,7 @@ static ssize_t store_sustain(struct device *dev,
 	struct device_attribute *attr, const char *buf, size_t count)
 {
 	struct hid_device *hdev = container_of(dev, struct hid_device, dev);
-	struct pk_device *pk = (struct pk_device *)hid_get_drvdata(hdev);
+	struct pk_device *pk = hid_get_drvdata(hdev);
 
 	unsigned sustain = 0;
 
@@ -183,7 +181,7 @@ static ssize_t show_octave(struct device *dev,
 	struct device_attribute *attr, char *buf)
 {
 	struct hid_device *hdev = container_of(dev, struct hid_device, dev);
-	struct pk_device *pk = (struct pk_device *)hid_get_drvdata(hdev);
+	struct pk_device *pk = hid_get_drvdata(hdev);
 
 	dbg_hid("pcmidi sysfs read octave=%d\n", pk->pm->midi_octave);
 
@@ -196,7 +194,7 @@ static ssize_t store_octave(struct device *dev,
 	struct device_attribute *attr, const char *buf, size_t count)
 {
 	struct hid_device *hdev = container_of(dev, struct hid_device, dev);
-	struct pk_device *pk = (struct pk_device *)hid_get_drvdata(hdev);
+	struct pk_device *pk = hid_get_drvdata(hdev);
 
 	int octave = 0;
 
@@ -242,7 +240,7 @@ drop_note:
 	return;
 }
 
-void pcmidi_sustained_note_release(unsigned long data)
+static void pcmidi_sustained_note_release(unsigned long data)
 {
 	struct pcmidi_sustain *pms = (struct pcmidi_sustain *)data;
 
@@ -250,7 +248,7 @@ void pcmidi_sustained_note_release(unsigned long data)
 	pms->in_use = 0;
 }
 
-void init_sustain_timers(struct pcmidi_snd *pm)
+static void init_sustain_timers(struct pcmidi_snd *pm)
 {
 	struct pcmidi_sustain *pms;
 	unsigned i;
@@ -264,7 +262,7 @@ void init_sustain_timers(struct pcmidi_snd *pm)
 	}
 }
 
-void stop_sustain_timers(struct pcmidi_snd *pm)
+static void stop_sustain_timers(struct pcmidi_snd *pm)
 {
 	struct pcmidi_sustain *pms;
 	unsigned i;
@@ -499,7 +497,7 @@ static int pcmidi_handle_report4(struct pcmidi_snd *pm, u8 *data)
 	return 1;
 }
 
-int pcmidi_handle_report(
+static int pcmidi_handle_report(
 	struct pcmidi_snd *pm, unsigned report_id, u8 *data, int size)
 {
 	int ret = 0;
@@ -518,7 +516,8 @@ int pcmidi_handle_report(
 	return ret;
 }
 
-void pcmidi_setup_extra_keys(struct pcmidi_snd *pm, struct input_dev *input)
+static void pcmidi_setup_extra_keys(
+	struct pcmidi_snd *pm, struct input_dev *input)
 {
 	/* reassigned functionality for N/A keys
 		MY PICTURES =>	KEY_WORDPROCESSOR
@@ -602,7 +601,7 @@ static struct snd_rawmidi_ops pcmidi_in_ops = {
 	.trigger = pcmidi_in_trigger
 };
 
-int pcmidi_snd_initialise(struct pcmidi_snd *pm)
+static int pcmidi_snd_initialise(struct pcmidi_snd *pm)
 {
 	static int dev;
 	struct snd_card *card;
@@ -720,7 +719,7 @@ fail:
 	return err;
 }
 
-int pcmidi_snd_terminate(struct pcmidi_snd *pm)
+static int pcmidi_snd_terminate(struct pcmidi_snd *pm)
 {
 	if (pm->card) {
 		stop_sustain_timers(pm);
@@ -760,7 +759,7 @@ static int pk_input_mapping(struct hid_device *hdev, struct hid_input *hi,
 		struct hid_field *field, struct hid_usage *usage,
 		unsigned long **bit, int *max)
 {
-	struct pk_device *pk = (struct pk_device *)hid_get_drvdata(hdev);
+	struct pk_device *pk = hid_get_drvdata(hdev);
 	struct pcmidi_snd *pm;
 
 	pm = pk->pm;
@@ -778,7 +777,7 @@ static int pk_input_mapping(struct hid_device *hdev, struct hid_input *hi,
 static int pk_raw_event(struct hid_device *hdev, struct hid_report *report,
 	u8 *data, int size)
 {
-	struct pk_device *pk = (struct pk_device *)hid_get_drvdata(hdev);
+	struct pk_device *pk = hid_get_drvdata(hdev);
 	int ret = 0;
 
 	if (1 == pk->pm->ifnum) {
@@ -817,7 +816,7 @@ static int pk_probe(struct hid_device *hdev, const struct hid_device_id *id)
 	if (pm == NULL) {
 		hid_err(hdev, "can't alloc descriptor\n");
 		ret = -ENOMEM;
-		goto err_free;
+		goto err_free_pk;
 	}
 
 	pm->pk = pk;
@@ -850,16 +849,16 @@ static int pk_probe(struct hid_device *hdev, const struct hid_device_id *id)
 err_stop:
 	hid_hw_stop(hdev);
 err_free:
-	if (pm != NULL)
-		kfree(pm);
-
+	kfree(pm);
+err_free_pk:
 	kfree(pk);
+
 	return ret;
 }
 
 static void pk_remove(struct hid_device *hdev)
 {
-	struct pk_device *pk = (struct pk_device *)hid_get_drvdata(hdev);
+	struct pk_device *pk = hid_get_drvdata(hdev);
 	struct pcmidi_snd *pm;
 
 	pm = pk->pm;

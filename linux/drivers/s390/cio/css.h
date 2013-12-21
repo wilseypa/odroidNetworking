@@ -112,9 +112,6 @@ extern int for_each_subchannel(int(*fn)(struct subchannel_id, void *), void *);
 extern void css_reiterate_subchannels(void);
 void css_update_ssd_info(struct subchannel *sch);
 
-#define __MAX_SUBCHANNEL 65535
-#define __MAX_SSID 3
-
 struct channel_subsystem {
 	u8 cssid;
 	int valid;
@@ -132,6 +129,8 @@ struct channel_subsystem {
 #define to_css(dev) container_of(dev, struct channel_subsystem, device)
 
 extern struct channel_subsystem *channel_subsystems[];
+
+void channel_subsystem_reinit(void);
 
 /* Helper functions to build lists for the slow path. */
 void css_schedule_eval(struct subchannel_id schid);

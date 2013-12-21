@@ -59,7 +59,8 @@
 /* 1st Level Abstractions.  */
 
 /* Initialize a new transport from provided memory.  */
-static struct sctp_transport *sctp_transport_init(struct sctp_transport *peer,
+static struct sctp_transport *sctp_transport_init(struct net *net,
+						  struct sctp_transport *peer,
 						  const union sctp_addr *addr,
 						  gfp_t gfp)
 {
@@ -68,13 +69,15 @@ static struct sctp_transport *sctp_transport_init(struct sctp_transport *peer,
 	peer->af_specific = sctp_get_af_specific(addr->sa.sa_family);
 	memset(&peer->saddr, 0, sizeof(union sctp_addr));
 
+	peer->sack_generation = 0;
+
 	/* From 6.3.1 RTO Calculation:
 	 *
 	 * C1) Until an RTT measurement has been made for a packet sent to the
 	 * given destination transport address, set RTO to the protocol
 	 * parameter 'RTO.Initial'.
 	 */
-	peer->rto = msecs_to_jiffies(sctp_rto_initial);
+	peer->rto = msecs_to_jiffies(net->sctp.rto_initial);
 
 	peer->last_time_heard = jiffies;
 	peer->last_time_ecne_reduced = jiffies;
@@ -84,7 +87,8 @@ static struct sctp_transport *sctp_transport_init(struct sctp_transport *peer,
 			    SPP_SACKDELAY_ENABLE;
 
 	/* Initialize the default path max_retrans.  */
-	peer->pathmaxrxt  = sctp_max_retrans_path;
+	peer->pathmaxrxt  = net->sctp.max_retrans_path;
+	peer->pf_retrans  = net->sctp.pf_retrans;
 
 	INIT_LIST_HEAD(&peer->transmitted);
 	INIT_LIST_HEAD(&peer->send_ready);
@@ -106,7 +110,8 @@ static struct sctp_transport *sctp_transport_init(struct sctp_transport *peer,
 }
 
 /* Allocate and initialize a new transport.  */
-struct sctp_transport *sctp_transport_new(const union sctp_addr *addr,
+struct sctp_transport *sctp_transport_new(struct net *net,
+					  const union sctp_addr *addr,
 					  gfp_t gfp)
 {
 	struct sctp_transport *transport;
@@ -115,7 +120,7 @@ struct sctp_transport *sctp_transport_new(const union sctp_addr *addr,
 	if (!transport)
 		goto fail;
 
-	if (!sctp_transport_init(transport, addr, gfp))
+	if (!sctp_transport_init(net, transport, addr, gfp))
 		goto fail_init;
 
 	transport->malloced = 1;
@@ -158,13 +163,11 @@ void sctp_transport_free(struct sctp_transport *transport)
 	sctp_transport_put(transport);
 }
 
-/* Destroy the transport data structure.
- * Assumes there are no more users of this structure.
- */
-static void sctp_transport_destroy(struct sctp_transport *transport)
+static void sctp_transport_destroy_rcu(struct rcu_head *head)
 {
-	SCTP_ASSERT(transport->dead, "Transport is not dead", return);
+	struct sctp_transport *transport;
 
+	transport = container_of(head, struct sctp_transport, rcu);
 	if (transport->asoc)
 		sctp_association_put(transport->asoc);
 
@@ -173,6 +176,16 @@ static void sctp_transport_destroy(struct sctp_transport *transport)
 	dst_release(transport->dst);
 	kfree(transport);
 	SCTP_DBG_OBJCNT_DEC(transport);
+}
+
+/* Destroy the transport data structure.
+ * Assumes there are no more users of this structure.
+ */
+static void sctp_transport_destroy(struct sctp_transport *transport)
+{
+	SCTP_ASSERT(transport->dead, "Transport is not dead", return);
+
+	call_rcu(&transport->rcu, sctp_transport_destroy_rcu);
 }
 
 /* Start T3_rtx timer if it is not already running and update the heartbeat
@@ -214,7 +227,7 @@ void sctp_transport_set_owner(struct sctp_transport *transport,
 void sctp_transport_pmtu(struct sctp_transport *transport, struct sock *sk)
 {
 	/* If we don't have a fresh route, look one up */
-	if (!transport->dst || transport->dst->obsolete > 1) {
+	if (!transport->dst || transport->dst->obsolete) {
 		dst_release(transport->dst);
 		transport->af_specific->get_dst(transport, &transport->saddr,
 						&transport->fl, sk);
@@ -226,7 +239,7 @@ void sctp_transport_pmtu(struct sctp_transport *transport, struct sock *sk)
 		transport->pathmtu = SCTP_DEFAULT_MAXSEGMENT;
 }
 
-void sctp_transport_update_pmtu(struct sctp_transport *t, u32 pmtu)
+void sctp_transport_update_pmtu(struct sock *sk, struct sctp_transport *t, u32 pmtu)
 {
 	struct dst_entry *dst;
 
@@ -243,8 +256,16 @@ void sctp_transport_update_pmtu(struct sctp_transport *t, u32 pmtu)
 	}
 
 	dst = sctp_transport_dst_check(t);
-	if (dst)
-		dst->ops->update_pmtu(dst, pmtu);
+	if (!dst)
+		t->af_specific->get_dst(t, &t->saddr, &t->fl, sk);
+
+	if (dst) {
+		dst->ops->update_pmtu(dst, sk, NULL, pmtu);
+
+		dst = sctp_transport_dst_check(t);
+		if (!dst)
+			t->af_specific->get_dst(t, &t->saddr, &t->fl, sk);
+	}
 }
 
 /* Caches the dst entry and source address for a transport's destination
@@ -305,6 +326,7 @@ void sctp_transport_update_rto(struct sctp_transport *tp, __u32 rtt)
 	SCTP_ASSERT(tp->rto_pending, "rto_pending not set", return);
 
 	if (tp->rttvar || tp->srtt) {
+		struct net *net = sock_net(tp->asoc->base.sk);
 		/* 6.3.1 C3) When a new RTT measurement R' is made, set
 		 * RTTVAR <- (1 - RTO.Beta) * RTTVAR + RTO.Beta * |SRTT - R'|
 		 * SRTT <- (1 - RTO.Alpha) * SRTT + RTO.Alpha * R'
@@ -316,10 +338,10 @@ void sctp_transport_update_rto(struct sctp_transport *tp, __u32 rtt)
 		 * For example, assuming the default value of RTO.Alpha of
 		 * 1/8, rto_alpha would be expressed as 3.
 		 */
-		tp->rttvar = tp->rttvar - (tp->rttvar >> sctp_rto_beta)
-			+ ((abs(tp->srtt - rtt)) >> sctp_rto_beta);
-		tp->srtt = tp->srtt - (tp->srtt >> sctp_rto_alpha)
-			+ (rtt >> sctp_rto_alpha);
+		tp->rttvar = tp->rttvar - (tp->rttvar >> net->sctp.rto_beta)
+			+ (((__u32)abs64((__s64)tp->srtt - (__s64)rtt)) >> net->sctp.rto_beta);
+		tp->srtt = tp->srtt - (tp->srtt >> net->sctp.rto_alpha)
+			+ (rtt >> net->sctp.rto_alpha);
 	} else {
 		/* 6.3.1 C2) When the first RTT measurement R is made, set
 		 * SRTT <- R, RTTVAR <- R/2.
@@ -349,6 +371,7 @@ void sctp_transport_update_rto(struct sctp_transport *tp, __u32 rtt)
 	if (tp->rto > tp->asoc->rto_max)
 		tp->rto = tp->asoc->rto_max;
 
+	sctp_max_rto(tp->asoc, tp);
 	tp->rtt = rtt;
 
 	/* Reset rto_pending so that a new RTT measurement is started when a
@@ -585,7 +608,8 @@ unsigned long sctp_transport_timeout(struct sctp_transport *t)
 {
 	unsigned long timeout;
 	timeout = t->rto + sctp_jitter(t->rto);
-	if (t->state != SCTP_UNCONFIRMED)
+	if ((t->state != SCTP_UNCONFIRMED) &&
+	    (t->state != SCTP_PF))
 		timeout += t->hbinterval;
 	timeout += jiffies;
 	return timeout;
@@ -605,6 +629,7 @@ void sctp_transport_reset(struct sctp_transport *t)
 	t->burst_limited = 0;
 	t->ssthresh = asoc->peer.i.a_rwnd;
 	t->rto = asoc->rto_initial;
+	sctp_max_rto(asoc, t);
 	t->rtt = 0;
 	t->srtt = 0;
 	t->rttvar = 0;
@@ -623,4 +648,20 @@ void sctp_transport_reset(struct sctp_transport *t)
 	t->cacc.cycling_changeover = 0;
 	t->cacc.next_tsn_at_change = 0;
 	t->cacc.cacc_saw_newack = 0;
+}
+
+/* Schedule retransmission on the given transport */
+void sctp_transport_immediate_rtx(struct sctp_transport *t)
+{
+	/* Stop pending T3_rtx_timer */
+	if (timer_pending(&t->T3_rtx_timer)) {
+		(void)del_timer(&t->T3_rtx_timer);
+		sctp_transport_put(t);
+	}
+	sctp_retransmit(&t->asoc->outqueue, t, SCTP_RTXR_T3_RTX);
+	if (!timer_pending(&t->T3_rtx_timer)) {
+		if (!mod_timer(&t->T3_rtx_timer, jiffies + t->rto))
+			sctp_transport_hold(t);
+	}
+	return;
 }

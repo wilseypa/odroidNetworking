@@ -1,8 +1,6 @@
 /*
- *  arch/s390x/kernel/linux32.c
- *
  *  S390 version
- *    Copyright (C) 2000 IBM Deutschland Entwicklung GmbH, IBM Corporation
+ *    Copyright IBM Corp. 2000
  *    Author(s): Martin Schwidefsky (schwidefsky@de.ibm.com),
  *               Gerhard Tonn (ton@de.ibm.com)   
  *               Thomas Spatzier (tspat@de.ibm.com)
@@ -60,12 +58,9 @@
 
 #include "compat_linux.h"
 
-long psw_user32_bits	= (PSW_BASE32_BITS | PSW_MASK_DAT | PSW_ASC_HOME |
-			   PSW_MASK_IO | PSW_MASK_EXT | PSW_MASK_MCHECK |
-			   PSW_MASK_PSTATE | PSW_DEFAULT_KEY);
-long psw32_user_bits	= (PSW32_BASE_BITS | PSW32_MASK_DAT | PSW32_ASC_HOME |
-			   PSW32_MASK_IO | PSW32_MASK_EXT | PSW32_MASK_MCHECK |
-			   PSW32_MASK_PSTATE);
+u32 psw32_user_bits = PSW32_MASK_DAT | PSW32_MASK_IO | PSW32_MASK_EXT |
+		      PSW32_DEFAULT_KEY | PSW32_MASK_BASE | PSW32_MASK_MCHECK |
+		      PSW32_MASK_PSTATE | PSW32_ASC_HOME;
  
 /* For this source file, we want overflow handling. */
 
@@ -136,13 +131,19 @@ asmlinkage long sys32_setresuid16(u16 ruid, u16 euid, u16 suid)
 		low2highuid(suid));
 }
 
-asmlinkage long sys32_getresuid16(u16 __user *ruid, u16 __user *euid, u16 __user *suid)
+asmlinkage long sys32_getresuid16(u16 __user *ruidp, u16 __user *euidp, u16 __user *suidp)
 {
+	const struct cred *cred = current_cred();
 	int retval;
+	u16 ruid, euid, suid;
 
-	if (!(retval = put_user(high2lowuid(current->cred->uid), ruid)) &&
-	    !(retval = put_user(high2lowuid(current->cred->euid), euid)))
-		retval = put_user(high2lowuid(current->cred->suid), suid);
+	ruid = high2lowuid(from_kuid_munged(cred->user_ns, cred->uid));
+	euid = high2lowuid(from_kuid_munged(cred->user_ns, cred->euid));
+	suid = high2lowuid(from_kuid_munged(cred->user_ns, cred->suid));
+
+	if (!(retval   = put_user(ruid, ruidp)) &&
+	    !(retval   = put_user(euid, euidp)))
+		retval = put_user(suid, suidp);
 
 	return retval;
 }
@@ -153,13 +154,19 @@ asmlinkage long sys32_setresgid16(u16 rgid, u16 egid, u16 sgid)
 		low2highgid(sgid));
 }
 
-asmlinkage long sys32_getresgid16(u16 __user *rgid, u16 __user *egid, u16 __user *sgid)
+asmlinkage long sys32_getresgid16(u16 __user *rgidp, u16 __user *egidp, u16 __user *sgidp)
 {
+	const struct cred *cred = current_cred();
 	int retval;
+	u16 rgid, egid, sgid;
 
-	if (!(retval = put_user(high2lowgid(current->cred->gid), rgid)) &&
-	    !(retval = put_user(high2lowgid(current->cred->egid), egid)))
-		retval = put_user(high2lowgid(current->cred->sgid), sgid);
+	rgid = high2lowgid(from_kgid_munged(cred->user_ns, cred->gid));
+	egid = high2lowgid(from_kgid_munged(cred->user_ns, cred->egid));
+	sgid = high2lowgid(from_kgid_munged(cred->user_ns, cred->sgid));
+
+	if (!(retval   = put_user(rgid, rgidp)) &&
+	    !(retval   = put_user(egid, egidp)))
+		retval = put_user(sgid, sgidp);
 
 	return retval;
 }
@@ -176,11 +183,14 @@ asmlinkage long sys32_setfsgid16(u16 gid)
 
 static int groups16_to_user(u16 __user *grouplist, struct group_info *group_info)
 {
+	struct user_namespace *user_ns = current_user_ns();
 	int i;
 	u16 group;
+	kgid_t kgid;
 
 	for (i = 0; i < group_info->ngroups; i++) {
-		group = (u16)GROUP_AT(group_info, i);
+		kgid = GROUP_AT(group_info, i);
+		group = (u16)from_kgid_munged(user_ns, kgid);
 		if (put_user(group, grouplist+i))
 			return -EFAULT;
 	}
@@ -190,13 +200,20 @@ static int groups16_to_user(u16 __user *grouplist, struct group_info *group_info
 
 static int groups16_from_user(struct group_info *group_info, u16 __user *grouplist)
 {
+	struct user_namespace *user_ns = current_user_ns();
 	int i;
 	u16 group;
+	kgid_t kgid;
 
 	for (i = 0; i < group_info->ngroups; i++) {
 		if (get_user(group, grouplist+i))
 			return  -EFAULT;
-		GROUP_AT(group_info, i) = (gid_t)group;
+
+		kgid = make_kgid(user_ns, (gid_t)group);
+		if (!gid_valid(kgid))
+			return -EINVAL;
+
+		GROUP_AT(group_info, i) = kgid;
 	}
 
 	return 0;
@@ -253,22 +270,22 @@ asmlinkage long sys32_setgroups16(int gidsetsize, u16 __user *grouplist)
 
 asmlinkage long sys32_getuid16(void)
 {
-	return high2lowuid(current->cred->uid);
+	return high2lowuid(from_kuid_munged(current_user_ns(), current_uid()));
 }
 
 asmlinkage long sys32_geteuid16(void)
 {
-	return high2lowuid(current->cred->euid);
+	return high2lowuid(from_kuid_munged(current_user_ns(), current_euid()));
 }
 
 asmlinkage long sys32_getgid16(void)
 {
-	return high2lowgid(current->cred->gid);
+	return high2lowgid(from_kgid_munged(current_user_ns(), current_gid()));
 }
 
 asmlinkage long sys32_getegid16(void)
 {
-	return high2lowgid(current->cred->egid);
+	return high2lowgid(from_kgid_munged(current_user_ns(), current_egid()));
 }
 
 /*
@@ -281,9 +298,6 @@ asmlinkage long sys32_ipc(u32 call, int first, int second, int third, u32 ptr)
 {
 	if (call >> 16)		/* hack for backward compatibility */
 		return -EINVAL;
-
-	call &= 0xffff;
-
 	switch (call) {
 	case SEMTIMEDOP:
 		return compat_sys_semtimedop(first, compat_ptr(ptr),
@@ -365,12 +379,7 @@ asmlinkage long sys32_rt_sigprocmask(int how, compat_sigset_t __user *set,
 	if (set) {
 		if (copy_from_user (&s32, set, sizeof(compat_sigset_t)))
 			return -EFAULT;
-		switch (_NSIG_WORDS) {
-		case 4: s.sig[3] = s32.sig[6] | (((long)s32.sig[7]) << 32);
-		case 3: s.sig[2] = s32.sig[4] | (((long)s32.sig[5]) << 32);
-		case 2: s.sig[1] = s32.sig[2] | (((long)s32.sig[3]) << 32);
-		case 1: s.sig[0] = s32.sig[0] | (((long)s32.sig[1]) << 32);
-		}
+		s.sig[0] = s32.sig[0] | (((long)s32.sig[1]) << 32);
 	}
 	set_fs (KERNEL_DS);
 	ret = sys_rt_sigprocmask(how,
@@ -380,12 +389,8 @@ asmlinkage long sys32_rt_sigprocmask(int how, compat_sigset_t __user *set,
 	set_fs (old_fs);
 	if (ret) return ret;
 	if (oset) {
-		switch (_NSIG_WORDS) {
-		case 4: s32.sig[7] = (s.sig[3] >> 32); s32.sig[6] = s.sig[3];
-		case 3: s32.sig[5] = (s.sig[2] >> 32); s32.sig[4] = s.sig[2];
-		case 2: s32.sig[3] = (s.sig[1] >> 32); s32.sig[2] = s.sig[1];
-		case 1: s32.sig[1] = (s.sig[0] >> 32); s32.sig[0] = s.sig[0];
-		}
+		s32.sig[1] = (s.sig[0] >> 32);
+		s32.sig[0] = s.sig[0];
 		if (copy_to_user (oset, &s32, sizeof(compat_sigset_t)))
 			return -EFAULT;
 	}
@@ -404,12 +409,8 @@ asmlinkage long sys32_rt_sigpending(compat_sigset_t __user *set,
 	ret = sys_rt_sigpending((sigset_t __force __user *) &s, sigsetsize);
 	set_fs (old_fs);
 	if (!ret) {
-		switch (_NSIG_WORDS) {
-		case 4: s32.sig[7] = (s.sig[3] >> 32); s32.sig[6] = s.sig[3];
-		case 3: s32.sig[5] = (s.sig[2] >> 32); s32.sig[4] = s.sig[2];
-		case 2: s32.sig[3] = (s.sig[1] >> 32); s32.sig[2] = s.sig[1];
-		case 1: s32.sig[1] = (s.sig[0] >> 32); s32.sig[0] = s.sig[0];
-		}
+		s32.sig[1] = (s.sig[0] >> 32);
+		s32.sig[0] = s.sig[0];
 		if (copy_to_user (set, &s32, sizeof(compat_sigset_t)))
 			return -EFAULT;
 	}
@@ -429,32 +430,6 @@ sys32_rt_sigqueueinfo(int pid, int sig, compat_siginfo_t __user *uinfo)
 	ret = sys_rt_sigqueueinfo(pid, sig, (siginfo_t __force __user *) &info);
 	set_fs (old_fs);
 	return ret;
-}
-
-/*
- * sys32_execve() executes a new program after the asm stub has set
- * things up for us.  This should basically do what I want it to.
- */
-asmlinkage long sys32_execve(const char __user *name, compat_uptr_t __user *argv,
-			     compat_uptr_t __user *envp)
-{
-	struct pt_regs *regs = task_pt_regs(current);
-	char *filename;
-	long rc;
-
-	filename = getname(name);
-	rc = PTR_ERR(filename);
-	if (IS_ERR(filename))
-		return rc;
-	rc = compat_do_execve(filename, argv, envp, regs);
-	if (rc)
-		goto out;
-	current->thread.fp_regs.fpc=0;
-	asm volatile("sfpc %0,0" : : "d" (0));
-	rc = regs->gprs[2];
-out:
-	putname(filename);
-	return rc;
 }
 
 asmlinkage long sys32_pread64(unsigned int fd, char __user *ubuf,
@@ -556,8 +531,8 @@ static int cp_stat64(struct stat64_emu31 __user *ubuf, struct kstat *stat)
 	tmp.__st_ino = (u32)stat->ino;
 	tmp.st_mode = stat->mode;
 	tmp.st_nlink = (unsigned int)stat->nlink;
-	tmp.st_uid = stat->uid;
-	tmp.st_gid = stat->gid;
+	tmp.st_uid = from_kuid_munged(current_user_ns(), stat->uid);
+	tmp.st_gid = from_kgid_munged(current_user_ns(), stat->gid);
 	tmp.st_rdev = huge_encode_dev(stat->rdev);
 	tmp.st_size = stat->size;
 	tmp.st_blksize = (u32)stat->blksize;

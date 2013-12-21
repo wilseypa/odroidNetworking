@@ -50,6 +50,7 @@ static inline void decode_ctrl_reg(u32 reg,
 #define ARM_DEBUG_ARCH_V6_1	2
 #define ARM_DEBUG_ARCH_V7_ECP14	3
 #define ARM_DEBUG_ARCH_V7_MM	4
+#define ARM_DEBUG_ARCH_V7_1	5
 
 /* Breakpoint */
 #define ARM_BREAKPOINT_EXECUTE	0
@@ -57,6 +58,7 @@ static inline void decode_ctrl_reg(u32 reg,
 /* Watchpoints */
 #define ARM_BREAKPOINT_LOAD	1
 #define ARM_BREAKPOINT_STORE	2
+#define ARM_FSR_ACCESS_MASK	(1 << 11)
 
 /* Privilege Levels */
 #define ARM_BREAKPOINT_PRIV	1
@@ -96,12 +98,12 @@ static inline void decode_ctrl_reg(u32 reg,
 #define ARM_BASE_WCR		112
 
 /* Accessor macros for the debug registers. */
-#define ARM_DBG_READ(M, OP2, VAL) do {\
-	asm volatile("mrc p14, 0, %0, c0," #M ", " #OP2 : "=r" (VAL));\
+#define ARM_DBG_READ(N, M, OP2, VAL) do {\
+	asm volatile("mrc p14, 0, %0, " #N "," #M ", " #OP2 : "=r" (VAL));\
 } while (0)
 
-#define ARM_DBG_WRITE(M, OP2, VAL) do {\
-	asm volatile("mcr p14, 0, %0, c0," #M ", " #OP2 : : "r" (VAL));\
+#define ARM_DBG_WRITE(N, M, OP2, VAL) do {\
+	asm volatile("mcr p14, 0, %0, " #N "," #M ", " #OP2 : : "r" (VAL));\
 } while (0)
 
 struct notifier_block;

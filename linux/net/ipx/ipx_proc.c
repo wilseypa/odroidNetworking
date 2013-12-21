@@ -9,6 +9,7 @@
 #include <linux/proc_fs.h>
 #include <linux/spinlock.h>
 #include <linux/seq_file.h>
+#include <linux/export.h>
 #include <net/net_namespace.h>
 #include <net/tcp_states.h>
 #include <net/ipx.h>
@@ -216,7 +217,8 @@ static int ipx_seq_socket_show(struct seq_file *seq, void *v)
 	seq_printf(seq, "%08X  %08X  %02X     %03d\n",
 		   sk_wmem_alloc_get(s),
 		   sk_rmem_alloc_get(s),
-		   s->sk_state, SOCK_INODE(s->sk_socket)->i_uid);
+		   s->sk_state,
+		   from_kuid_munged(seq_user_ns(seq), sock_i_uid(s)));
 out:
 	return 0;
 }

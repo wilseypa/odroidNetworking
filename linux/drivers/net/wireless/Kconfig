@@ -156,11 +156,7 @@ config PRISM54
 	---help---
 	  This enables support for FullMAC PCI/Cardbus prism54 devices. This
 	  driver is now deprecated in favor for the SoftMAC driver, p54pci.
-	  p54pci supports FullMAC PCI/Cardbus devices as well. For details on
-	  the scheduled removal of this driver on the kernel see the feature
-	  removal schedule:
-
-	  Documentation/feature-removal-schedule.txt
+	  p54pci supports FullMAC PCI/Cardbus devices as well.
 
 	  For more information refer to the p54 wiki:
 
@@ -268,31 +264,21 @@ config MWL8K
 	  To compile this driver as a module, choose M here: the module
 	  will be called mwl8k.  If unsure, say N.
 
-config WIFI_CONTROL_FUNC
-	bool "Enable WiFi control function abstraction"
-	help
-	  Enables Power/Reset/Carddetect function abstraction
-
 source "drivers/net/wireless/ath/Kconfig"
 source "drivers/net/wireless/b43/Kconfig"
 source "drivers/net/wireless/b43legacy/Kconfig"
-source "drivers/net/wireless/bcm4329/Kconfig"
-source "drivers/net/wireless/bcm4330/Kconfig"
-source "drivers/net/wireless/bcmdhd/Kconfig"
+source "drivers/net/wireless/brcm80211/Kconfig"
 source "drivers/net/wireless/hostap/Kconfig"
 source "drivers/net/wireless/ipw2x00/Kconfig"
 source "drivers/net/wireless/iwlwifi/Kconfig"
 source "drivers/net/wireless/iwlegacy/Kconfig"
-source "drivers/net/wireless/iwmc3200wifi/Kconfig"
 source "drivers/net/wireless/libertas/Kconfig"
 source "drivers/net/wireless/orinoco/Kconfig"
 source "drivers/net/wireless/p54/Kconfig"
 source "drivers/net/wireless/rt2x00/Kconfig"
 source "drivers/net/wireless/rtlwifi/Kconfig"
-source "drivers/net/wireless/wl1251/Kconfig"
-source "drivers/net/wireless/wl12xx/Kconfig"
+source "drivers/net/wireless/ti/Kconfig"
 source "drivers/net/wireless/zd1211rw/Kconfig"
 source "drivers/net/wireless/mwifiex/Kconfig"
-source "drivers/net/wireless/rtl8191su/Kconfig"
 
 endif # WLAN

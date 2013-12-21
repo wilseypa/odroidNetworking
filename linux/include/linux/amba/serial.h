@@ -23,6 +23,8 @@
 #ifndef ASM_ARM_HARDWARE_SERIAL_AMBA_H
 #define ASM_ARM_HARDWARE_SERIAL_AMBA_H
 
+#include <linux/types.h>
+
 /* -------------------------------------------------------------------------------
  *  From AMBA UART (PL010) Block Specification
  * -------------------------------------------------------------------------------
@@ -203,7 +205,6 @@ struct amba_pl011_data {
 	void *dma_tx_param;
         void (*init) (void);
 	void (*exit) (void);
-	void (*reset) (void);
 };
 #endif
 

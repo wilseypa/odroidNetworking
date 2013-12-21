@@ -114,8 +114,8 @@ static inline void set_cold_file(struct f2fs_sb_info *sbi, struct inode *inode,
 	}
 }
 
-static int f2fs_create(struct inode *dir, struct dentry *dentry, int mode,
-						struct nameidata *nd)
+static int f2fs_create(struct inode *dir, struct dentry *dentry, umode_t mode,
+						bool excl)
 {
 	struct super_block *sb = dir->i_sb;
 	struct f2fs_sb_info *sbi = F2FS_SB(sb);
@@ -183,7 +183,7 @@ out:
 
 struct dentry *f2fs_get_parent(struct dentry *child)
 {
-    struct qstr dotdot = {.name = "..", .len = 2};
+	struct qstr dotdot = QSTR_INIT("..", 2);
 	unsigned long ino = f2fs_inode_by_name(child->d_inode, &dotdot);
 	if (!ino)
 		return ERR_PTR(-ENOENT);
@@ -191,7 +191,7 @@ struct dentry *f2fs_get_parent(struct dentry *child)
 }
 
 static struct dentry *f2fs_lookup(struct inode *dir, struct dentry *dentry,
-		 struct nameidata *nd)
+		unsigned int flags)
 {
 	struct inode *inode = NULL;
 	struct f2fs_dir_entry *de;
@@ -280,7 +280,7 @@ out:
 	return err;
 }
 
-static int f2fs_mkdir(struct inode *dir, struct dentry *dentry, int mode)
+static int f2fs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 {
 	struct f2fs_sb_info *sbi = F2FS_SB(dir->i_sb);
 	struct inode *inode;
@@ -327,7 +327,7 @@ static int f2fs_rmdir(struct inode *dir, struct dentry *dentry)
 }
 
 static int f2fs_mknod(struct inode *dir, struct dentry *dentry,
-				int mode, dev_t rdev)
+				umode_t mode, dev_t rdev)
 {
 	struct super_block *sb = dir->i_sb;
 	struct f2fs_sb_info *sbi = F2FS_SB(sb);

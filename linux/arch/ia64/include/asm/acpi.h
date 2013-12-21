@@ -32,7 +32,6 @@
 
 #include <linux/init.h>
 #include <linux/numa.h>
-#include <asm/system.h>
 #include <asm/numa.h>
 
 #define COMPILER_DEPENDENT_INT64	long
@@ -154,7 +153,7 @@ extern int additional_cpus;
 #else
 #define MAX_PXM_DOMAINS (256)
 #endif
-extern int __devinitdata pxm_to_nid_map[MAX_PXM_DOMAINS];
+extern int pxm_to_nid_map[MAX_PXM_DOMAINS];
 extern int __initdata nid_to_pxm_map[MAX_NUMNODES];
 #endif
 

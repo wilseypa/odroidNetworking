@@ -26,7 +26,6 @@
 #include <linux/delay.h>
 #include <linux/platform_device.h>
 
-#include <asm/macintosh.h>
 #include <asm/mac_via.h>
 
 #define CARDNAME "swim"
@@ -789,8 +788,7 @@ static struct kobject *floppy_find(dev_t dev, int *part, void *data)
 	return get_disk(swd->unit[drive].disk);
 }
 
-static int __devinit swim_add_floppy(struct swim_priv *swd,
-				     enum drive_location location)
+static int swim_add_floppy(struct swim_priv *swd, enum drive_location location)
 {
 	struct floppy_state *fs = &swd->unit[swd->floppy_count];
 	struct swim __iomem *base = swd->base;
@@ -813,7 +811,7 @@ static int __devinit swim_add_floppy(struct swim_priv *swd,
 	return 0;
 }
 
-static int __devinit swim_floppy_init(struct swim_priv *swd)
+static int swim_floppy_init(struct swim_priv *swd)
 {
 	int err;
 	int drive;
@@ -876,7 +874,7 @@ exit_put_disks:
 	return err;
 }
 
-static int __devinit swim_probe(struct platform_device *dev)
+static int swim_probe(struct platform_device *dev)
 {
 	struct resource *res;
 	struct swim __iomem *swim_base;
@@ -937,7 +935,7 @@ out:
 	return ret;
 }
 
-static int __devexit swim_remove(struct platform_device *dev)
+static int swim_remove(struct platform_device *dev)
 {
 	struct swim_priv *swd = platform_get_drvdata(dev);
 	int drive;
@@ -973,7 +971,7 @@ static int __devexit swim_remove(struct platform_device *dev)
 
 static struct platform_driver swim_driver = {
 	.probe  = swim_probe,
-	.remove = __devexit_p(swim_remove),
+	.remove = swim_remove,
 	.driver   = {
 		.name	= CARDNAME,
 		.owner	= THIS_MODULE,

@@ -171,16 +171,17 @@ static int isBranchInstr(mips_instruction * i)
  * In the Linux kernel, we support selection of FPR format on the
  * basis of the Status.FR bit.  If an FPU is not present, the FR bit
  * is hardwired to zero, which would imply a 32-bit FPU even for
- * 64-bit CPUs.  For 64-bit kernels with no FPU we use TIF_32BIT_REGS
- * as a proxy for the FR bit so that a 64-bit FPU is emulated.  In any
- * case, for a 32-bit kernel which uses the O32 MIPS ABI, only the
- * even FPRs are used (Status.FR = 0).
+ * 64-bit CPUs so we rather look at TIF_32BIT_REGS.
+ * FPU emu is slow and bulky and optimizing this function offers fairly
+ * sizeable benefits so we try to be clever and make this function return
+ * a constant whenever possible, that is on 64-bit kernels without O32
+ * compatibility enabled and on 32-bit kernels.
  */
 static inline int cop1_64bit(struct pt_regs *xcp)
 {
-	if (cpu_has_fpu)
-		return xcp->cp0_status & ST0_FR;
-#ifdef CONFIG_64BIT
+#if defined(CONFIG_64BIT) && !defined(CONFIG_MIPS32_O32)
+	return 1;
+#elif defined(CONFIG_64BIT) && defined(CONFIG_MIPS32_O32)
 	return !test_thread_flag(TIF_32BIT_REGS);
 #else
 	return 0;
@@ -245,7 +246,7 @@ static int cop1Emulate(struct pt_regs *xcp, struct mips_fpu_struct *ctx,
 		 */
 		emulpc = xcp->cp0_epc + 4;	/* Snapshot emulation target */
 
-		if (__compute_return_epc(xcp)) {
+		if (__compute_return_epc(xcp) < 0) {
 #ifdef CP1DBG
 			printk("failed to emulate branch at %p\n",
 				(void *) (xcp->cp0_epc));
@@ -272,8 +273,7 @@ static int cop1Emulate(struct pt_regs *xcp, struct mips_fpu_struct *ctx,
 	}
 
       emul:
-	perf_sw_event(PERF_COUNT_SW_EMULATION_FAULTS,
-			1, 0, xcp, 0);
+	perf_sw_event(PERF_COUNT_SW_EMULATION_FAULTS, 1, xcp, 0);
 	MIPS_FPU_EMU_INC_STATS(emulated);
 	switch (MIPSInst_OPCODE(ir)) {
 	case ldc1_op:{

@@ -131,9 +131,41 @@ config SPARSEMEM_VMEMMAP
 config HAVE_MEMBLOCK
 	boolean
 
+config HAVE_MEMBLOCK_NODE_MAP
+	boolean
+
+config ARCH_DISCARD_MEMBLOCK
+	boolean
+
+config NO_BOOTMEM
+	boolean
+
+config MEMORY_ISOLATION
+	boolean
+
+config MOVABLE_NODE
+	boolean "Enable to assign a node which has only movable memory"
+	depends on HAVE_MEMBLOCK
+	depends on NO_BOOTMEM
+	depends on X86_64
+	depends on NUMA
+	default n
+	help
+	  Allow a node to have only movable memory.  Pages used by the kernel,
+	  such as direct mapping pages cannot be migrated.  So the corresponding
+	  memory device cannot be hotplugged.  This option allows users to
+	  online all the memory of a node as movable memory so that the whole
+	  node can be hotplugged.  Users who don't use the memory hotplug
+	  feature are fine with this option on since they don't online memory
+	  as movable.
+
+	  Say Y here if you want to hotplug a whole node.
+	  Say N here if you want kernel to use memory on all nodes evenly.
+
 # eventually, we can have this option just 'select SPARSEMEM'
 config MEMORY_HOTPLUG
 	bool "Allow for memory hot-add"
+	select MEMORY_ISOLATION
 	depends on SPARSEMEM || X86_64_ACPI_NUMA
 	depends on HOTPLUG && ARCH_ENABLE_MEMORY_HOTPLUG
 	depends on (IA64 || X86 || PPC_BOOK3S_64 || SUPERH || S390)
@@ -175,9 +207,25 @@ config SPLIT_PTLOCK_CPUS
 	default "4"
 
 #
+# support for memory balloon compaction
+config BALLOON_COMPACTION
+	bool "Allow for balloon memory compaction/migration"
+	def_bool y
+	depends on COMPACTION && VIRTIO_BALLOON
+	help
+	  Memory fragmentation introduced by ballooning might reduce
+	  significantly the number of 2MB contiguous memory blocks that can be
+	  used within a guest, thus imposing performance penalties associated
+	  with the reduced number of transparent huge pages that could be used
+	  by the guest workload. Allowing the compaction & migration for memory
+	  pages enlisted as being part of memory balloon devices avoids the
+	  scenario aforementioned and helps improving memory defragmentation.
+
+#
 # support for memory compaction
 config COMPACTION
 	bool "Allow for memory compaction"
+	def_bool y
 	select MIGRATION
 	depends on MMU
 	help
@@ -189,7 +237,7 @@ config COMPACTION
 config MIGRATION
 	bool "Page migration"
 	def_bool y
-	depends on NUMA || ARCH_ENABLE_MEMORY_HOTREMOVE || COMPACTION || DMA_CMA
+	depends on NUMA || ARCH_ENABLE_MEMORY_HOTREMOVE || COMPACTION || CMA
 	help
 	  Allows the migration of the physical location of pages of processes
 	  while the virtual addresses are not changed. This is useful in
@@ -263,6 +311,7 @@ config MEMORY_FAILURE
 	depends on MMU
 	depends on ARCH_SUPPORTS_MEMORY_FAILURE
 	bool "Enable recovery from hardware memory errors"
+	select MEMORY_ISOLATION
 	help
 	  Enables code to recover from some memory failures on systems
 	  with MCA recovery. This allows a system to continue running
@@ -304,7 +353,7 @@ config NOMMU_INITIAL_TRIM_EXCESS
 
 config TRANSPARENT_HUGEPAGE
 	bool "Transparent Hugepage Support"
-	depends on X86 && MMU
+	depends on HAVE_ARCH_TRANSPARENT_HUGEPAGE
 	select COMPACTION
 	help
 	  Transparent Hugepages allows the kernel to use huge pages and
@@ -340,6 +389,16 @@ choice
 	  benefit.
 endchoice
 
+config CROSS_MEMORY_ATTACH
+	bool "Cross Memory Support"
+	depends on MMU
+	default y
+	help
+	  Enabling this option adds the system calls process_vm_readv and
+	  process_vm_writev which allow a process with the correct privileges
+	  to directly read from or write to to another process's address space.
+	  See the man page for more details.
+
 #
 # UP and nommu archs use km based percpu allocator
 #
@@ -356,7 +415,7 @@ config CLEANCACHE
 	  for clean pages that the kernel's pageframe replacement algorithm
 	  (PFRA) would like to keep around, but can't since there isn't enough
 	  memory.  So when the PFRA "evicts" a page, it first attempts to use
-	  cleancacne code to put the data contained in that page into
+	  cleancache code to put the data contained in that page into
 	  "transcendent memory", memory that is not directly accessible or
 	  addressable by the kernel and is of unknown and possibly
 	  time-varying size.  And when a cleancache-enabled
@@ -371,65 +430,19 @@ config CLEANCACHE
 
 	  If unsure, say Y to enable cleancache
 
-config CMA
-	bool "Contiguous Memory Allocator framework"
-	# Currently there is only one allocator so force it on
-	select CMA_BEST_FIT
+config FRONTSWAP
+	bool "Enable frontswap to cache swap pages if tmem is present"
+	depends on SWAP
+	default n
 	help
-	  This enables the Contiguous Memory Allocator framework which
-	  allows drivers to allocate big physically-contiguous blocks of
-	  memory for use with hardware components that do not support I/O
-	  map nor scatter-gather.
+	  Frontswap is so named because it can be thought of as the opposite
+	  of a "backing" store for a swap device.  The data is stored into
+	  "transcendent memory", memory that is not directly accessible or
+	  addressable by the kernel and is of unknown and possibly
+	  time-varying size.  When space in transcendent memory is available,
+	  a significant swap I/O reduction may be achieved.  When none is
+	  available, all frontswap calls are reduced to a single pointer-
+	  compare-against-NULL resulting in a negligible performance hit
+	  and swap data is stored as normal on the matching swap device.
 
-	  If you select this option you will also have to select at least
-	  one allocator algorithm below.
-
-	  To make use of CMA you need to specify the regions and
-	  driver->region mapping on command line when booting the kernel.
-
-config CMA_DEVELOPEMENT
-	bool "Include CMA developement features"
-	depends on CMA
-	help
-	  This lets you enable some developement features of the CMA
-	  freamework.
-
-config CMA_DEBUG
-	bool "CMA debug messages"
-	depends on CMA_DEVELOPEMENT
-	help
-	  Enable debug messages in CMA code.
-
-config CMA_SYSFS
-	bool "CMA SysFS interface support"
-	depends on CMA_DEVELOPEMENT
-	help
-	  Enable support for SysFS interface.
-
-config CMA_CMDLINE
-	bool "CMA command line parameters support"
-	depends on CMA_DEVELOPEMENT
-	help
-	  Enable support for cma, cma.map and cma.asterisk command line
-	  parameters.
-
-config CMA_BEST_FIT
-	bool "CMA best-fit allocator"
-	depends on CMA
-	help
-	  This is a best-fit algorithm running in O(n log n) time where
-	  n is the number of existing holes (which is never greater then
-	  the number of allocated regions and usually much smaller).  It
-	  allocates area from the smallest hole that is big enough for
-	  allocation in question.
-
-config DEBUG_VMALLOC
-	bool "Enable VMALLOC debugging support"
-	help
-	  This enables the inclusion of a few debugging parameters, which
-	  are the PID and the name of the task requesting vmalloc.
-
-	  Disabling these can result in savings in code size.
-
-config LOWMEM_CHECK
-	bool "Process's file and anon lowmem allocating status"
+	  If unsure, say Y to enable frontswap.
