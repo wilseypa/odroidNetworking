@@ -35,6 +35,7 @@
 #define RXE_H
 
 #include <linux/module.h>
+#include <linux/vmalloc.h>
 #include <linux/skbuff.h>
 #include <linux/crc32.h>
 
