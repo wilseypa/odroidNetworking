@@ -531,8 +531,6 @@ static enum resp_states write_data_in(struct rxe_qp *qp,
 	int	err;
 	int data_len = payload_size(pkt);
 
-        pr_warn("Calling rxe_mem_copy from write_data_in\n");
-
 	err = rxe_mem_copy(qp->resp.mr, qp->resp.va, payload_addr(pkt),
 			   data_len, direction_in, NULL);
 	if (err) {
@@ -731,8 +729,6 @@ static enum resp_states read_reply(struct rxe_qp *qp,
 		return RESPST_ERR_RNR;
 
 	pkt = SKB_TO_PKT(skb);
-
-        pr_warn("Calling rxe_mem_copy from read_reply\n");
 
 	err = rxe_mem_copy(res->read.mr, res->read.va, payload_addr(pkt),
 			   payload, direction_out, NULL);

@@ -36,7 +36,6 @@
 
 #include <linux/skbuff.h>
 #include <linux/crc32.h>
-#include <linux/vmalloc.h>
 
 #include <rdma/ib_verbs.h>
 #include <rdma/ib_user_verbs.h>
