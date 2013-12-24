@@ -91,6 +91,7 @@ struct ib_umem *ib_umem_get(struct ib_ucontext *context, unsigned long addr,
 	int i;
 	DEFINE_DMA_ATTRS(attrs);
 
+  pr_warn("In ib_umem_get\n");
 	if (dmasync)
 		dma_set_attr(DMA_ATTR_WRITE_BARRIER, &attrs);
 
@@ -98,6 +99,10 @@ struct ib_umem *ib_umem_get(struct ib_ucontext *context, unsigned long addr,
 		return ERR_PTR(-EPERM);
 
 	umem = kmalloc(sizeof *umem, GFP_KERNEL);
+        pr_warn("umem == %p\n", umem);
+        pr_warn("PAGE_MASK == %xh\n", PAGE_MASK);
+        pr_warn("PAGE_SIZE == %xh\n", PAGE_SIZE);
+        pr_warn("PAGE_SHIFT == %xh\n", PAGE_SHIFT);
 	if (!umem)
 		return ERR_PTR(-ENOMEM);
 
@@ -120,6 +125,7 @@ struct ib_umem *ib_umem_get(struct ib_ucontext *context, unsigned long addr,
 	INIT_LIST_HEAD(&umem->chunk_list);
 
 	page_list = (struct page **) __get_free_page(GFP_KERNEL);
+        pr_warn("page_list == %p\n", page_list);
 	if (!page_list) {
 		kfree(umem);
 		return ERR_PTR(-ENOMEM);
@@ -130,6 +136,7 @@ struct ib_umem *ib_umem_get(struct ib_ucontext *context, unsigned long addr,
 	 * just assume the memory is not hugetlb memory
 	 */
 	vma_list = (struct vm_area_struct **) __get_free_page(GFP_KERNEL);
+        pr_warn("vma_list == %p\n", vma_list);
 	if (!vma_list)
 		umem->hugetlb = 0;
 
@@ -154,6 +161,8 @@ struct ib_umem *ib_umem_get(struct ib_ucontext *context, unsigned long addr,
 					   PAGE_SIZE / sizeof (struct page *)),
 				     1, !umem->writable, page_list, vma_list);
 
+                pr_warn("user page_list == %p\n", page_list);
+                pr_warn("user vma_list == %p\n", vma_list);
 		if (ret < 0)
 			goto out;
 
@@ -166,6 +175,7 @@ struct ib_umem *ib_umem_get(struct ib_ucontext *context, unsigned long addr,
 			chunk = kmalloc(sizeof *chunk + sizeof (struct scatterlist) *
 					min_t(int, ret, IB_UMEM_MAX_PAGE_CHUNK),
 					GFP_KERNEL);
+                        pr_warn("chunk == %p\n", chunk);
 			if (!chunk) {
 				ret = -ENOMEM;
 				goto out;
@@ -185,6 +195,7 @@ struct ib_umem *ib_umem_get(struct ib_ucontext *context, unsigned long addr,
 							  chunk->nents,
 							  DMA_BIDIRECTIONAL,
 							  &attrs);
+                        pr_warn("chunk->nmap == %d\n", chunk->nmap);
 			if (chunk->nmap <= 0) {
 				for (i = 0; i < chunk->nents; ++i)
 					put_page(sg_page(&chunk->page_list[i]));
@@ -201,6 +212,8 @@ struct ib_umem *ib_umem_get(struct ib_ucontext *context, unsigned long addr,
 
 		ret = 0;
 	}
+
+        pr_warn("umem->hugetlb == %d\n", umem->hugetlb);
 
 out:
 	if (ret < 0) {

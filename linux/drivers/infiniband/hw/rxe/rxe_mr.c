@@ -124,6 +124,7 @@ void rxe_mem_cleanup(void *arg)
 
 static int rxe_mem_alloc(struct rxe_dev *rxe, struct rxe_mem *mem, int num_buf)
 {
+  pr_warn("In rxe_mem_alloc\n");
 	int i;
 	int num_map;
 	struct rxe_map **map = mem->map;
@@ -131,11 +132,13 @@ static int rxe_mem_alloc(struct rxe_dev *rxe, struct rxe_mem *mem, int num_buf)
 	num_map = (num_buf + RXE_BUF_PER_MAP - 1) / RXE_BUF_PER_MAP;
 
 	mem->map = kmalloc(num_map*sizeof(*map), GFP_KERNEL);
+        pr_warn("mem->map == %p\n", mem->map);
 	if (!mem->map)
 		goto err1;
 
 	for (i = 0; i < num_map; i++) {
 		mem->map[i] = kmalloc(sizeof(**map), GFP_KERNEL);
+                pr_warn("mem->map[%d] == %p", i, mem->map[i]);
 		if (!mem->map[i])
 			goto err2;
 	}
@@ -270,6 +273,10 @@ int rxe_mem_init_user(struct rxe_dev *rxe, struct rxe_pd *pd, u64 start,
 	mem->page_shift		= ilog2(umem->page_size);
 	mem->page_mask		= umem->page_size - 1;
 
+        pr_warn("umem->page_size == %xh\n", umem->page_size);
+        pr_warn("mem->page_shift == %xh\n", mem->page_shift);
+        pr_warn("mem->page_mask == %xh\n", mem->page_mask);
+
 	num_buf			= 0;
 	map			= mem->map;
 	if (length > 0) {
@@ -277,8 +284,14 @@ int rxe_mem_init_user(struct rxe_dev *rxe, struct rxe_pd *pd, u64 start,
 
 		list_for_each_entry(chunk, &umem->chunk_list, list) {
 			for (i = 0; i < chunk->nents; i++) {
-				vaddr = page_address(sg_page(&chunk->
-							     page_list[i]));
+                          pr_warn("Looking up page address as in page_address(sg_page(&chunk->page_list[i]))");
+                          pr_warn("&chunk == %p\n", &chunk);
+                          pr_warn("&chunk->page_list == %p\n", &chunk->page_list);
+                          pr_warn("&chunk->page_list[%d] == %p\n", i, &chunk->page_list[i]);
+                          pr_warn("sg_page(&chunk->page_list[%d]) == %p\n", i, sg_page(&chunk->page_list[i]));
+				vaddr = page_address(&chunk->
+							     page_list[i]);
+                                pr_warn("vaddr ==  %p\n", vaddr);
 				if (!vaddr) {
 					pr_warn("null vaddr\n");
 					err = -ENOMEM;
