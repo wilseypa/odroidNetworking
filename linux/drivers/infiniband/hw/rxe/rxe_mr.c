@@ -289,8 +289,7 @@ int rxe_mem_init_user(struct rxe_dev *rxe, struct rxe_pd *pd, u64 start,
                           pr_warn("&chunk->page_list == %p\n", &chunk->page_list);
                           pr_warn("&chunk->page_list[%d] == %p\n", i, &chunk->page_list[i]);
                           pr_warn("sg_page(&chunk->page_list[%d]) == %p\n", i, sg_page(&chunk->page_list[i]));
-				vaddr = page_address(&chunk->
-							     page_list[i]);
+                          vaddr = page_address(sg_page(&chunk->page_list[i]));
                                 pr_warn("vaddr ==  %p\n", vaddr);
 				if (!vaddr) {
 					pr_warn("null vaddr\n");
@@ -579,13 +578,20 @@ int copy_data(
 	u64			iova;
 	int			err;
 
-	if (length == 0)
+        pr_warn("In copy_data\n");
+
+	if (length == 0 || sge->length == 0)
 		return 0;
 
 	if (length > resid) {
 		err = -EINVAL;
 		goto err2;
 	}
+
+        pr_warn("sge == %p\n", sge);
+        pr_warn("offset == %xh\n", offset);
+        pr_warn("resid == %xh\n", resid);
+        pr_warn("sge->length == %xh\n", sge->length);
 
 	if (sge->length && (offset < sge->length)) {
 		mem = lookup_mem(pd, access, sge->lkey, lookup_local);
@@ -597,6 +603,7 @@ int copy_data(
 
 	while (length > 0) {
 		bytes = length;
+                pr_warn("bytes == %d\n", bytes);
 
 		if (offset >= sge->length) {
 			if (mem) {
@@ -628,6 +635,7 @@ int copy_data(
 
 		if (bytes > 0) {
 			iova = sge->addr + offset;
+                        pr_warn("iova == %llu\n", (unsigned long long) iova);
 
 			err = rxe_mem_copy(mem, iova, addr, bytes, dir, crcp);
 			if (err)
@@ -699,6 +707,8 @@ struct rxe_mem *lookup_mem(struct rxe_pd *pd, int access, u32 key,
 	struct rxe_mem *mem;
 	struct rxe_dev *rxe = to_rdev(pd->ibpd.device);
 	int index = key >> 8;
+
+        pr_warn("In lookup_mem\n");
 
 	if (index >= RXE_MIN_MR_INDEX && index <= RXE_MAX_MR_INDEX) {
 		mem = rxe_pool_get_index(&rxe->mr_pool, index);

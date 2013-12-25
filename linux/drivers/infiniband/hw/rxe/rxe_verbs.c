@@ -671,6 +671,7 @@ static int rxe_post_send(struct ib_qp *ibqp, struct ib_send_wr *wr,
 		}
 
 		length = 0;
+                // This method of calculating the send length could be a problem...
 		for (i = 0; i < wr->num_sge; i++)
 			length += wr->sg_list[i].length;
 

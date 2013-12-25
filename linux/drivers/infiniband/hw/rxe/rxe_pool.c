@@ -449,6 +449,8 @@ void *rxe_pool_get_index(struct rxe_pool *pool, u32 index)
 	struct rb_node *node = NULL;
 	struct rxe_pool_entry *elem = NULL;
 
+        pr_warn("In rxe_pool_get_index\n");
+
 	spin_lock_bh(&pool->pool_lock);
 
 	if (pool->state != rxe_pool_valid)
@@ -456,8 +458,13 @@ void *rxe_pool_get_index(struct rxe_pool *pool, u32 index)
 
 	node = pool->tree.rb_node;
 
+        pr_warn("index == %xh\n", index);
+
 	while (node) {
 		elem = rb_entry(node, struct rxe_pool_entry, node);
+
+                pr_warn("elem == %p\n", elem);
+                pr_warn("elem->index == %xh\n", elem->index);
 
 		if (elem->index > index)
 			node = node->rb_left;
