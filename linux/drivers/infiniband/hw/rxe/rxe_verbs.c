@@ -697,6 +697,8 @@ static int rxe_post_recv(struct ib_qp *ibqp, struct ib_recv_wr *wr,
 	struct rxe_qp *qp = to_rqp(ibqp);
 	struct rxe_rq *rq = &qp->rq;
 
+        pr_warn("In rxe_post_recv\n");
+
 	if (unlikely((qp_state(qp) < IB_QPS_INIT) || !qp->valid)) {
 		*bad_wr = wr;
 		err = -EINVAL;
