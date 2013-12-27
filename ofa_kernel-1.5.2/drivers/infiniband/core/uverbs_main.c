@@ -43,6 +43,8 @@
 #include <linux/file.h>
 #include <linux/mount.h>
 #include <linux/cdev.h>
+#include <linux/sched.h>
+#include <linux/slab.h>
 
 #include <asm/uaccess.h>
 
