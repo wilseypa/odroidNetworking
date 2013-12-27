@@ -378,6 +378,7 @@ static int __init root_nfs_init(void)
 }
 
 
+#ifndef MODULE
 /*
  *  Parse NFS server and directory information passed on the kernel
  *  command line.
@@ -398,6 +399,7 @@ static int __init nfs_root_setup(char *line)
 }
 
 __setup("nfsroot=", nfs_root_setup);
+#endif
 
 /***************************************************************************
 

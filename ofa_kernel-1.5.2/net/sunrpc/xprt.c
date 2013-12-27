@@ -697,6 +697,10 @@ void xprt_connect(struct rpc_task *task)
 	}
 	if (!xprt_lock_write(xprt, task))
 		return;
+
+	if (test_and_clear_bit(XPRT_CLOSE_WAIT, &xprt->state))
+		xprt->ops->close(xprt);
+
 	if (xprt_connected(xprt))
 		xprt_release_write(xprt, task);
 	else {
@@ -872,21 +876,23 @@ void xprt_transmit(struct rpc_task *task)
 
 	dprintk("RPC: %5u xprt_transmit(%u)\n", task->tk_pid, req->rq_slen);
 
+	spin_lock_bh(&xprt->transport_lock);
 	if (!req->rq_received) {
 		if (list_empty(&req->rq_list)) {
-			spin_lock_bh(&xprt->transport_lock);
 			/* Update the softirq receive buffer */
 			memcpy(&req->rq_private_buf, &req->rq_rcv_buf,
 					sizeof(req->rq_private_buf));
 			/* Add request to the receive list */
 			list_add_tail(&req->rq_list, &xprt->recv);
-			spin_unlock_bh(&xprt->transport_lock);
 			xprt_reset_majortimeo(req);
 			/* Turn off autodisconnect */
 			del_singleshot_timer_sync(&xprt->timer);
 		}
-	} else if (!req->rq_bytes_sent)
+		spin_unlock_bh(&xprt->transport_lock);
+	} else if (!req->rq_bytes_sent) {
+		spin_unlock_bh(&xprt->transport_lock);
 		return;
+	}
 
 	req->rq_connect_cookie = xprt->connect_cookie;
 	req->rq_xtime = jiffies;

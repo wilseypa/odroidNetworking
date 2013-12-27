@@ -54,6 +54,17 @@ MODULE_AUTHOR("Sean Hefty");
 MODULE_DESCRIPTION("InfiniBand CM");
 MODULE_LICENSE("Dual BSD/GPL");
 
+#define PFX    "ib_cm: "
+
+/*
+ * Limit CM message timeouts to something reasonable:
+ * 8 seconds per message, with up to 15 retries
+ */
+static int max_timeout = 21;
+module_param(max_timeout, int, 0644);
+MODULE_PARM_DESC(max_timeout, "Maximum IB CM per message timeout "
+                             "(default=21, or ~8 seconds)");
+
 static void cm_add_one(struct ib_device *device);
 static void cm_remove_one(struct ib_device *device);
 
@@ -1011,11 +1022,23 @@ static void cm_format_req(struct cm_req_msg *req_msg,
 	cm_req_set_init_depth(req_msg, param->initiator_depth);
 	cm_req_set_remote_resp_timeout(req_msg,
 				       param->remote_cm_response_timeout);
+       if (param->remote_cm_response_timeout > (u8) max_timeout) {
+               printk(KERN_WARNING PFX "req remote_cm_response_timeout %d > "
+                      "%d, decreasing\n", param->remote_cm_response_timeout,
+                      max_timeout);
+               cm_req_set_remote_resp_timeout(req_msg, (u8) max_timeout);
+       }
 	cm_req_set_qp_type(req_msg, param->qp_type);
 	cm_req_set_flow_ctrl(req_msg, param->flow_control);
 	cm_req_set_starting_psn(req_msg, cpu_to_be32(param->starting_psn));
 	cm_req_set_local_resp_timeout(req_msg,
 				      param->local_cm_response_timeout);
+       if (param->local_cm_response_timeout > (u8) max_timeout) {
+               printk(KERN_WARNING PFX "req local_cm_response_timeout %d > "
+                      "%d, decreasing\n", param->local_cm_response_timeout,
+                      max_timeout);
+               cm_req_set_local_resp_timeout(req_msg, (u8) max_timeout);
+       }
 	cm_req_set_retry_count(req_msg, param->retry_count);
 	req_msg->pkey = param->primary_path->pkey;
 	cm_req_set_path_mtu(req_msg, param->primary_path->mtu);
@@ -1138,6 +1161,11 @@ int ib_send_cm_req(struct ib_cm_id *cm_id,
 				    param->primary_path->packet_life_time) * 2 +
 				 cm_convert_to_ms(
 				    param->remote_cm_response_timeout);
+       if (cm_id_priv->timeout_ms > cm_convert_to_ms(max_timeout)) {
+               printk(KERN_WARNING PFX "req timeout_ms %d > %d, decreasing\n",
+                      cm_id_priv->timeout_ms, cm_convert_to_ms(max_timeout));
+               cm_id_priv->timeout_ms = cm_convert_to_ms(max_timeout);
+       }
 	cm_id_priv->max_cm_retries = param->max_cm_retries;
 	cm_id_priv->initiator_depth = param->initiator_depth;
 	cm_id_priv->responder_resources = param->responder_resources;
@@ -1569,6 +1597,13 @@ static int cm_req_handler(struct cm_work *work)
 	cm_id_priv->tid = req_msg->hdr.tid;
 	cm_id_priv->timeout_ms = cm_convert_to_ms(
 					cm_req_get_local_resp_timeout(req_msg));
+       if (cm_req_get_local_resp_timeout(req_msg) > (u8) max_timeout) {
+               printk(KERN_WARNING PFX "rcvd cm_local_resp_timeout %d > %d, "
+                      "decreasing used timeout_ms\n",
+                      cm_req_get_local_resp_timeout(req_msg), max_timeout);
+               cm_id_priv->timeout_ms = cm_convert_to_ms(max_timeout);
+       }
+
 	cm_id_priv->max_cm_retries = cm_req_get_max_cm_retries(req_msg);
 	cm_id_priv->remote_qpn = cm_req_get_local_qpn(req_msg);
 	cm_id_priv->initiator_depth = cm_req_get_resp_res(req_msg);
@@ -2478,6 +2513,12 @@ static int cm_mra_handler(struct cm_work *work)
 					cm_mra_get_service_timeout(mra_msg);
 	timeout = cm_convert_to_ms(cm_mra_get_service_timeout(mra_msg)) +
 		  cm_convert_to_ms(cm_id_priv->av.timeout);
+       if (timeout > cm_convert_to_ms(max_timeout)) {
+               printk(KERN_WARNING PFX "calculated mra timeout %d > %d, "
+                      "decreasing used timeout_ms\n", timeout,
+                      cm_convert_to_ms(max_timeout));
+               timeout = cm_convert_to_ms(max_timeout);
+       }
 
 	spin_lock_irq(&cm_id_priv->lock);
 	switch (cm_id_priv->id.state) {
@@ -2899,6 +2940,12 @@ int ib_send_cm_sidr_req(struct ib_cm_id *cm_id,
 	cm_id->service_id = param->service_id;
 	cm_id->service_mask = ~cpu_to_be64(0);
 	cm_id_priv->timeout_ms = param->timeout_ms;
+       if (cm_id_priv->timeout_ms > cm_convert_to_ms(max_timeout)) {
+               printk(KERN_WARNING PFX "sidr req timeout_ms %d > %d, "
+                      "decreasing used timeout_ms\n", param->timeout_ms,
+                      cm_convert_to_ms(max_timeout));
+               cm_id_priv->timeout_ms = cm_convert_to_ms(max_timeout);
+       }
 	cm_id_priv->max_cm_retries = param->max_cm_retries;
 	ret = cm_alloc_msg(cm_id_priv, &msg);
 	if (ret)

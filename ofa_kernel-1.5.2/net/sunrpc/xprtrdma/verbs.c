@@ -649,10 +649,22 @@ rpcrdma_ep_create(struct rpcrdma_ep *ep, struct rpcrdma_ia *ia,
 	ep->rep_attr.cap.max_send_wr = cdata->max_requests;
 	switch (ia->ri_memreg_strategy) {
 	case RPCRDMA_FRMR:
-		/* Add room for frmr register and invalidate WRs */
-		ep->rep_attr.cap.max_send_wr *= 3;
-		if (ep->rep_attr.cap.max_send_wr > devattr.max_qp_wr)
-			return -EINVAL;
+		/* Add room for frmr register and invalidate WRs.
+		 * 1. FRMR reg WR for head
+		 * 2. FRMR invalidate WR for head
+		 * 3. FRMR reg WR for pagelist
+		 * 4. FRMR invalidate WR for pagelist
+		 * 5. FRMR reg WR for tail
+		 * 6. FRMR invalidate WR for tail
+		 * 7. The RDMA_SEND WR
+		 */
+		ep->rep_attr.cap.max_send_wr *= 7;
+		if (ep->rep_attr.cap.max_send_wr > devattr.max_qp_wr) {
+			cdata->max_requests = devattr.max_qp_wr / 7;
+			if (!cdata->max_requests)
+				return -EINVAL;
+			ep->rep_attr.cap.max_send_wr = cdata->max_requests * 7;
+		}
 		break;
 	case RPCRDMA_MEMWINDOWS_ASYNC:
 	case RPCRDMA_MEMWINDOWS:
@@ -1450,6 +1462,23 @@ rpcrdma_unmap_one(struct rpcrdma_ia *ia, struct rpcrdma_mr_seg *seg)
 				seg->mr_dma, seg->mr_dmalen, seg->mr_dir);
 }
 
+static void rpcrdma_deregister_frmr(struct rpcrdma_mr_seg *seg,
+				   struct rpcrdma_ia *ia)
+{
+        struct ib_send_wr invalidate_wr, *bad_wr;
+        int rc;
+
+        memset(&invalidate_wr, 0, sizeof invalidate_wr);
+        invalidate_wr.opcode = IB_WR_LOCAL_INV;
+        invalidate_wr.send_flags = 0;                   /* unsignaled */
+        invalidate_wr.ex.invalidate_rkey = seg->mr_chunk.rl_mw->r.frmr.fr_mr->rkey;
+
+        rc = ib_post_send(ia->ri_id->qp, &invalidate_wr, &bad_wr);
+        if (rc)
+                dprintk("RPC:       %s: failed ib_post_send for invalidate,"
+                        " status %i\n", __func__, rc);
+}
+
 static int
 rpcrdma_register_frmr_external(struct rpcrdma_mr_seg *seg,
 			int *nsegs, int writing, struct rpcrdma_ia *ia,
@@ -1481,6 +1510,12 @@ rpcrdma_register_frmr_external(struct rpcrdma_mr_seg *seg,
 	dprintk("RPC:       %s: Using frmr %p to map %d segments\n",
 		__func__, seg1->mr_chunk.rl_mw, i);
 
+        /*
+	 * Lazy invalidate the FRMR. It is not an error to invalidate
+	 * an invalid FRMR.
+	 */
+        rpcrdma_deregister_frmr(seg1, ia);
+
 	/* Bump the key */
 	key = (u8)(seg1->mr_chunk.rl_mw->r.frmr.fr_mr->rkey & 0x000000FF);
 	ib_update_fast_reg_key(seg1->mr_chunk.rl_mw->r.frmr.fr_mr, ++key);
@@ -1489,7 +1524,7 @@ rpcrdma_register_frmr_external(struct rpcrdma_mr_seg *seg,
 	memset(&frmr_wr, 0, sizeof frmr_wr);
 	frmr_wr.opcode = IB_WR_FAST_REG_MR;
 	frmr_wr.send_flags = 0;			/* unsignaled */
-	frmr_wr.wr.fast_reg.iova_start = (unsigned long)seg1->mr_dma;
+	frmr_wr.wr.fast_reg.iova_start = seg1->mr_dma;
 	frmr_wr.wr.fast_reg.page_list = seg1->mr_chunk.rl_mw->r.frmr.fr_pgl;
 	frmr_wr.wr.fast_reg.page_list_len = i;
 	frmr_wr.wr.fast_reg.page_shift = PAGE_SHIFT;
@@ -1522,23 +1557,10 @@ rpcrdma_deregister_frmr_external(struct rpcrdma_mr_seg *seg,
 			struct rpcrdma_ia *ia, struct rpcrdma_xprt *r_xprt)
 {
 	struct rpcrdma_mr_seg *seg1 = seg;
-	struct ib_send_wr invalidate_wr, *bad_wr;
-	int rc;
-
 	while (seg1->mr_nsegs--)
 		rpcrdma_unmap_one(ia, seg++);
 
-	memset(&invalidate_wr, 0, sizeof invalidate_wr);
-	invalidate_wr.opcode = IB_WR_LOCAL_INV;
-	invalidate_wr.send_flags = 0;			/* unsignaled */
-	invalidate_wr.ex.invalidate_rkey = seg1->mr_chunk.rl_mw->r.frmr.fr_mr->rkey;
-	DECR_CQCOUNT(&r_xprt->rx_ep);
-
-	rc = ib_post_send(ia->ri_id->qp, &invalidate_wr, &bad_wr);
-	if (rc)
-		dprintk("RPC:       %s: failed ib_post_send for invalidate,"
-			" status %i\n", __func__, rc);
-	return rc;
+	return 0;
 }
 
 static int

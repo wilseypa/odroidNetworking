@@ -36,6 +36,8 @@
  * Ioctl commands specific to this driver.
  */
 enum {
+	CHELSIO_SETREG			= 1024,
+	CHELSIO_GETREG			= 1025,
 	CHELSIO_GETMTUTAB 		= 1029,
 	CHELSIO_SETMTUTAB 		= 1030,
 	CHELSIO_SET_PM 			= 1032,

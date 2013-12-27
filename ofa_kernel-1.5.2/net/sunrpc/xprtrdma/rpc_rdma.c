@@ -249,6 +249,8 @@ rpcrdma_create_chunks(struct rpc_rqst *rqst, struct xdr_buf *target,
 	req->rl_nchunks = nchunks;
 
 	BUG_ON(nchunks == 0);
+	BUG_ON((r_xprt->rx_ia.ri_memreg_strategy == RPCRDMA_FRMR)
+	       && (nchunks > 3));
 
 	/*
 	 * finish off header. If write, marshal discrim and nchunks.
@@ -776,7 +778,17 @@ repost:
 		"                   RPC request 0x%p xid 0x%08x\n",
 			__func__, rep, req, rqst, headerp->rm_xid);
 
-	BUG_ON(!req || req->rl_reply);
+	/*
+	 * If this req was re-transmited, rl_reply will point to a new
+	 * buffer allocated in xprt_rdma_send_request. Post/free it.
+	 */
+	if (req->rl_reply) {
+		struct rpcrdma_rep *_rep = req->rl_reply;
+                req->rl_reply = NULL;
+                _rep->rr_func = rpcrdma_reply_handler;
+                if (rpcrdma_ep_post_recv(&r_xprt->rx_ia, &r_xprt->rx_ep, _rep))
+                        rpcrdma_recv_buffer_put(_rep);
+	}
 
 	/* from here on, the reply is no longer an orphan */
 	req->rl_reply = rep;

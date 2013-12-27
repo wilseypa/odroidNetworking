@@ -519,6 +519,11 @@ static const struct adapter_info t3_adap_info[] = {
 	 F_GPIO10_OEN | F_GPIO1_OUT_VAL | F_GPIO6_OUT_VAL | F_GPIO10_OUT_VAL,
 	 { S_GPIO9 }, SUPPORTED_10000baseT_Full | SUPPORTED_AUI,
 	 &mi1_mdio_ext_ops, "Chelsio T310" },
+	{1, 0, 0,
+	 F_GPIO1_OEN | F_GPIO6_OEN | F_GPIO7_OEN |
+	 F_GPIO1_OUT_VAL | F_GPIO6_OUT_VAL,
+	 { S_GPIO9 }, SUPPORTED_10000baseT_Full | SUPPORTED_AUI,
+	 &mi1_mdio_ext_ops, "Chelsio N320E-G2" },
 };
 
 /*
@@ -545,6 +550,8 @@ static const struct port_type_info port_types[] = {
 	{ t3_qt2045_phy_prep },
 	{ t3_ael1006_phy_prep },
 	{ NULL },
+	{ t3_aq100x_phy_prep },
+	{ t3_ael2020_phy_prep },
 };
 
 #define VPD_ENTRY(name, len) \
@@ -1248,7 +1255,8 @@ void t3_link_changed(struct adapter *adapter, int port_id)
 		lc->fc = fc;
 	}
 
-	t3_os_link_changed(adapter, port_id, link_ok, speed, duplex, fc);
+	t3_os_link_changed(adapter, port_id, link_ok && !pi->link_fault,
+			   speed, duplex, fc);
 }
 
 void t3_link_fault(struct adapter *adapter, int port_id)
@@ -1418,7 +1426,10 @@ static int t3_handle_intr_status(struct adapter *adapter, unsigned int reg,
 		       F_IRPARITYERROR | V_ITPARITYERROR(M_ITPARITYERROR) | \
 		       V_FLPARITYERROR(M_FLPARITYERROR) | F_LODRBPARITYERROR | \
 		       F_HIDRBPARITYERROR | F_LORCQPARITYERROR | \
-		       F_HIRCQPARITYERROR)
+		       F_HIRCQPARITYERROR | F_LOPRIORITYDBFULL | \
+		       F_HIPRIORITYDBFULL | F_LOPRIORITYDBEMPTY | \
+		       F_HIPRIORITYDBEMPTY | F_HIPIODRBDROPERR | \
+		       F_LOPIODRBDROPERR)
 #define MC5_INTR_MASK (F_PARITYERR | F_ACTRGNFULL | F_UNKNOWNCMD | \
 		       F_REQQPARERR | F_DISPQPARERR | F_DELACTEMPTY | \
 		       F_NFASRCHFAIL)
@@ -2461,7 +2472,6 @@ int t3_sge_cqcntxt_op(struct adapter *adapter, unsigned int id, unsigned int op,
 	if (op >= 2 && op < 7) {
 		if (adapter->params.rev > 0)
 			return G_CQ_INDEX(val);
-
 		t3_write_reg(adapter, A_SG_CONTEXT_CMD,
 			     V_CONTEXT_CMD_OPCODE(0) | F_CQ | V_CONTEXT(id));
 		if (t3_wait_op_done(adapter, A_SG_CONTEXT_CMD,
@@ -3451,7 +3461,7 @@ static void config_pcie(struct adapter *adap)
 		{201, 321, 258, 450, 834, 1602}
 	};
 
-	u16 val;
+	u16 val, devid;
 	unsigned int log2_width, pldsize;
 	unsigned int fst_trn_rx, fst_trn_tx, acklat, rpllmt;
 
@@ -3459,6 +3469,17 @@ static void config_pcie(struct adapter *adap)
 			     adap->params.pci.pcie_cap_addr + PCI_EXP_DEVCTL,
 			     &val);
 	pldsize = (val & PCI_EXP_DEVCTL_PAYLOAD) >> 5;
+
+	pci_read_config_word(adap->pdev, 0x2, &devid);
+	if (devid == 0x37) {
+		pci_write_config_word(adap->pdev,
+				      adap->params.pci.pcie_cap_addr +
+				      PCI_EXP_DEVCTL,
+				      val & ~PCI_EXP_DEVCTL_READRQ &
+				      ~PCI_EXP_DEVCTL_PAYLOAD);
+		pldsize = 0;
+	}
+
 	pci_read_config_word(adap->pdev,
 			     adap->params.pci.pcie_cap_addr + PCI_EXP_LNKCTL,
 			     &val);
@@ -3667,7 +3688,13 @@ static void mc7_prep(struct adapter *adapter, struct mc7 *mc7,
 
 void mac_prep(struct cmac *mac, struct adapter *adapter, int index)
 {
+	u16 devid;
+
 	mac->adapter = adapter;
+	pci_read_config_word(adapter->pdev, 0x2, &devid);
+
+	if (devid == 0x37 && !adapter->params.vpd.xauicfg[1])
+		index = 0;
 	mac->offset = (XGMAC0_1_BASE_ADDR - XGMAC0_0_BASE_ADDR) * index;
 	mac->nucast = 1;
 

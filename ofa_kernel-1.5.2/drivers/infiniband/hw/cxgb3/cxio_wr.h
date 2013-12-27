@@ -176,7 +176,7 @@ struct t3_send_wr {
 	struct t3_sge sgl[T3_MAX_SGE];	/* 4+ */
 };
 
-#define T3_MAX_FASTREG_DEPTH 24
+#define T3_MAX_FASTREG_DEPTH 10
 #define T3_MAX_FASTREG_FRAG 10
 
 struct t3_fastreg_wr {
@@ -327,6 +327,11 @@ enum rdma_init_rtr_types {
 #define V_RTR_TYPE(x)	((x) << S_RTR_TYPE)
 #define G_RTR_TYPE(x)	((((x) >> S_RTR_TYPE)) & M_RTR_TYPE)
 
+#define S_CHAN		4
+#define M_CHAN		0x3
+#define V_CHAN(x)	((x) << S_CHAN)
+#define G_CHAN(x)	((((x) >> S_CHAN)) & M_CHAN)
+
 struct t3_rdma_init_attr {
 	u32 tid;
 	u32 qpid;
@@ -346,6 +351,7 @@ struct t3_rdma_init_attr {
 	u16 flags;
 	u16 rqe_count;
 	u32 irs;
+	u32 chan;
 };
 
 struct t3_rdma_init_wr {
@@ -724,7 +730,22 @@ struct t3_cq {
 
 static inline void cxio_set_wq_in_error(struct t3_wq *wq)
 {
-	wq->queue->wq_in_err.err = 1;
+	wq->queue->wq_in_err.err |= 1;
+}
+
+static inline void cxio_disable_wq_db(struct t3_wq *wq)
+{
+	wq->queue->wq_in_err.err |= 2;
+}
+
+static inline void cxio_enable_wq_db(struct t3_wq *wq)
+{
+	wq->queue->wq_in_err.err &= ~2;
+}
+
+static inline int cxio_wq_db_enabled(struct t3_wq *wq)
+{
+	return !(wq->queue->wq_in_err.err & 2);
 }
 
 static inline struct t3_cqe *cxio_next_hw_cqe(struct t3_cq *cq)

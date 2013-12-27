@@ -537,7 +537,7 @@ static int xs_nospace(struct rpc_task *task)
 	struct rpc_rqst *req = task->tk_rqstp;
 	struct rpc_xprt *xprt = req->rq_xprt;
 	struct sock_xprt *transport = container_of(xprt, struct sock_xprt, xprt);
-	int ret = 0;
+	int ret = -EAGAIN;
 
 	dprintk("RPC: %5u xmit incomplete (%u left of %u)\n",
 			task->tk_pid, req->rq_slen - req->rq_bytes_sent,
@@ -549,7 +549,6 @@ static int xs_nospace(struct rpc_task *task)
 	/* Don't race with disconnect */
 	if (xprt_connected(xprt)) {
 		if (test_bit(SOCK_ASYNC_NOSPACE, &transport->sock->flags)) {
-			ret = -EAGAIN;
 			/*
 			 * Notify TCP that we're limited by the application
 			 * window size
@@ -818,6 +817,7 @@ static void xs_close(struct rpc_xprt *xprt)
 	dprintk("RPC:       xs_close xprt %p\n", xprt);
 
 	xs_reset_transport(transport);
+	xprt->reestablish_timeout = 0;
 
 	smp_mb__before_clear_bit();
 	clear_bit(XPRT_CONNECTION_ABORT, &xprt->state);
@@ -1145,6 +1145,12 @@ static void xs_tcp_data_ready(struct sock *sk, int bytes)
 		goto out;
 	if (xprt->shutdown)
 		goto out;
+
+	/* Any data means we had a useful conversation, so
+	 * the we don't need to delay the next reconnect
+	 */
+	if (xprt->reestablish_timeout)
+		xprt->reestablish_timeout = 0;
 
 	/* We use rd_desc to pass struct xprt to xs_tcp_data_recv */
 	rd_desc.arg.data = xprt;
@@ -1792,6 +1798,7 @@ static void xs_tcp_setup_socket(struct rpc_xprt *xprt,
 		 */
 		set_bit(XPRT_CONNECTION_CLOSE, &xprt->state);
 		xprt_force_disconnect(xprt);
+		break;
 	case -ECONNREFUSED:
 	case -ECONNRESET:
 	case -ENETUNREACH:
@@ -1916,6 +1923,8 @@ static void xs_connect(struct rpc_task *task)
 				   &transport->connect_worker,
 				   xprt->reestablish_timeout);
 		xprt->reestablish_timeout <<= 1;
+		if (xprt->reestablish_timeout < XS_TCP_INIT_REEST_TO)
+			xprt->reestablish_timeout = XS_TCP_INIT_REEST_TO;
 		if (xprt->reestablish_timeout > XS_TCP_MAX_REEST_TO)
 			xprt->reestablish_timeout = XS_TCP_MAX_REEST_TO;
 	} else {

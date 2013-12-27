@@ -78,6 +78,13 @@ module_param(mellanox_workarounds, int, 0444);
 MODULE_PARM_DESC(mellanox_workarounds,
 		 "Enable workarounds for Mellanox SRP target bugs if != 0");
 
+static int srp_dev_loss_tmo = 60;
+
+module_param(srp_dev_loss_tmo, int, 0444);
+MODULE_PARM_DESC(srp_dev_loss_tmo,
+		 "Default number of seconds that srp transport should \
+		  insulate the lost of a remote port (default is 60 secs");
+
 static void srp_add_one(struct ib_device *device);
 static void srp_remove_one(struct ib_device *device);
 static void srp_completion(struct ib_cq *cq, void *target_ptr);
@@ -415,13 +422,11 @@ static void srp_disconnect_target(struct srp_target_port *target)
 {
 	/* XXX should send SRP_I_LOGOUT request */
 
-	init_completion(&target->done);
 	if (ib_send_cm_dreq(target->cm_id, NULL, 0)) {
 		shost_printk(KERN_DEBUG, target->scsi_host,
 			     PFX "Sending CM DREQ failed\n");
 		return;
 	}
-	wait_for_completion(&target->done);
 }
 
 static void srp_remove_work(struct work_struct *work)
@@ -435,6 +440,7 @@ static void srp_remove_work(struct work_struct *work)
 		return;
 	}
 	target->state = SRP_TARGET_REMOVED;
+	del_timer(&target->qp_err_timer);
 	spin_unlock_irq(target->scsi_host->host_lock);
 
 	spin_lock(&target->srp_host->target_lock);
@@ -528,19 +534,20 @@ static void srp_remove_req(struct srp_target_port *target, struct srp_request *r
 	list_move_tail(&req->list, &target->free_reqs);
 }
 
-static void srp_reset_req(struct srp_target_port *target, struct srp_request *req)
+static void srp_reset_req(struct srp_target_port *target,
+			  struct srp_request *req, int status)
 {
-	req->scmnd->result = DID_RESET << 16;
+	req->scmnd->result = status << 16;
 	req->scmnd->scsi_done(req->scmnd);
 	srp_remove_req(target, req);
 }
 
 static int srp_reconnect_target(struct srp_target_port *target)
 {
-	struct ib_qp_attr qp_attr;
 	struct srp_request *req, *tmp;
-	struct ib_wc wc;
 	int ret;
+	struct ib_cq *old_cq;
+	struct ib_qp *old_qp;
 
 	spin_lock_irq(target->scsi_host->host_lock);
 	if (target->state != SRP_TARGET_LIVE) {
@@ -559,21 +566,21 @@ static int srp_reconnect_target(struct srp_target_port *target)
 	if (ret)
 		goto err;
 
-	qp_attr.qp_state = IB_QPS_RESET;
-	ret = ib_modify_qp(target->qp, &qp_attr, IB_QP_STATE);
-	if (ret)
+	old_qp = target->qp;
+	old_cq = target->cq;
+	ret = srp_create_target_ib(target);
+	if (ret) {
+		target->qp = old_qp;
+		target->cq = old_cq;
 		goto err;
+	}
 
-	ret = srp_init_qp(target, target->qp);
-	if (ret)
-		goto err;
-
-	while (ib_poll_cq(target->cq, 1, &wc) > 0)
-		; /* nothing */
+	ib_destroy_qp(old_qp);
+	ib_destroy_cq(old_cq);
 
 	spin_lock_irq(target->scsi_host->host_lock);
 	list_for_each_entry_safe(req, tmp, &target->req_queue, list)
-		srp_reset_req(target, req);
+		srp_reset_req(target, req, DID_RESET);
 	spin_unlock_irq(target->scsi_host->host_lock);
 
 	target->rx_head	 = 0;
@@ -608,6 +615,9 @@ err:
 	spin_lock_irq(target->scsi_host->host_lock);
 	if (target->state == SRP_TARGET_CONNECTING) {
 		target->state = SRP_TARGET_DEAD;
+		target->work_in_progress = 1;
+		del_timer(&target->qp_err_timer);
+
 		INIT_WORK(&target->work, srp_remove_work);
 		schedule_work(&target->work);
 	}
@@ -898,6 +908,50 @@ static void srp_handle_recv(struct srp_target_port *target, struct ib_wc *wc)
 				      DMA_FROM_DEVICE);
 }
 
+static void srp_reconnect_work(struct work_struct *work)
+{
+	struct srp_target_port *target =
+		container_of(work, struct srp_target_port, work);
+
+	srp_reconnect_target(target);
+	spin_lock_irq(target->scsi_host->host_lock);
+	target->work_in_progress = 0;
+	spin_unlock_irq(target->scsi_host->host_lock);
+}
+
+static void srp_qp_in_err_timer(unsigned long data)
+{
+	struct srp_target_port *target = (struct srp_target_port *)data;
+	struct srp_request *req, *tmp;
+
+	if (target->state != SRP_TARGET_LIVE)
+		return;
+
+	spin_lock_irq(target->scsi_host->host_lock);
+	list_for_each_entry_safe(req, tmp, &target->req_queue, list)
+		srp_reset_req(target, req, DID_RESET);
+	spin_unlock_irq(target->scsi_host->host_lock);
+
+	spin_lock_irq(target->scsi_host->host_lock);
+	if (!target->work_in_progress) {
+		target->work_in_progress = 1;
+		INIT_WORK(&target->work, srp_reconnect_work);
+		schedule_work(&target->work);
+	}
+	spin_unlock_irq(target->scsi_host->host_lock);
+}
+
+static void srp_qp_err_add_timer(struct srp_target_port *target, int time)
+{
+	if (!timer_pending(&target->qp_err_timer)) {
+		setup_timer(&target->qp_err_timer,
+			    srp_qp_in_err_timer,
+			    (unsigned long)target);
+		target->qp_err_timer.expires = round_jiffies(time*HZ + jiffies);
+		add_timer(&target->qp_err_timer);
+	}
+}
+
 static void srp_completion(struct ib_cq *cq, void *target_ptr)
 {
 	struct srp_target_port *target = target_ptr;
@@ -906,11 +960,24 @@ static void srp_completion(struct ib_cq *cq, void *target_ptr)
 	ib_req_notify_cq(cq, IB_CQ_NEXT_COMP);
 	while (ib_poll_cq(cq, 1, &wc) > 0) {
 		if (wc.status) {
+			unsigned long flags;
+
 			shost_printk(KERN_ERR, target->scsi_host,
 				     PFX "failed %s status %d\n",
 				     wc.wr_id & SRP_OP_RECV ? "receive" : "send",
 				     wc.status);
-			target->qp_in_error = 1;
+			spin_lock_irqsave(target->scsi_host->host_lock, flags);
+			if (!target->qp_in_error &&
+			    target->state == SRP_TARGET_LIVE) {
+				target->qp_in_error = 1;
+				srp_qp_err_add_timer(target,
+						     (srp_dev_loss_tmo >
+						      SRP_CONN_ERR_TIMEOUT) ?
+						      (srp_dev_loss_tmo -
+						       SRP_CONN_ERR_TIMEOUT) :
+						      1);
+			}
+			spin_unlock_irqrestore(target->scsi_host->host_lock, flags);	    
 			break;
 		}
 
@@ -1023,12 +1090,17 @@ static int srp_queuecommand(struct scsi_cmnd *scmnd,
 	struct ib_device *dev;
 	int len;
 
-	if (target->state == SRP_TARGET_CONNECTING)
+	if (target->state == SRP_TARGET_CONNECTING ||
+	    target->qp_in_error)
 		goto err;
 
 	if (target->state == SRP_TARGET_DEAD ||
-	    target->state == SRP_TARGET_REMOVED) {
-		scmnd->result = DID_BAD_TARGET << 16;
+	    target->state == SRP_TARGET_REMOVED ||
+	    target->scsi_id != scmnd->device->id) {
+		if (target->scsi_id != scmnd->device->id)
+			scmnd->result = DID_BAD_TARGET << 16;
+		else
+			scmnd->result = DID_NO_CONNECT << 16;
 		done(scmnd);
 		return 0;
 	}
@@ -1301,7 +1373,6 @@ static int srp_cm_handler(struct ib_cm_id *cm_id, struct ib_cm_event *event)
 		shost_printk(KERN_ERR, target->scsi_host,
 			     PFX "connection closed\n");
 
-		comp = 1;
 		target->status = 0;
 		break;
 
@@ -1434,7 +1505,7 @@ static int srp_reset_device(struct scsi_cmnd *scmnd)
 
 	list_for_each_entry_safe(req, tmp, &target->req_queue, list)
 		if (req->scmnd->device == scmnd->device)
-			srp_reset_req(target, req);
+			srp_reset_req(target, req, DID_RESET);
 
 	spin_unlock_irq(target->scsi_host->host_lock);
 
@@ -1444,9 +1515,22 @@ static int srp_reset_device(struct scsi_cmnd *scmnd)
 static int srp_reset_host(struct scsi_cmnd *scmnd)
 {
 	struct srp_target_port *target = host_to_target(scmnd->device->host);
+	struct srp_request *req, *tmp;
 	int ret = FAILED;
 
-	shost_printk(KERN_ERR, target->scsi_host, PFX "SRP reset_host called\n");
+	shost_printk(KERN_ERR, target->scsi_host,
+		     PFX "SRP reset_host called state %d qp_err %d\n",
+		     target->state, target->qp_in_error);
+
+	spin_lock_irq(target->scsi_host->host_lock);
+	if (timer_pending(&target->qp_err_timer) || target->qp_in_error ||
+	    target->state != SRP_TARGET_LIVE) {
+		list_for_each_entry_safe(req, tmp, &target->req_queue, list)
+			srp_reset_req(target, req, DID_RESET);
+		spin_unlock_irq(target->scsi_host->host_lock);
+		return SUCCESS;
+	}
+	spin_unlock_irq(target->scsi_host->host_lock);
 
 	if (!srp_reconnect_target(target))
 		ret = SUCCESS;
@@ -1557,6 +1641,55 @@ static ssize_t show_local_ib_device(struct device *dev,
 	return sprintf(buf, "%s\n", target->srp_host->srp_dev->dev->name);
 }
 
+static ssize_t srp_target_oofabric(struct device *dev,
+				   struct device_attribute *attr, const char *buf,
+				   size_t count)
+{
+	struct srp_target_port *target = host_to_target(class_to_shost(dev));
+
+	shost_printk(KERN_DEBUG, target->scsi_host, PFX
+		     "Get async_event out-of-fabric at state=%d qp_err=%d\n",
+		     target->state, target->qp_in_error);
+
+	if (target->state != SRP_TARGET_LIVE)
+		return -EINVAL;
+
+	spin_lock_irq(target->scsi_host->host_lock);
+	if (!target->qp_in_error)
+		srp_qp_err_add_timer(target, srp_dev_loss_tmo);
+	spin_unlock_irq(target->scsi_host->host_lock);
+
+	return count;
+}
+
+static ssize_t srp_target_infabric(struct device *dev,
+				   struct device_attribute *attr, const char *buf,
+				   size_t count)
+{
+	struct srp_target_port *target = host_to_target(class_to_shost(dev));
+
+	shost_printk(KERN_DEBUG, target->scsi_host, PFX
+		     "Get async_event in-fabric at state=%d qp_err=%d\n",
+		     target->state, target->qp_in_error);
+
+	spin_lock_irq(target->scsi_host->host_lock);
+	if (timer_pending(&target->qp_err_timer)
+	    && target->qp_in_error) {
+		shost_printk(KERN_WARNING PFX, target->scsi_host,
+			     "delete qp_in_err timer\n");
+		del_timer(&target->qp_err_timer);
+		if (target->state == SRP_TARGET_LIVE &&
+		    !target->work_in_progress) {
+			target->work_in_progress = 1;
+			INIT_WORK(&target->work, srp_reconnect_work);
+			schedule_work(&target->work);
+		}
+	}
+	spin_unlock_irq(target->scsi_host->host_lock);
+
+	return count;
+}
+
 static DEVICE_ATTR(id_ext,	    S_IRUGO, show_id_ext,	   NULL);
 static DEVICE_ATTR(ioc_guid,	    S_IRUGO, show_ioc_guid,	   NULL);
 static DEVICE_ATTR(service_id,	    S_IRUGO, show_service_id,	   NULL);
@@ -1566,6 +1699,8 @@ static DEVICE_ATTR(orig_dgid,	    S_IRUGO, show_orig_dgid,	   NULL);
 static DEVICE_ATTR(zero_req_lim,    S_IRUGO, show_zero_req_lim,	   NULL);
 static DEVICE_ATTR(local_ib_port,   S_IRUGO, show_local_ib_port,   NULL);
 static DEVICE_ATTR(local_ib_device, S_IRUGO, show_local_ib_device, NULL);
+static DEVICE_ATTR(target_oofabric, S_IWUSR, NULL,  srp_target_oofabric);
+static DEVICE_ATTR(target_infabric, S_IWUSR, NULL,  srp_target_infabric);
 
 static struct device_attribute *srp_host_attrs[] = {
 	&dev_attr_id_ext,
@@ -1577,6 +1712,8 @@ static struct device_attribute *srp_host_attrs[] = {
 	&dev_attr_zero_req_lim,
 	&dev_attr_local_ib_port,
 	&dev_attr_local_ib_device,
+	&dev_attr_target_oofabric,
+	&dev_attr_target_infabric,
 	NULL
 };
 
@@ -1971,6 +2108,81 @@ free_host:
 	return NULL;
 }
 
+static void srp_event_handler(struct ib_event_handler *handler,
+			       struct ib_event *event)
+{
+	struct srp_device *srp_dev =
+		ib_get_client_data(event->device, &srp_client);
+	struct srp_host *host, *tmp_host;
+	struct srp_target_port *target, *tmp_target;
+
+	if (!srp_dev || srp_dev->dev != event->device)
+		return;
+
+	printk(KERN_WARNING PFX "ASYNC event= %d on device= %s\n",
+	       event->event, srp_dev->dev->name);
+
+	switch (event->event) {
+	case IB_EVENT_PORT_ERR:
+		spin_lock(&srp_dev->dev_lock);
+		list_for_each_entry_safe(host, tmp_host,
+					&srp_dev->dev_list, list) {
+			if (event->element.port_num == host->port) {
+				spin_lock(&host->target_lock);
+				list_for_each_entry_safe(target, tmp_target,
+							 &host->target_list, list) {
+					unsigned long flags;
+
+					spin_lock_irqsave(target->scsi_host->host_lock,
+							  flags);
+					if (!target->qp_in_error &&
+					   target->state == SRP_TARGET_LIVE)
+						srp_qp_err_add_timer(target, srp_dev_loss_tmo);
+								    
+					spin_unlock_irqrestore(target->scsi_host->host_lock,
+							       flags);
+				}
+				spin_unlock(&host->target_lock);
+			}
+		}
+		spin_unlock(&srp_dev->dev_lock);
+		break;
+	case IB_EVENT_PORT_ACTIVE:
+	case IB_EVENT_LID_CHANGE:
+	case IB_EVENT_PKEY_CHANGE:
+	case IB_EVENT_SM_CHANGE:
+		spin_lock(&srp_dev->dev_lock);
+		list_for_each_entry_safe(host, tmp_host, &srp_dev->dev_list,
+					list) {
+			if (event->element.port_num == host->port) {
+				spin_lock(&host->target_lock);
+				list_for_each_entry_safe(target, tmp_target,
+							 &host->target_list, list) {
+					unsigned long flags;
+
+					spin_lock_irqsave(target->scsi_host->host_lock,
+							  flags);
+					if (timer_pending(&target->qp_err_timer)
+					   && !target->qp_in_error) {
+						shost_printk(KERN_WARNING PFX,
+							     target->scsi_host,
+							     "delete qp_in_err timer\n");
+						del_timer(&target->qp_err_timer);
+					}
+					spin_unlock_irqrestore(target->scsi_host->host_lock,
+							       flags);
+				}
+				spin_unlock(&host->target_lock);
+			}
+		}
+		spin_unlock(&srp_dev->dev_lock);
+		break;
+	default:
+		break;
+	}
+
+}
+
 static void srp_add_one(struct ib_device *device)
 {
 	struct srp_device *srp_dev;
@@ -2003,6 +2215,7 @@ static void srp_add_one(struct ib_device *device)
 	srp_dev->fmr_page_mask  = ~((u64) srp_dev->fmr_page_size - 1);
 
 	INIT_LIST_HEAD(&srp_dev->dev_list);
+	spin_lock_init(&srp_dev->dev_lock);
 
 	srp_dev->dev = device;
 	srp_dev->pd  = ib_alloc_pd(device);
@@ -2014,6 +2227,11 @@ static void srp_add_one(struct ib_device *device)
 				    IB_ACCESS_REMOTE_READ |
 				    IB_ACCESS_REMOTE_WRITE);
 	if (IS_ERR(srp_dev->mr))
+		goto err_pd;
+
+	INIT_IB_EVENT_HANDLER(&srp_dev->event_handler, srp_dev->dev,
+			     srp_event_handler);
+	if (ib_register_event_handler(&srp_dev->event_handler))
 		goto err_pd;
 
 	memset(&fmr_param, 0, sizeof fmr_param);
@@ -2067,6 +2285,9 @@ static void srp_remove_one(struct ib_device *device)
 
 	srp_dev = ib_get_client_data(device, &srp_client);
 
+	ib_unregister_event_handler(&srp_dev->event_handler);
+
+	spin_lock(&srp_dev->dev_lock);
 	list_for_each_entry_safe(host, tmp_host, &srp_dev->dev_list, list) {
 		device_unregister(&host->dev);
 		/*
@@ -2100,12 +2321,14 @@ static void srp_remove_one(struct ib_device *device)
 			scsi_remove_host(target->scsi_host);
 			srp_disconnect_target(target);
 			ib_destroy_cm_id(target->cm_id);
+			del_timer(&target->qp_err_timer);
 			srp_free_target_ib(target);
 			scsi_host_put(target->scsi_host);
 		}
 
 		kfree(host);
 	}
+	spin_unlock(&srp_dev->dev_lock);
 
 	if (srp_dev->fmr_pool)
 		ib_destroy_fmr_pool(srp_dev->fmr_pool);

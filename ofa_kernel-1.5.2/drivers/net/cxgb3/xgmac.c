@@ -353,6 +353,9 @@ int t3_mac_set_mtu(struct cmac *mac, unsigned int mtu)
 	 * packet size register includes header, but not FCS.
 	 */
 	mtu += 14;
+	if (mtu > 1536)
+		mtu += 4;
+
 	if (mtu > MAX_FRAME_SIZE - 4)
 		return -EINVAL;
 	t3_write_reg(adap, A_XGM_RX_MAX_PKT_SIZE + mac->offset, mtu);
@@ -447,11 +450,12 @@ int t3_mac_set_speed_duplex_fc(struct cmac *mac, int speed, int duplex, int fc)
 
 	val = t3_read_reg(adap, A_XGM_RXFIFO_CFG + oft);
 	val &= ~V_RXFIFOPAUSEHWM(M_RXFIFOPAUSEHWM);
-	if (fc & PAUSE_TX)
-		val |= V_RXFIFOPAUSEHWM(rx_fifo_hwm(
-						t3_read_reg(adap,
-						A_XGM_RX_MAX_PKT_SIZE
-						+ oft)) / 8);
+	if (fc & PAUSE_TX) {
+		u32 rx_max_pkt_size =
+		    G_RXMAXPKTSIZE(t3_read_reg(adap,
+					       A_XGM_RX_MAX_PKT_SIZE + oft));
+		val |= V_RXFIFOPAUSEHWM(rx_fifo_hwm(rx_max_pkt_size) / 8);
+	}
 	t3_write_reg(adap, A_XGM_RXFIFO_CFG + oft, val);
 
 	t3_set_reg_field(adap, A_XGM_TX_CFG + oft, F_TXPAUSEEN,

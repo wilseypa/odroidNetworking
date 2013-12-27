@@ -106,6 +106,8 @@ struct mcast_group {
 	struct ib_sa_query	*query;
 	int			query_id;
 	u16			pkey_index;
+	u8			leave_state;
+	int			retries;
 };
 
 struct mcast_member {
@@ -248,34 +250,6 @@ static u8 get_leave_state(struct mcast_group *group)
 	return leave_state & group->rec.join_state;
 }
 
-static int check_selector(ib_sa_comp_mask comp_mask,
-			  ib_sa_comp_mask selector_mask,
-			  ib_sa_comp_mask value_mask,
-			  u8 selector, u8 src_value, u8 dst_value)
-{
-	int err;
-
-	if (!(comp_mask & selector_mask) || !(comp_mask & value_mask))
-		return 0;
-
-	switch (selector) {
-	case IB_SA_GT:
-		err = (src_value <= dst_value);
-		break;
-	case IB_SA_LT:
-		err = (src_value >= dst_value);
-		break;
-	case IB_SA_EQ:
-		err = (src_value != dst_value);
-		break;
-	default:
-		err = 0;
-		break;
-	}
-
-	return err;
-}
-
 static int cmp_rec(struct ib_sa_mcmember_rec *src,
 		   struct ib_sa_mcmember_rec *dst, ib_sa_comp_mask comp_mask)
 {
@@ -288,24 +262,24 @@ static int cmp_rec(struct ib_sa_mcmember_rec *src,
 		return -EINVAL;
 	if (comp_mask & IB_SA_MCMEMBER_REC_MLID && src->mlid != dst->mlid)
 		return -EINVAL;
-	if (check_selector(comp_mask, IB_SA_MCMEMBER_REC_MTU_SELECTOR,
-			   IB_SA_MCMEMBER_REC_MTU, dst->mtu_selector,
-			   src->mtu, dst->mtu))
+	if (ib_sa_check_selector(comp_mask, IB_SA_MCMEMBER_REC_MTU_SELECTOR,
+				 IB_SA_MCMEMBER_REC_MTU, dst->mtu_selector,
+				 src->mtu, dst->mtu))
 		return -EINVAL;
 	if (comp_mask & IB_SA_MCMEMBER_REC_TRAFFIC_CLASS &&
 	    src->traffic_class != dst->traffic_class)
 		return -EINVAL;
 	if (comp_mask & IB_SA_MCMEMBER_REC_PKEY && src->pkey != dst->pkey)
 		return -EINVAL;
-	if (check_selector(comp_mask, IB_SA_MCMEMBER_REC_RATE_SELECTOR,
-			   IB_SA_MCMEMBER_REC_RATE, dst->rate_selector,
-			   src->rate, dst->rate))
+	if (ib_sa_check_selector(comp_mask, IB_SA_MCMEMBER_REC_RATE_SELECTOR,
+				 IB_SA_MCMEMBER_REC_RATE, dst->rate_selector,
+				 src->rate, dst->rate))
 		return -EINVAL;
-	if (check_selector(comp_mask,
-			   IB_SA_MCMEMBER_REC_PACKET_LIFE_TIME_SELECTOR,
-			   IB_SA_MCMEMBER_REC_PACKET_LIFE_TIME,
-			   dst->packet_life_time_selector,
-			   src->packet_life_time, dst->packet_life_time))
+	if (ib_sa_check_selector(comp_mask,
+				 IB_SA_MCMEMBER_REC_PACKET_LIFE_TIME_SELECTOR,
+				 IB_SA_MCMEMBER_REC_PACKET_LIFE_TIME,
+				 dst->packet_life_time_selector,
+				 src->packet_life_time, dst->packet_life_time))
 		return -EINVAL;
 	if (comp_mask & IB_SA_MCMEMBER_REC_SL && src->sl != dst->sl)
 		return -EINVAL;
@@ -350,6 +324,7 @@ static int send_leave(struct mcast_group *group, u8 leave_state)
 
 	rec = group->rec;
 	rec.join_state = leave_state;
+	group->leave_state = leave_state;
 
 	ret = ib_sa_mcmember_rec_query(&sa_client, port->dev->device,
 				       port->port_num, IB_SA_METHOD_DELETE, &rec,
@@ -542,7 +517,11 @@ static void leave_handler(int status, struct ib_sa_mcmember_rec *rec,
 {
 	struct mcast_group *group = context;
 
-	mcast_work_handler(&group->work);
+	if (status && (group->retries > 0) &&
+	    !send_leave(group, group->leave_state))
+		group->retries--;
+	else
+		mcast_work_handler(&group->work);
 }
 
 static struct mcast_group *acquire_group(struct mcast_port *port,
@@ -565,6 +544,7 @@ static struct mcast_group *acquire_group(struct mcast_port *port,
 	if (!group)
 		return NULL;
 
+	group->retries = 3;
 	group->port = port;
 	group->rec.mgid = *mgid;
 	group->pkey_index = MCAST_INVALID_PKEY_INDEX;
@@ -765,6 +745,10 @@ static void mcast_event_handler(struct ib_event_handler *handler,
 	int index;
 
 	dev = container_of(handler, struct mcast_device, event_handler);
+	if (rdma_port_get_link_layer(dev->device, event->element.port_num) !=
+	    IB_LINK_LAYER_INFINIBAND)
+		return;
+
 	index = event->element.port_num - dev->start_port;
 
 	switch (event->event) {
@@ -787,6 +771,7 @@ static void mcast_add_one(struct ib_device *device)
 	struct mcast_device *dev;
 	struct mcast_port *port;
 	int i;
+	int count = 0;
 
 	if (rdma_node_get_transport(device->node_type) != RDMA_TRANSPORT_IB)
 		return;
@@ -804,6 +789,9 @@ static void mcast_add_one(struct ib_device *device)
 	}
 
 	for (i = 0; i <= dev->end_port - dev->start_port; i++) {
+		if (rdma_port_get_link_layer(device, dev->start_port + i) !=
+		    IB_LINK_LAYER_INFINIBAND)
+			continue;
 		port = &dev->port[i];
 		port->dev = dev;
 		port->port_num = dev->start_port + i;
@@ -811,6 +799,12 @@ static void mcast_add_one(struct ib_device *device)
 		port->table = RB_ROOT;
 		init_completion(&port->comp);
 		atomic_set(&port->refcount, 1);
+		++count;
+	}
+
+	if (!count) {
+		kfree(dev);
+		return;
 	}
 
 	dev->device = device;
@@ -834,9 +828,12 @@ static void mcast_remove_one(struct ib_device *device)
 	flush_workqueue(mcast_wq);
 
 	for (i = 0; i <= dev->end_port - dev->start_port; i++) {
-		port = &dev->port[i];
-		deref_port(port);
-		wait_for_completion(&port->comp);
+		if (rdma_port_get_link_layer(device, dev->start_port + i) ==
+		    IB_LINK_LAYER_INFINIBAND) {
+			port = &dev->port[i];
+			deref_port(port);
+			wait_for_completion(&port->comp);
+		}
 	}
 
 	kfree(dev);

@@ -980,6 +980,9 @@ static ssize_t __write_ports(struct file *file, char *buf, size_t size)
 					/* Give a reasonable perror msg for
 					 * bad transport string */
 					err = -EPROTONOSUPPORT;
+				if (err >= 0)
+					lockd_up();
+				nfsd_serv->sv_nrthreads--;
 			}
 			return err < 0 ? err : 0;
 		}
@@ -1002,6 +1005,7 @@ static ssize_t __write_ports(struct file *file, char *buf, size_t size)
 					svc_close_xprt(xprt);
 					svc_xprt_put(xprt);
 					err = 0;
+					lockd_down();
 				} else
 					err = -ENOTCONN;
 			}

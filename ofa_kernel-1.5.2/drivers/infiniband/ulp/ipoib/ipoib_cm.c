@@ -754,6 +754,8 @@ void ipoib_cm_send(struct net_device *dev, struct sk_buff *skb, struct ipoib_cm_
 		if (++priv->tx_outstanding == ipoib_sendq_size) {
 			ipoib_dbg(priv, "TX ring 0x%x full, stopping kernel net queue\n",
 				  tx->qp->qp_num);
+			if (ib_req_notify_cq(priv->send_cq, IB_CQ_NEXT_COMP))
+				ipoib_warn(priv, "request notify on send CQ failed\n");
 			netif_stop_queue(dev);
 		}
 	}
@@ -1463,8 +1465,13 @@ static ssize_t set_mode(struct device *d, struct device_attribute *attr,
 
 		rtnl_lock();
 		dev->features &= ~(NETIF_F_IP_CSUM | NETIF_F_SG | NETIF_F_TSO);
-		rtnl_unlock();
 		priv->tx_wr.send_flags &= ~IB_SEND_IP_CSUM;
+
+		if (ipoib_cm_max_mtu(dev) > priv->mcast_mtu)
+			ipoib_warn(priv, "mtu > %d will cause multicast packet drops.\n",
+				   priv->mcast_mtu);
+		dev_set_mtu(dev, ipoib_cm_max_mtu(dev));
+		rtnl_unlock();
 
 		ipoib_flush_paths(dev);
 		return count;

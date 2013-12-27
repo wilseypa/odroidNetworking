@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006 - 2009 Intel-NE, Inc.  All rights reserved.
+ * Copyright (c) 2006 - 2009 Intel Corporation.  All rights reserved.
  * Copyright (c) 2005 Open Grid Computing, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -59,6 +59,8 @@
 #include <linux/route.h>
 #include <net/ip_fib.h>
 
+#include "nes_ud.h"
+
 MODULE_AUTHOR("NetEffect");
 MODULE_DESCRIPTION("NetEffect RNIC Low-level iWARP Driver");
 MODULE_LICENSE("Dual BSD/GPL");
@@ -83,7 +85,7 @@ module_param(send_first, int, 0644);
 MODULE_PARM_DESC(send_first, "Send RDMA Message First on Active Connection");
 
 
-unsigned int nes_drv_opt = 0;
+unsigned int nes_drv_opt = NES_DRV_OPT_DISABLE_INT_MOD;
 module_param(nes_drv_opt, int, 0644);
 MODULE_PARM_DESC(nes_drv_opt, "Driver option parameters");
 
@@ -110,6 +112,7 @@ static unsigned int sysfs_idx_addr;
 
 static struct pci_device_id nes_pci_table[] = {
 	{PCI_VENDOR_ID_NETEFFECT, PCI_DEVICE_ID_NETEFFECT_NE020, PCI_ANY_ID, PCI_ANY_ID},
+	{PCI_VENDOR_ID_NETEFFECT, PCI_DEVICE_ID_NETEFFECT_NE020_KR, PCI_ANY_ID, PCI_ANY_ID},
 	{0}
 };
 
@@ -349,15 +352,6 @@ struct ib_qp *nes_get_qp(struct ib_device *device, int qpn)
 	return &nesadapter->qp_table[qpn - NES_FIRST_QPN]->ibqp;
 }
 
-
-/**
- * nes_print_macaddr
- */
-static void nes_print_macaddr(struct net_device *netdev)
-{
-	nes_debug(NES_DBG_INIT, "%s: %pM, IRQ %u\n",
-		  netdev->name, netdev->dev_addr, netdev->irq);
-}
 
 /**
  * nes_interrupt - handle interrupts
@@ -673,7 +667,6 @@ static int __devinit nes_probe(struct pci_dev *pcidev, const struct pci_device_i
 			goto bail7;
 		}
 
-		nes_print_macaddr(netdev);
 		/* create a CM core for this netdev */
 		nesvnic = netdev_priv(netdev);
 
@@ -1202,6 +1195,7 @@ static int __init nes_init_module(void)
 		if (retval1 < 0)
 			printk(KERN_ERR PFX "Unable to create NetEffect sys files.\n");
 	}
+	nes_ud_init();
 	return retval;
 }
 
@@ -1211,6 +1205,7 @@ static int __init nes_init_module(void)
  */
 static void __exit nes_exit_module(void)
 {
+	nes_ud_exit();
 	nes_cm_stop();
 	nes_remove_driver_sysfs(&nes_pci_driver);
 

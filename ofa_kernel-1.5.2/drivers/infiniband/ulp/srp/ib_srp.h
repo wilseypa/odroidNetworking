@@ -49,6 +49,7 @@
 enum {
 	SRP_PATH_REC_TIMEOUT_MS	= 1000,
 	SRP_ABORT_TIMEOUT_MS	= 5000,
+	SRP_CONN_ERR_TIMEOUT	= 30,
 
 	SRP_PORT_REDIRECT	= 1,
 	SRP_DLID_REDIRECT	= 2,
@@ -86,8 +87,10 @@ enum srp_request_type {
 struct srp_device {
 	struct list_head	dev_list;
 	struct ib_device       *dev;
+	spinlock_t		dev_lock;
 	struct ib_pd	       *pd;
 	struct ib_mr	       *mr;
+	struct ib_event_handler	event_handler;
 	struct ib_fmr_pool     *fmr_pool;
 	int			fmr_page_shift;
 	int			fmr_page_size;
@@ -153,12 +156,14 @@ struct srp_target_port {
 	struct srp_request	req_ring[SRP_SQ_SIZE];
 
 	struct work_struct	work;
+	int			work_in_progress;
 
 	struct list_head	list;
 	struct completion	done;
 	int			status;
 	enum srp_target_state	state;
 	int			qp_in_error;
+	struct timer_list	qp_err_timer;
 };
 
 struct srp_iu {

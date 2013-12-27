@@ -247,12 +247,18 @@ struct adapter {
 	struct work_struct ext_intr_handler_task;
 	struct work_struct fatal_error_handler_task;
 	struct work_struct link_fault_handler_task;
+	
+	struct work_struct db_full_task;
+	struct work_struct db_empty_task;
+	struct work_struct db_drop_task;
 
 	struct dentry *debugfs_root;
 
 	struct mutex mdio_lock;
 	spinlock_t stats_lock;
 	spinlock_t work_lock;
+
+	struct sk_buff *nofail_skb;
 };
 
 static inline u32 t3_read_reg(struct adapter *adapter, u32 reg_addr)
@@ -272,6 +278,14 @@ static inline void t3_write_reg(struct adapter *adapter, u32 reg_addr, u32 val)
 static inline struct port_info *adap2pinfo(struct adapter *adap, int idx)
 {
 	return netdev_priv(adap->port[idx]);
+}
+
+static inline int phy2portid(struct cphy *phy)
+{
+	struct adapter *adap = phy->adapter;
+	struct port_info *port0 = adap2pinfo(adap, 0);
+
+	return &port0->phy == phy ? 0 : 1;
 }
 
 #define OFFLOAD_DEVMAP_BIT 15
@@ -309,5 +323,6 @@ int t3_sge_alloc_qset(struct adapter *adapter, unsigned int id, int nports,
 int t3_get_desc(const struct sge_qset *qs, unsigned int qnum, unsigned int idx,
 		unsigned char *data);
 irqreturn_t t3_sge_intr_msix(int irq, void *cookie);
+extern struct workqueue_struct *cxgb3_wq;
 
 #endif				/* __T3_ADAPTER_H__ */

@@ -644,6 +644,25 @@ void ipoib_reap_ah(struct work_struct *work)
 				   round_jiffies_relative(HZ));
 }
 
+static void ipoib_ah_dev_cleanup(struct net_device *dev)
+{
+	struct ipoib_dev_priv *priv = netdev_priv(dev);
+	unsigned long begin;
+
+	begin = jiffies;
+
+	while (!list_empty(&priv->dead_ahs)) {
+		__ipoib_reap_ah(dev);
+
+		if (time_after(jiffies, begin + HZ)) {
+			ipoib_warn(priv, "timing out; will leak address handles\n");
+			break;
+		}
+
+		msleep(1);
+	}
+}
+
 static void ipoib_ib_tx_timer_func(unsigned long ctx)
 {
 	drain_tx_cq((struct net_device *)ctx);
@@ -873,18 +892,7 @@ timeout:
 	if (flush)
 		flush_workqueue(ipoib_workqueue);
 
-	begin = jiffies;
-
-	while (!list_empty(&priv->dead_ahs)) {
-		__ipoib_reap_ah(dev);
-
-		if (time_after(jiffies, begin + HZ)) {
-			ipoib_warn(priv, "timing out; will leak address handles\n");
-			break;
-		}
-
-		msleep(1);
-	}
+	ipoib_ah_dev_cleanup(dev);
 
 	ib_req_notify_cq(priv->recv_cq, IB_CQ_NEXT_COMP);
 
@@ -1020,6 +1028,7 @@ void ipoib_ib_dev_cleanup(struct net_device *dev)
 	ipoib_mcast_stop_thread(dev, 1);
 	ipoib_mcast_dev_flush(dev);
 
+	ipoib_ah_dev_cleanup(dev);
 	ipoib_transport_dev_cleanup(dev);
 }
 

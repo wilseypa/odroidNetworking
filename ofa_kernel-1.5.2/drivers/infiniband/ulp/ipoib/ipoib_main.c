@@ -204,6 +204,8 @@ static int ipoib_change_mtu(struct net_device *dev, int new_mtu)
 
 	dev->mtu = min(priv->mcast_mtu, priv->admin_mtu);
 
+	queue_work(ipoib_workqueue, &priv->flush_light);
+
 	return 0;
 }
 
@@ -527,15 +529,41 @@ static int path_rec_start(struct net_device *dev,
 			  struct ipoib_path *path)
 {
 	struct ipoib_dev_priv *priv = netdev_priv(dev);
+	ib_sa_comp_mask comp_mask = IB_SA_PATH_REC_MTU_SELECTOR | IB_SA_PATH_REC_MTU;
+	struct ib_sa_path_rec p_rec;
 
-	ipoib_dbg(priv, "Start path record lookup for %pI6\n",
-		  path->pathrec.dgid.raw);
+	p_rec = path->pathrec;
+	p_rec.mtu_selector = IB_SA_GT;
+
+	switch (roundup_pow_of_two(dev->mtu + IPOIB_ENCAP_LEN)) {
+	case 512:
+		p_rec.mtu = IB_MTU_256;
+		break;
+	case 1024:
+		p_rec.mtu = IB_MTU_512;
+		break;
+	case 2048:
+		p_rec.mtu = IB_MTU_1024;
+		break;
+	case 4096:
+		p_rec.mtu = IB_MTU_2048;
+		break;
+	default:
+		/* Wildcard everything */
+		comp_mask = 0;
+		p_rec.mtu = 0;
+		p_rec.mtu_selector = 0;
+	}
+
+	ipoib_dbg(priv, "Start path record lookup for %pI6 MTU > %d\n",
+		  p_rec.dgid.raw,
+		  comp_mask ? ib_mtu_enum_to_int(p_rec.mtu) : 0);
 
 	init_completion(&path->done);
 
 	path->query_id =
 		ib_sa_path_rec_get(&ipoib_sa_client, priv->ca, priv->port,
-				   &path->pathrec,
+				   &p_rec, comp_mask		|
 				   IB_SA_PATH_REC_DGID		|
 				   IB_SA_PATH_REC_SGID		|
 				   IB_SA_PATH_REC_NUMB_PATH	|
@@ -845,6 +873,9 @@ static void ipoib_neigh_cleanup(struct neighbour *n)
 	unsigned long flags;
 	struct ipoib_ah *ah = NULL;
 
+	if (n->dev->type != ARPHRD_INFINIBAND)
+		return;
+
 	neigh = *to_ipoib_neigh(n);
 	if (neigh)
 		priv = netdev_priv(neigh->dev);
@@ -879,6 +910,7 @@ struct ipoib_neigh *ipoib_neigh_alloc(struct neighbour *neighbour,
 
 	neigh->neighbour = neighbour;
 	neigh->dev = dev;
+	memset(&neigh->dgid.raw, 0, sizeof (union ib_gid));
 	*to_ipoib_neigh(neighbour) = neigh;
 	skb_queue_head_init(&neigh->queue);
 	ipoib_cm_set(neigh, NULL);
@@ -1233,6 +1265,7 @@ static struct net_device *ipoib_add_port(const char *format,
 		goto alloc_mem_failed;
 
 	SET_NETDEV_DEV(priv->dev, hca->dma_device);
+	priv->dev->dev_id = port - 1;
 
 	if (!ib_query_port(hca, port, &attr))
 		priv->max_ib_mtu = ib_mtu_enum_to_int(attr.max_mtu);
@@ -1355,6 +1388,8 @@ static void ipoib_add_one(struct ib_device *device)
 	}
 
 	for (p = s; p <= e; ++p) {
+		if (rdma_port_get_link_layer(device, p) != IB_LINK_LAYER_INFINIBAND)
+			continue;
 		dev = ipoib_add_port("ib%d", device, p);
 		if (!IS_ERR(dev)) {
 			priv = netdev_priv(dev);
@@ -1376,6 +1411,9 @@ static void ipoib_remove_one(struct ib_device *device)
 	dev_list = ib_get_client_data(device, &ipoib_client);
 
 	list_for_each_entry_safe(priv, tmp, dev_list, list) {
+		if (rdma_port_get_link_layer(device, priv->port) != IB_LINK_LAYER_INFINIBAND)
+			continue;
+
 		ib_unregister_event_handler(&priv->event_handler);
 
 		rtnl_lock();
