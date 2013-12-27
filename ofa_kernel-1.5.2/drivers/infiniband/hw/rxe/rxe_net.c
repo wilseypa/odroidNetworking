@@ -120,7 +120,7 @@ static int mcast_add(struct rxe_dev *rxe, union ib_gid *mgid)
 	unsigned char ll_addr[ETH_ALEN];
 
 	ipv6_eth_mc_map((struct in6_addr *)mgid->raw, ll_addr);
-	err = dev_mc_add(rxe->ndev, ll_addr, ETH_ALEN, 0);
+	err = dev_mc_add(rxe->ndev, ll_addr);
 
 	return err;
 }
@@ -131,7 +131,7 @@ static int mcast_delete(struct rxe_dev *rxe, union ib_gid *mgid)
 	unsigned char ll_addr[ETH_ALEN];
 
 	ipv6_eth_mc_map((struct in6_addr *)mgid->raw, ll_addr);
-	err = dev_mc_delete(rxe->ndev, ll_addr, ETH_ALEN, 0);
+	err = dev_mc_del(rxe->ndev, ll_addr);
 
 	return err;
 }
