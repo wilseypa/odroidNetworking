@@ -35,6 +35,7 @@
  */
 #include <linux/dma-mapping.h>
 #include <rdma/ib_cache.h>
+#include <linux/slab.h>
 
 #include "mad_priv.h"
 #include "mad_rmpp.h"
