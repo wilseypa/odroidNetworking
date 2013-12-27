@@ -45,6 +45,7 @@
 #include <linux/cdev.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
+#include <linux/anon_inodes.h>
 
 #include <asm/uaccess.h>
 
@@ -558,14 +559,21 @@ struct file *ib_uverbs_alloc_event_file(struct ib_uverbs_file *uverbs_file,
 	 * system call on a uverbs file, which will already have a
 	 * module reference.
 	 */
-	filp = alloc_file(uverbs_event_mnt, dget(uverbs_event_mnt->mnt_root),
-			  FMODE_READ, fops_get(&uverbs_event_fops));
-	if (!filp) {
-		ret = -ENFILE;
-		goto err_fd;
-	}
+	/* filp = alloc_file(uverbs_event_mnt, dget(uverbs_event_mnt->mnt_root), */
+	/* 		  FMODE_READ, fops_get(&uverbs_event_fops)); */
+	/* if (!filp) { */
+	/* 	ret = -ENFILE; */
+	/* 	goto err_fd; */
+	/* } */
 
-	filp->private_data = ev_file;
+	/* filp->private_data = ev_file; */
+
+        filp = anon_inode_getfile("[infinibandevent]", &uverbs_event_fops,
+				  ev_file, O_RDONLY);
+	if (IS_ERR(filp)) {
+          ret = filp;
+          goto err;
+        }
 
 	return filp;
 
@@ -857,20 +865,27 @@ static void ib_uverbs_remove_one(struct ib_device *device)
 	kfree(uverbs_dev);
 }
 
-static int uverbs_event_get_sb(struct file_system_type *fs_type, int flags,
-			       const char *dev_name, void *data,
-			       struct vfsmount *mnt)
-{
-	return get_sb_pseudo(fs_type, "infinibandevent:", NULL,
-			     INFINIBANDEVENTFS_MAGIC, mnt);
-}
+/* static int uverbs_event_get_sb(struct file_system_type *fs_type, int flags, */
+/* 			       const char *dev_name, void *data, */
+/* 			       struct vfsmount *mnt) */
+/* { */
+/* 	return get_sb_pseudo(fs_type, "infinibandevent:", NULL, */
+/* 			     INFINIBANDEVENTFS_MAGIC, mnt); */
+/* } */
 
-static struct file_system_type uverbs_event_fs = {
-	/* No owner field so module can be unloaded */
-	.name    = "infinibandeventfs",
-	.get_sb  = uverbs_event_get_sb,
-	.kill_sb = kill_litter_super
-};
+/* static struct file_system_type uverbs_event_fs = { */
+/* 	/\* No owner field so module can be unloaded *\/ */
+/* 	.name    = "infinibandeventfs", */
+/* 	.get_sb  = uverbs_event_get_sb, */
+/* 	.kill_sb = kill_litter_super */
+/* }; */
+
+static char *uverbs_devnode(struct device *dev, mode_t *mode)
+{
+	if (mode)
+		*mode = 0666;
+	return kasprintf(GFP_KERNEL, "infiniband/%s", dev_name(dev));
+}
 
 static int __init ib_uverbs_init(void)
 {
@@ -892,24 +907,26 @@ static int __init ib_uverbs_init(void)
 		goto out_chrdev;
 	}
 
+        uverbs_class->devnode = uverbs_devnode;
+
 	ret = class_create_file(uverbs_class, &class_attr_abi_version);
 	if (ret) {
 		printk(KERN_ERR "user_verbs: couldn't create abi_version attribute\n");
 		goto out_class;
 	}
 
-	ret = register_filesystem(&uverbs_event_fs);
-	if (ret) {
-		printk(KERN_ERR "user_verbs: couldn't register infinibandeventfs\n");
-		goto out_class;
-	}
+	/* ret = register_filesystem(&uverbs_event_fs); */
+	/* if (ret) { */
+	/* 	printk(KERN_ERR "user_verbs: couldn't register infinibandeventfs\n"); */
+	/* 	goto out_class; */
+	/* } */
 
-	uverbs_event_mnt = kern_mount(&uverbs_event_fs);
-	if (IS_ERR(uverbs_event_mnt)) {
-		ret = PTR_ERR(uverbs_event_mnt);
-		printk(KERN_ERR "user_verbs: couldn't mount infinibandeventfs\n");
-		goto out_fs;
-	}
+	/* uverbs_event_mnt = kern_mount(&uverbs_event_fs); */
+	/* if (IS_ERR(uverbs_event_mnt)) { */
+	/* 	ret = PTR_ERR(uverbs_event_mnt); */
+	/* 	printk(KERN_ERR "user_verbs: couldn't mount infinibandeventfs\n"); */
+	/* 	goto out_fs; */
+	/* } */
 
 	ret = ib_register_client(&uverbs_client);
 	if (ret) {
@@ -922,8 +939,8 @@ static int __init ib_uverbs_init(void)
 out_mnt:
 	mntput(uverbs_event_mnt);
 
-out_fs:
-	unregister_filesystem(&uverbs_event_fs);
+/* out_fs: */
+/* 	unregister_filesystem(&uverbs_event_fs); */
 
 out_class:
 	class_destroy(uverbs_class);
@@ -939,7 +956,7 @@ static void __exit ib_uverbs_cleanup(void)
 {
 	ib_unregister_client(&uverbs_client);
 	mntput(uverbs_event_mnt);
-	unregister_filesystem(&uverbs_event_fs);
+	/* unregister_filesystem(&uverbs_event_fs); */
 	class_destroy(uverbs_class);
 	unregister_chrdev_region(IB_UVERBS_BASE_DEV, IB_UVERBS_MAX_DEVICES);
 	idr_destroy(&ib_uverbs_pd_idr);

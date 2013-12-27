@@ -38,6 +38,7 @@
 #include <linux/in.h>
 #include <linux/in6.h>
 #include <linux/miscdevice.h>
+#include <linux/sched.h>
 
 #include <rdma/rdma_user_cm.h>
 #include <rdma/ib_marshall.h>
