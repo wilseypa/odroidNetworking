@@ -782,7 +782,7 @@ int ib_device_register_sysfs(struct ib_device *device)
 	int i;
 
 	class_dev->class      = &ib_class;
-	class_dev->driver_data = device;
+	dev_set_drvdata(class_dev, dev_get_drvdata((const struct device*) device));
 	class_dev->parent     = device->dma_device;
 	dev_set_name(class_dev, device->name);
 
