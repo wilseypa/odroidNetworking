@@ -39,6 +39,7 @@
 #include <linux/pci.h>
 #include <linux/miscdevice.h>
 #include <linux/random.h>
+#include <linux/slab.h>
 
 #include <rdma/ib_cache.h>
 #include <rdma/ib_sa.h>

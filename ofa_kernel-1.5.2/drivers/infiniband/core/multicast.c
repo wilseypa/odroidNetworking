@@ -36,6 +36,7 @@
 #include <linux/interrupt.h>
 #include <linux/bitops.h>
 #include <linux/random.h>
+#include <linux/slab.h>
 
 #include <rdma/ib_cache.h>
 #include "sa.h"

@@ -37,6 +37,7 @@
 #include <linux/pci.h>
 #include <linux/bitops.h>
 #include <linux/random.h>
+#include <linux/slab.h>
 
 #include "sa.h"
 
