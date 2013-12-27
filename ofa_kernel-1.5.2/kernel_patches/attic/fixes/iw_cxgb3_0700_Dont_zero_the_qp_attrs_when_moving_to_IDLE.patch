@@ -1,0 +1,27 @@
+RDMA/cxgb3: Don't zero the qp attrs when moving to IDLE.
+
+From: Steve Wise <swise@opengridcomputing.com>
+
+QP attributes must stay initialized when moving back to IDLE. Zeroing
+them will crash the system in _flush_qp() if the QP is subsequently
+moved to ERROR and back to IDLE.
+
+Signed-off-by: Steve Wise <swise@opengridcomputing.com>
+---
+
+ drivers/infiniband/hw/cxgb3/iwch_qp.c |    1 -
+ 1 files changed, 0 insertions(+), 1 deletions(-)
+
+
+diff --git a/drivers/infiniband/hw/cxgb3/iwch_qp.c b/drivers/infiniband/hw/cxgb3/iwch_qp.c
+index 2f546a6..27bbdc8 100644
+--- a/drivers/infiniband/hw/cxgb3/iwch_qp.c
++++ b/drivers/infiniband/hw/cxgb3/iwch_qp.c
+@@ -1069,7 +1069,6 @@ int iwch_modify_qp(struct iwch_dev *rhp, struct iwch_qp *qhp,
+ 			goto out;
+ 		}
+ 		qhp->attr.state = IWCH_QP_STATE_IDLE;
+-		memset(&qhp->attr, 0, sizeof(qhp->attr));
+ 		break;
+ 	case IWCH_QP_STATE_TERMINATE:
+ 		if (!internal) {

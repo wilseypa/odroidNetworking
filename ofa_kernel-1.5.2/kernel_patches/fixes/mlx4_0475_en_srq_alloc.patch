@@ -1,0 +1,45 @@
+From 30f9a66996fb7b5d05804893d2e72e890a495a97 Mon Sep 17 00:00:00 2001
+From: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+Date: Thu, 25 Jun 2009 16:55:57 +0300
+Subject: [PATCH] mlx4_en: fix mlx4_srq_alloc() by adding new xrc params.
+
+Signed-off-by: Jack Morgenstein <jackm@dev.mellanox.co.il>
+---
+ drivers/net/mlx4/en_rx.c |    7 ++++++-
+ 1 files changed, 6 insertions(+), 1 deletions(-)
+
+diff --git a/drivers/net/mlx4/en_rx.c b/drivers/net/mlx4/en_rx.c
+index 74eff78..0c06332 100644
+--- a/drivers/net/mlx4/en_rx.c
++++ b/drivers/net/mlx4/en_rx.c
+@@ -486,7 +486,8 @@ int mlx4_en_activate_rx_rings(struct mlx4_en_priv *priv)
+ 			cpu_to_be16((i + 1) & (ring->srq.max - 1));
+ 		}
+ 
+-		err = mlx4_srq_alloc(mdev->dev, mdev->priv_pdn, &ring->wqres.mtt,
++		err = mlx4_srq_alloc(mdev->dev, mdev->priv_pdn, ring->cqn,
++				     mdev->dev->caps.reserved_xrcds, &ring->wqres.mtt,
+ 				     ring->wqres.db.dma, &ring->srq);
+ 		if (err){
+ 			en_err(priv, "Failed to allocate srq\n");
+@@ -501,6 +502,8 @@ int mlx4_en_activate_rx_rings(struct mlx4_en_priv *priv)
+ err_srq:
+ 	while (ring_ind >= 0) {
+ 		ring = &priv->rx_ring[ring_ind];
++		mlx4_srq_invalidate(mdev->dev, &ring->srq);
++		mlx4_srq_remove(mdev->dev, &ring->srq);
+ 		mlx4_srq_free(mdev->dev, &ring->srq);
+ 		ring_ind--;
+ 	}
+@@ -535,6 +538,8 @@ void mlx4_en_deactivate_rx_ring(struct mlx4_en_priv *priv,
+ {
+ 	struct mlx4_en_dev *mdev = priv->mdev;
+ 
++	mlx4_srq_invalidate(mdev->dev, &ring->srq);
++	mlx4_srq_remove(mdev->dev, &ring->srq);
+ 	mlx4_srq_free(mdev->dev, &ring->srq);
+ 	mlx4_en_free_rx_buf(priv, ring);
+ 	if (ring->use_frags)
+-- 
+1.6.3
+

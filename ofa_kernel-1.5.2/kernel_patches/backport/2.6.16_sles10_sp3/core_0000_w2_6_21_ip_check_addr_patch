@@ -1,0 +1,23 @@
+Backport patches for rdma cm patches
+
+Backport patch for ipv6_chk_addr() for kernel 2.6.21 and earlier.
+
+Signed-of-by: David Wilder <dwilder@us.ibm.com>
+---
+diff -Naurp ofa_kernel.orig/drivers/infiniband/core/addr.c ofa_kernel/drivers/infiniband/core/addr.c
+--- ofa_kernel.orig/drivers/infiniband/core/addr.c	2009-12-07 15:42:33.000000000 -0600
++++ ofa_kernel/drivers/infiniband/core/addr.c	2009-12-07 15:57:24.000000000 -0600
+@@ -129,9 +129,8 @@ int rdma_translate_ip(struct sockaddr *a
+ #if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
+ 	case AF_INET6:
+ 		read_lock(&dev_base_lock);
+-		for_each_netdev(&init_net, dev) {
+-			if (ipv6_chk_addr(&init_net,
+-					  &((struct sockaddr_in6 *) addr)->sin6_addr,
++		for (dev = dev_base; dev; dev = dev->next) {
++			if (ipv6_chk_addr(&((struct sockaddr_in6 *) addr)->sin6_addr,
+ 					  dev, 1)) {
+ 				ret = rdma_copy_addr(dev_addr, dev, NULL);
+ 				break;
+
+

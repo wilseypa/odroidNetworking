@@ -1,0 +1,29 @@
+RDMA CM: Correct detection of SA Created MGID
+
+RDMA CM treats AF_INET6 addresses that are either 0 or prefixed with
+FF1x:A01B::/32 as MGIDs, but the detection for the prefix was buggy,
+fix it up.
+
+Signed-off-by: Jason Gunthorpe <jgunthorpe@obsidianresearch.com>
+Signed-off-by: Sean Hefty <sean.hefty@intel.com>
+
+Ported to OFED-1.5-rc3
+
+Signed-of-by: David Wilder <dwilder@us.ibm.com>
+---
+ drivers/infiniband/core/cma.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/drivers/infiniband/core/cma.c b/drivers/infiniband/core/cma.c
+index a425566..ab493f7 100644
+--- a/drivers/infiniband/core/cma.c
++++ b/drivers/infiniband/core/cma.c
+@@ -2741,7 +2741,7 @@ static void cma_set_mgid(struct rdma_id_private *id_priv,
+ 	if (cma_any_addr(addr)) {
+ 		memset(mgid, 0, sizeof *mgid);
+ 	} else if ((addr->sa_family == AF_INET6) &&
+-		   ((be32_to_cpu(sin6->sin6_addr.s6_addr32[0]) & 0xFF10A01B) ==
++		   ((be32_to_cpu(sin6->sin6_addr.s6_addr32[0]) & 0xFFF0FFFF) ==
+ 								 0xFF10A01B)) {
+ 		/* IPv6 address is an SA assigned MGID. */
+ 		memcpy(mgid, &sin6->sin6_addr, sizeof *mgid);

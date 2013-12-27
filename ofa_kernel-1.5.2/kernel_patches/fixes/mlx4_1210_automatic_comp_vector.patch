@@ -1,0 +1,172 @@
+From 9786515736738d73d6b55eeaf5ce07270c2c77bf Mon Sep 17 00:00:00 2001
+From: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+Date: Tue, 1 Dec 2009 10:26:02 +0200
+Subject: [PATCH] mlx4: Default value for automatic completion vector selection
+
+When the vector number passed to mlx4_cq_alloc is MLX4_LEAST_ATTACHED_VECTOR (0xffffffff),
+the driver selects the completion vector that has the least CQ's attached
+to it and attaches the CQ to the chosen vector.
+IB_CQ_VECTOR_LEAST_ATTACHED is defined in rdma/ib_verbs.h, when mlx4_ib driver,
+recieves this cq vector number, it uses MLX4_LEAST_ATTACHED_VECTOR an CQ creation.
+
+Signed-off-by: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+---
+ drivers/infiniband/hw/mlx4/cq.c |    4 +++-
+ drivers/net/mlx4/cq.c           |   27 +++++++++++++++++++++++----
+ drivers/net/mlx4/en_cq.c        |    2 +-
+ drivers/net/mlx4/mlx4.h         |    1 +
+ include/linux/mlx4/device.h     |    2 ++
+ include/rdma/ib_verbs.h         |   10 +++++++++-
+ 6 files changed, 39 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/infiniband/hw/mlx4/cq.c b/drivers/infiniband/hw/mlx4/cq.c
+index de5263b..63bf2ab 100644
+--- a/drivers/infiniband/hw/mlx4/cq.c
++++ b/drivers/infiniband/hw/mlx4/cq.c
+@@ -222,7 +222,9 @@ struct ib_cq *mlx4_ib_create_cq(struct ib_device *ibdev, int entries, int vector
+ 	}
+ 
+ 	err = mlx4_cq_alloc(dev->dev, entries, &cq->buf.mtt, uar,
+-			    cq->db.dma, &cq->mcq, vector, 0);
++			    cq->db.dma, &cq->mcq,
++			    vector == IB_CQ_VECTOR_LEAST_ATTACHED ?
++			    MLX4_LEAST_ATTACHED_VECTOR : vector, 0);
+ 	if (err)
+ 		goto err_dbmap;
+ 
+diff --git a/drivers/net/mlx4/cq.c b/drivers/net/mlx4/cq.c
+index ac57b6a..d93e0db 100644
+--- a/drivers/net/mlx4/cq.c
++++ b/drivers/net/mlx4/cq.c
+@@ -187,6 +187,22 @@ int mlx4_cq_resize(struct mlx4_dev *dev, struct mlx4_cq *cq,
+ }
+ EXPORT_SYMBOL_GPL(mlx4_cq_resize);
+ 
++static int mlx4_find_least_loaded_vector(struct mlx4_priv *priv)
++{
++	int i;
++	int index = 0;
++	int min = priv->eq_table.eq[0].load;
++
++	for (i = 1; i < priv->dev.caps.num_comp_vectors; i++) {
++		if (priv->eq_table.eq[i].load < min) {
++			index = i;
++			min = priv->eq_table.eq[i].load;
++		}
++	}
++
++	return index;
++}
++
+ int mlx4_cq_alloc(struct mlx4_dev *dev, int nent, struct mlx4_mtt *mtt,
+ 		  struct mlx4_uar *uar, u64 db_rec, struct mlx4_cq *cq,
+ 		  unsigned vector, int collapsed)
+@@ -198,10 +214,11 @@ int mlx4_cq_alloc(struct mlx4_dev *dev, int nent, struct mlx4_mtt *mtt,
+ 	u64 mtt_addr;
+ 	int err;
+ 
+-	if (vector >= dev->caps.num_comp_vectors)
+-		return -EINVAL;
++	cq->vector = (vector == MLX4_LEAST_ATTACHED_VECTOR) ?
++		mlx4_find_least_loaded_vector(priv) : vector;
+ 
+-	cq->vector = vector;
++	if (cq->vector >= dev->caps.num_comp_vectors)
++		return -EINVAL;
+ 
+ 	cq->cqn = mlx4_bitmap_alloc(&cq_table->bitmap);
+ 	if (cq->cqn == -1)
+@@ -232,7 +249,7 @@ int mlx4_cq_alloc(struct mlx4_dev *dev, int nent, struct mlx4_mtt *mtt,
+ 
+ 	cq_context->flags	    = cpu_to_be32(!!collapsed << 18);
+ 	cq_context->logsize_usrpage = cpu_to_be32((ilog2(nent) << 24) | uar->index);
+-	cq_context->comp_eqn	    = priv->eq_table.eq[vector].eqn;
++	cq_context->comp_eqn	    = priv->eq_table.eq[cq->vector].eqn;
+ 	cq_context->log_page_size   = mtt->page_shift - MLX4_ICM_PAGE_SHIFT;
+ 
+ 	mtt_addr = mlx4_mtt_addr(dev, mtt);
+@@ -245,6 +262,7 @@ int mlx4_cq_alloc(struct mlx4_dev *dev, int nent, struct mlx4_mtt *mtt,
+ 	if (err)
+ 		goto err_radix;
+ 
++	priv->eq_table.eq[cq->vector].load++;
+ 	cq->cons_index = 0;
+ 	cq->arm_sn     = 1;
+ 	cq->uar        = uar;
+@@ -282,6 +300,7 @@ void mlx4_cq_free(struct mlx4_dev *dev, struct mlx4_cq *cq)
+ 		mlx4_warn(dev, "HW2SW_CQ failed (%d) for CQN %06x\n", err, cq->cqn);
+ 
+ 	synchronize_irq(priv->eq_table.eq[cq->vector].irq);
++	priv->eq_table.eq[cq->vector].load--;
+ 
+ 	spin_lock_irq(&cq_table->lock);
+ 	radix_tree_delete(&cq_table->tree, cq->cqn);
+diff --git a/drivers/net/mlx4/en_cq.c b/drivers/net/mlx4/en_cq.c
+index a276125..bfdfacc 100644
+--- a/drivers/net/mlx4/en_cq.c
++++ b/drivers/net/mlx4/en_cq.c
+@@ -56,7 +56,7 @@ int mlx4_en_create_cq(struct mlx4_en_priv *priv,
+ 		cq->vector   = ring % mdev->dev->caps.num_comp_vectors;
+ 	} else {
+ 		cq->buf_size = sizeof(struct mlx4_cqe);
+-		cq->vector   = 0;
++		cq->vector   = MLX4_LEAST_ATTACHED_VECTOR;
+ 	}
+ 
+ 	cq->ring = ring;
+diff --git a/drivers/net/mlx4/mlx4.h b/drivers/net/mlx4/mlx4.h
+index 5bd79c2..ac02993 100644
+--- a/drivers/net/mlx4/mlx4.h
++++ b/drivers/net/mlx4/mlx4.h
+@@ -137,6 +137,7 @@ struct mlx4_eq {
+ 	u16			irq;
+ 	u16			have_irq;
+ 	int			nent;
++	int			load;
+ 	struct mlx4_buf_list   *page_list;
+ 	struct mlx4_mtt		mtt;
+ };
+diff --git a/include/linux/mlx4/device.h b/include/linux/mlx4/device.h
+index 3aff8a6..6c52588 100644
+--- a/include/linux/mlx4/device.h
++++ b/include/linux/mlx4/device.h
+@@ -170,6 +170,8 @@ enum {
+ 	MLX4_NUM_FEXCH          = 64 * 1024,
+ };
+ 
++#define MLX4_LEAST_ATTACHED_VECTOR	0xffffffff
++
+ static inline u64 mlx4_fw_ver(u64 major, u64 minor, u64 subminor)
+ {
+ 	return (major << 32) | (minor << 16) | subminor;
+diff --git a/include/rdma/ib_verbs.h b/include/rdma/ib_verbs.h
+index c179318..ec8cb1c 100644
+--- a/include/rdma/ib_verbs.h
++++ b/include/rdma/ib_verbs.h
+@@ -1448,6 +1448,13 @@ static inline int ib_post_recv(struct ib_qp *qp,
+ 	return qp->device->post_recv(qp, recv_wr, bad_recv_wr);
+ }
+ 
++/*
++ * IB_CQ_VECTOR_LEAST_ATTACHED: The constant specifies that
++ *	the CQ will be attached to the completion vector that has
++ *	the least number of CQs already attached to it.
++ */
++#define IB_CQ_VECTOR_LEAST_ATTACHED	0xffffffff
++
+ /**
+  * ib_create_cq - Creates a CQ on the specified device.
+  * @device: The device on which to create the CQ.
+@@ -1459,7 +1466,8 @@ static inline int ib_post_recv(struct ib_qp *qp,
+  *   the associated completion and event handlers.
+  * @cqe: The minimum size of the CQ.
+  * @comp_vector - Completion vector used to signal completion events.
+- *     Must be >= 0 and < context->num_comp_vectors.
++ *     Must be >= 0 and < context->num_comp_vectors
++ *     or IB_CQ_VECTOR_LEAST_ATTACHED.
+  *
+  * Users can examine the cq structure to determine the actual CQ size.
+  */
+-- 
+1.5.3.7
+

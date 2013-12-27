@@ -1,0 +1,29 @@
+commit 39bd2a55c358bc0f5898d6eaed15d603bfed7861
+Author: root <root@almus.(none)>
+Date:   Tue Oct 6 10:51:55 2009 -0700
+
+    iw_cxgb3_0370_queryportpanic.patch
+
+diff --git a/drivers/infiniband/hw/cxgb3/iwch_provider.c b/drivers/infiniband/hw/cxgb3/iwch_provider.c
+index 6895523..03cfaec 100644
+--- a/drivers/infiniband/hw/cxgb3/iwch_provider.c
++++ b/drivers/infiniband/hw/cxgb3/iwch_provider.c
+@@ -1199,11 +1199,14 @@ static int iwch_query_port(struct ib_device *ibdev,
+ 		props->state = IB_PORT_DOWN;
+ 	else {
+ 		inetdev = in_dev_get(netdev);
+-		if (inetdev->ifa_list)
+-			props->state = IB_PORT_ACTIVE;
+-		else
++		if (inetdev) {
++			if (inetdev->ifa_list)
++				props->state = IB_PORT_ACTIVE;
++			else
++				props->state = IB_PORT_INIT;
++			in_dev_put(inetdev);
++		} else
+ 			props->state = IB_PORT_INIT;
+-		in_dev_put(inetdev);
+ 	}
+ 
+ 	props->port_cap_flags =

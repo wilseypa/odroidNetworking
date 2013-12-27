@@ -1,0 +1,29 @@
+Index: ofed_kernel-2.6.9_U7/drivers/infiniband/core/cm.c
+===================================================================
+--- ofed_kernel-2.6.9_U7.orig/drivers/infiniband/core/cm.c	2009-06-10 10:41:23.000000000 +0300
++++ ofed_kernel-2.6.9_U7/drivers/infiniband/core/cm.c	2009-06-10 11:52:37.000000000 +0300
+@@ -3665,8 +3665,13 @@ static struct kobj_type cm_port_obj_type
+ 	.release = cm_release_port_obj
+ };
+ 
++static void cm_release_cm_class_obj(struct class_device *dev)
++{
++}
++
+ struct class cm_class = {
+ 	.name    = "infiniband_cm",
++	.release = cm_release_cm_class_obj,
+ };
+ EXPORT_SYMBOL(cm_class);
+ 
+@@ -3737,8 +3742,8 @@ static void cm_add_one(struct ib_device 
+ 	cm_dev->ib_device = ib_device;
+ 	cm_get_ack_delay(cm_dev);
+ 
+-	cm_dev->device = class_device_create(&cm_class, &ib_device->class_dev,
+-					       MKDEV(0, 0), NULL,
++	cm_dev->device = class_device_create(&cm_class, MKDEV(0, 0),
++					     ib_device->class_dev.dev,
+ 				       "%s", ib_device->name);
+ 	if (!cm_dev->device) {
+ 		kfree(cm_dev);

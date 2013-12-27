@@ -1,0 +1,114 @@
+diff -up a/drivers/infiniband/hw/ipath/ipath_rc.c c/drivers/infiniband/hw/ipath/ipath_rc.c
+--- a/drivers/infiniband/hw/ipath/ipath_rc.c	2009-03-17 17:19:42.000000000 -0700
++++ c/drivers/infiniband/hw/ipath/ipath_rc.c	2009-03-20 11:43:35.000000000 -0700
+@@ -103,6 +103,12 @@ static int ipath_make_rc_ack(struct ipat
+ 	switch (qp->s_ack_state) {
+ 	case OP(RDMA_READ_RESPONSE_LAST):
+ 	case OP(RDMA_READ_RESPONSE_ONLY):
++		e = &qp->s_ack_queue[qp->s_tail_ack_queue];
++		if (e->rdma_sge.mr) {
++			atomic_dec(&e->rdma_sge.mr->refcount);
++			e->rdma_sge.mr = NULL;
++		}
++		/* FALLTHROUGH */
+ 	case OP(ATOMIC_ACKNOWLEDGE):
+ 		/*
+ 		 * We can increment the tail pointer now that the last
+@@ -130,13 +136,15 @@ static int ipath_make_rc_ack(struct ipat
+ 			 * then stop sending the remaining responses the
+ 			 * responder has seen until the requester resends it.
+ 			 */
+-			if (!e->rdma_sge.mr) {
++			if (e->rdma_sge.sge_length && !e->rdma_sge.mr) {
+ 				qp->s_tail_ack_queue = qp->r_head_ack_queue;
+ 				qp->s_ack_state = OP(ACKNOWLEDGE);
+ 				goto bail;
+ 			}
+ 			/* Copy SGE state in case we need to resend */
+ 			qp->s_rdma_mr = e->rdma_sge.mr;
++			if (qp->s_rdma_mr)
++				atomic_inc(&qp->s_rdma_mr->refcount);
+ 			qp->s_ack_rdma_sge.sge = e->rdma_sge;
+ 			qp->s_ack_rdma_sge.num_sge = 1;
+ 			qp->s_cur_sge = &qp->s_ack_rdma_sge;
+@@ -144,11 +152,9 @@ static int ipath_make_rc_ack(struct ipat
+ 			if (len > pmtu) {
+ 				len = pmtu;
+ 				qp->s_ack_state = OP(RDMA_READ_RESPONSE_FIRST);
+-				atomic_inc(&qp->s_rdma_mr->refcount);
+ 			} else {
+ 				qp->s_ack_state = OP(RDMA_READ_RESPONSE_ONLY);
+ 				e->sent = 1;
+-				e->rdma_sge.mr = NULL;
+ 			}
+ 			ohdr->u.aeth = ipath_compute_aeth(qp);
+ 			hwords++;
+@@ -177,17 +183,17 @@ static int ipath_make_rc_ack(struct ipat
+ 	case OP(RDMA_READ_RESPONSE_MIDDLE):
+ 		qp->s_cur_sge = &qp->s_ack_rdma_sge;
+ 		qp->s_rdma_mr = qp->s_ack_rdma_sge.sge.mr;
++		if (qp->s_rdma_mr)
++			atomic_inc(&qp->s_rdma_mr->refcount);
+ 		len = qp->s_ack_rdma_sge.sge.sge_length;
+-		if (len > pmtu) {
++		if (len > pmtu)
+ 			len = pmtu;
+-			atomic_inc(&qp->s_rdma_mr->refcount);
+-		} else {
++		else {
+ 			ohdr->u.aeth = ipath_compute_aeth(qp);
+ 			hwords++;
+ 			qp->s_ack_state = OP(RDMA_READ_RESPONSE_LAST);
+ 			e = &qp->s_ack_queue[qp->s_tail_ack_queue];
+ 			e->sent = 1;
+-			e->rdma_sge.mr = NULL;
+ 		}
+ 		bth0 = qp->s_ack_state << 24;
+ 		bth2 = qp->s_ack_rdma_psn++ & IPATH_PSN_MASK;
+@@ -216,6 +222,7 @@ static int ipath_make_rc_ack(struct ipat
+ 		bth0 = OP(ACKNOWLEDGE) << 24;
+ 		bth2 = qp->s_ack_psn & IPATH_PSN_MASK;
+ 	}
++	qp->s_rdma_ack_cnt++;
+ 	qp->s_hdrwords = hwords;
+ 	qp->s_cur_size = len;
+ 	ipath_make_ruc_header(dev, qp, ohdr, bth0, bth2);
+@@ -670,7 +677,8 @@ static void send_rc_ack(struct ipath_qp 
+ 	/* Don't send ACK or NAK if a RDMA read or atomic is pending. */
+ 	if (qp->r_head_ack_queue != qp->s_tail_ack_queue ||
+ 	    (qp->s_flags & IPATH_S_ACK_PENDING) ||
+-	    qp->s_ack_state != OP(ACKNOWLEDGE))
++	    qp->s_ack_state != OP(ACKNOWLEDGE) ||
++	    qp->s_rdma_ack_cnt)
+ 		goto queue_ack;
+ 
+ 	spin_unlock_irqrestore(&qp->s_lock, flags);
+@@ -935,12 +943,14 @@ void ipath_rc_send_complete(struct ipath
+ 		ohdr = &hdr->u.l.oth;
+ 
+ 	opcode = be32_to_cpu(ohdr->bth[0]) >> 24;
+-	psn = be32_to_cpu(ohdr->bth[2]);
+-
+ 	if (opcode >= OP(RDMA_READ_RESPONSE_FIRST) &&
+-	    opcode <= OP(ATOMIC_ACKNOWLEDGE))
++	    opcode <= OP(ATOMIC_ACKNOWLEDGE)) {
++		WARN_ON(!qp->s_rdma_ack_cnt);
++		qp->s_rdma_ack_cnt--;
+ 		return;
++	}
+ 
++	psn = be32_to_cpu(ohdr->bth[2]);
+ 	reset_sending_psn(qp, psn);
+ 
+ 	while (qp->s_last != qp->s_acked) {
+diff -up a/drivers/infiniband/hw/ipath/ipath_verbs.h c/drivers/infiniband/hw/ipath/ipath_verbs.h
+--- a/drivers/infiniband/hw/ipath/ipath_verbs.h	2009-03-17 17:19:42.000000000 -0700
++++ c/drivers/infiniband/hw/ipath/ipath_verbs.h	2009-03-20 11:38:28.000000000 -0700
+@@ -423,6 +423,7 @@ struct ipath_qp {
+ 	u8 s_dmult;
+ 	u8 s_draining;
+ 	u8 timeout;		/* Timeout for this QP */
++	u16 s_rdma_ack_cnt;
+ 	enum ib_mtu path_mtu;
+ 	u32 remote_qpn;
+ 	u32 qkey;		/* QKEY for this QP (for UD or RD) */

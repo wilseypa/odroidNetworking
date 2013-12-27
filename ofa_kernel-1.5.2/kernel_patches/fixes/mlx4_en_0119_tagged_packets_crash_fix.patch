@@ -1,0 +1,31 @@
+From f403f451358355164207d5f23f683dc9ec2bc70d Mon Sep 17 00:00:00 2001
+From: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+Date: Tue, 15 Dec 2009 13:34:16 +0200
+Subject: [PATCH] mlx4_en: Fix a crash with prioritiesed vlan packets
+
+Ensure that packets are assigned to rings according to
+priorities only when pfcrx is enabled, otherwise, go through
+the "regular" hash mechanism
+
+Signed-off-by: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+---
+ drivers/net/mlx4/en_netdev.c |    3 ++-
+ 1 files changed, 2 insertions(+), 1 deletions(-)
+
+diff --git a/drivers/net/mlx4/en_netdev.c b/drivers/net/mlx4/en_netdev.c
+index 3a90f04..ab6e7f8 100644
+--- a/drivers/net/mlx4/en_netdev.c
++++ b/drivers/net/mlx4/en_netdev.c
+@@ -1029,7 +1029,8 @@ int mlx4_en_init_netdev(struct mlx4_en_dev *mdev, int port,
+ 	priv->allocated = 1;
+ 
+ 	/* Populate Tx priority mappings */
+-	mlx4_en_set_prio_map(priv, priv->tx_prio_map, prof->tx_ring_num);
++	mlx4_en_set_prio_map(priv, priv->tx_prio_map,
++			     prof->tx_ring_num - MLX4_EN_NUM_HASH_RINGS);
+ 
+ 	/*
+ 	 * Initialize netdev entry points
+-- 
+1.5.3.7
+

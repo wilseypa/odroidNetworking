@@ -1,0 +1,49 @@
+IB/ipath - fix the length returned in loopback UD completion queue entries
+
+From: Ralph Campbell <ralph.campbell@qlogic.com>
+
+UD packets sent to the local IB port (loopback) have a zero length
+reported in the send work request completion entry. This fixes it
+by using a copy of the WQE to copy the data.
+
+Signed-off-by: Ralph Campbell <ralph.campbell@qlogic.com>
+---
+
+ drivers/infiniband/hw/ipath/ipath_ud.c |   10 +++++++---
+ 1 files changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/infiniband/hw/ipath/ipath_ud.c b/drivers/infiniband/hw/ipath/ipath_ud.c
+index 729446f..136dc4c 100644
+--- a/drivers/infiniband/hw/ipath/ipath_ud.c
++++ b/drivers/infiniband/hw/ipath/ipath_ud.c
+@@ -54,6 +54,7 @@ static void ipath_ud_loopback(struct ipath_qp *sqp, struct ipath_swqe *swqe)
+ 	unsigned long flags;
+ 	struct ipath_rq *rq;
+ 	struct ipath_srq *srq;
++	struct ipath_sge_state ssge;
+ 	struct ipath_sge_state rsge;
+ 	struct ipath_sge *sge;
+ 	struct ipath_rwq *wq;
+@@ -196,7 +197,10 @@ static void ipath_ud_loopback(struct ipath_qp *sqp, struct ipath_swqe *swqe)
+ 		wc.wc_flags |= IB_WC_GRH;
+ 	} else
+ 		ipath_skip_sge(&rsge, sizeof(struct ib_grh));
+-	sge = swqe->sg_list;
++	ssge.sg_list = swqe->sg_list + 1;
++	ssge.sge = *swqe->sg_list;
++	ssge.num_sge = swqe->wr.num_sge;
++	sge = &ssge.sge;
+ 	while (length) {
+ 		u32 len = sge->length;
+ 
+@@ -210,8 +214,8 @@ static void ipath_ud_loopback(struct ipath_qp *sqp, struct ipath_swqe *swqe)
+ 		sge->length -= len;
+ 		sge->sge_length -= len;
+ 		if (sge->sge_length == 0) {
+-			if (--swqe->wr.num_sge)
+-				sge++;
++			if (--ssge.num_sge)
++				*sge = *ssge.sg_list++;
+ 		} else if (sge->length == 0 && sge->mr != NULL) {
+ 			if (++sge->n >= IPATH_SEGSZ) {
+ 				if (++sge->m >= sge->mr->mapsz)

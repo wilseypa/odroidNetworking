@@ -1,0 +1,32 @@
+[PATCH] mlx4: Fix chunk sg list overflow in mlx4_alloc_icm()
+
+  If the number of sg entries in the ICM chunk reaches MLX4_ICM_CHUNK_LEN,
+we must set chunk = NULL __even__ for coherent mappings (as is done for
+mthca). Otherwise we may overflow the sg list.
+
+Signed-off-by: Sebastien Dugue <sebastien.dugue@bull.net>
+---
+ drivers/net/mlx4/icm.c |    3 ++-
+ 1 files changed, 2 insertions(+), 1 deletions(-)
+
+diff --git a/drivers/net/mlx4/icm.c b/drivers/net/mlx4/icm.c
+index 57288ca..ef62f17 100644
+--- a/drivers/net/mlx4/icm.c
++++ b/drivers/net/mlx4/icm.c
+@@ -175,9 +175,10 @@ struct mlx4_icm *mlx4_alloc_icm(struct mlx4_dev *dev, int npages,
+ 
+ 				if (chunk->nsg <= 0)
+ 					goto fail;
++			}
+ 
++			if (chunk->npages == MLX4_ICM_CHUNK_LEN)
+ 				chunk = NULL;
+-			}
+ 
+ 			npages -= 1 << cur_order;
+ 		} else {
+-- 
+1.6.0.4
+
+--
+

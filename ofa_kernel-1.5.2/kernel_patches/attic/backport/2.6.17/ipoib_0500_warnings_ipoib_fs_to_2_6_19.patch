@@ -1,0 +1,26 @@
+---
+ drivers/infiniband/ulp/ipoib/ipoib_fs.c |    4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+Index: ofa_kernel-1.4/drivers/infiniband/ulp/ipoib/ipoib_fs.c
+===================================================================
+--- ofa_kernel-1.4.orig/drivers/infiniband/ulp/ipoib/ipoib_fs.c
++++ ofa_kernel-1.4/drivers/infiniband/ulp/ipoib/ipoib_fs.c
+@@ -134,7 +134,7 @@ static int ipoib_mcg_open(struct inode *
+ 	struct seq_file *seq;
+ 	int ret;
+ 
+-	ret = seq_open(file, &ipoib_mcg_seq_ops);
++	ret = seq_open(file, (struct seq_operations *) &ipoib_mcg_seq_ops);
+ 	if (ret)
+ 		return ret;
+ 
+@@ -240,7 +240,7 @@ static int ipoib_path_open(struct inode 
+ 	struct seq_file *seq;
+ 	int ret;
+ 
+-	ret = seq_open(file, &ipoib_path_seq_ops);
++	ret = seq_open(file, (struct seq_operations *) &ipoib_path_seq_ops);
+ 	if (ret)
+ 		return ret;
+ 

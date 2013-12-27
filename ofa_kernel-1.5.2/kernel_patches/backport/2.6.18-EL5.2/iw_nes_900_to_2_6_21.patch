@@ -1,0 +1,23 @@
+diff -Nurp linux-2.6/drivers/infiniband/hw/nes/nes_nic.c nes.2_6_21_patch/drivers/infiniband/hw/nes/nes_nic.c
+--- linux-2.6/drivers/infiniband/hw/nes/nes_nic.c	2010-05-10 16:43:23.239012000 +0200
++++ nes.2_6_21_patch/drivers/infiniband/hw/nes/nes_nic.c	2010-05-10 11:21:30.011485000 +0200
+@@ -1589,6 +1589,11 @@ static void nes_netdev_vlan_rx_register(
+ 	spin_unlock_irqrestore(&nesadapter->phy_lock, flags);
+ }
+ 
++static void nes_netdev_vlan_rx_kill_vid(struct net_device *netdev,
++					unsigned short vid)
++{
++}
++
+ 
+ /**
+  * nes_netdev_init - initialize network device
+@@ -1637,6 +1642,7 @@ struct net_device *nes_netdev_init(struc
+ 	nes_debug(NES_DBG_INIT, "Enabling VLAN Insert/Delete.\n");
+ 	netdev->features |= NETIF_F_HW_VLAN_TX | NETIF_F_HW_VLAN_RX;
+ 	netdev->vlan_rx_register = nes_netdev_vlan_rx_register;
++	netdev->vlan_rx_kill_vid = nes_netdev_vlan_rx_kill_vid;
+ 
+ 	/* Fill in the port structure */
+ 	nesvnic->netdev = netdev;

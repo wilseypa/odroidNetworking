@@ -1,0 +1,39 @@
+From d1ce43e0816c97970d28fe139538b20ddad1186a Mon Sep 17 00:00:00 2001
+From: David J. Wilder <dwilder@us.ibm.com>
+Date: Sun, 11 Oct 2009 10:51:03 +0200
+Subject: [PATCH] RDMA/addr: Fix resolution of local IPv6 addresses
+
+This patch allows a local IPv6 address to be resolved by rdma_cm.
+
+To reproduce the problem:
+
+ $ rping -s -v -a ::0  &
+ $ rping -c -v -a <IPv6 address local to this system>
+ rdma_resolve_addr error -1
+
+Local IPv6 address was obtained with "ip addr show ib0"
+
+Addresses: https://bugs.openfabrics.org/show_bug.cgi?id=1759
+Signed-off-by: David Wilder <dwilder@us.ibm.com>
+Acked-by: Sean Hefty <sean.hefty@intel.com>
+Signed-off-by: Roland Dreier <rolandd@cisco.com>
+---
+ drivers/infiniband/core/addr.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/drivers/infiniband/core/addr.c b/drivers/infiniband/core/addr.c
+index ce511d8..4cf156c 100644
+--- a/drivers/infiniband/core/addr.c
++++ b/drivers/infiniband/core/addr.c
+@@ -393,7 +393,7 @@ static int addr_resolve_local(struct sockaddr *src_in,
+ 
+ 		for_each_netdev(&init_net, dev)
+ 			if (ipv6_chk_addr(&init_net,
+-					  &((struct sockaddr_in6 *) addr)->sin6_addr,
++					  &((struct sockaddr_in6 *) dst_in)->sin6_addr,
+ 					  dev, 1))
+ 				break;
+ 
+-- 
+1.5.4.3
+

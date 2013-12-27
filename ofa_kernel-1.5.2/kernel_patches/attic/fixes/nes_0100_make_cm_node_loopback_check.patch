@@ -1,0 +1,16 @@
+diff --git a/drivers/infiniband/hw/nes/nes_cm.c b/drivers/infiniband/hw/nes/nes_cm.c
+index 24855ec..9cbea51 100644
+--- a/drivers/infiniband/hw/nes/nes_cm.c
++++ b/drivers/infiniband/hw/nes/nes_cm.c
+@@ -1097,7 +1097,10 @@ static struct nes_cm_node *make_cm_node(struct nes_cm_core *cm_core,
+ 
+ 	cm_node->loopbackpartner = NULL;
+ 	/* get the mac addr for the remote node */
+-	arpindex = nes_arp_table(nesdev, cm_node->rem_addr, NULL, NES_ARP_RESOLVE);
++	if (ipv4_is_loopback(htonl(cm_node->rem_addr)))
++		arpindex = nes_arp_table(nesdev, ntohl(nesvnic->local_ipaddr), NULL, NES_ARP_RESOLVE);
++	else
++		arpindex = nes_arp_table(nesdev, cm_node->rem_addr, NULL, NES_ARP_RESOLVE);
+ 	if (arpindex < 0) {
+ 		arpindex = nes_addr_resolve_neigh(nesvnic, cm_info->rem_addr);
+ 		if (arpindex < 0) {

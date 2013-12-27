@@ -1,0 +1,39 @@
+commit 9e36dc0c4be7ec1a88896f11290578e04ca0e835
+Author: root <root@almus.(none)>
+Date:   Tue Jun 16 14:42:14 2009 -0700
+
+    cxgb3_0120_fixwarnings.patch
+
+diff --git a/drivers/infiniband/hw/cxgb3/iwch_cm.c b/drivers/infiniband/hw/cxgb3/iwch_cm.c
+index 52d7bb0..0f8c33d 100644
+--- a/drivers/infiniband/hw/cxgb3/iwch_cm.c
++++ b/drivers/infiniband/hw/cxgb3/iwch_cm.c
+@@ -47,6 +47,7 @@
+ #include "iwch_provider.h"
+ #include "iwch_cm.h"
+ 
++#ifdef DEBUG
+ static char *states[] = {
+ 	"idle",
+ 	"listen",
+@@ -62,6 +63,7 @@ static char *states[] = {
+ 	"dead",
+ 	NULL,
+ };
++#endif
+ 
+ int peer2peer = 0;
+ module_param(peer2peer, int, 0644);
+diff --git a/drivers/net/cxgb3/cxgb3_main.c b/drivers/net/cxgb3/cxgb3_main.c
+index 035d555..6895044 100644
+--- a/drivers/net/cxgb3/cxgb3_main.c
++++ b/drivers/net/cxgb3/cxgb3_main.c
+@@ -284,7 +284,7 @@ void t3_os_phymod_changed(struct adapter *adap, int port_id)
+ 		NULL, "SR", "LR", "LRM", "TWINAX", "TWINAX", "unknown"
+ 	};
+ 
+-	const struct net_device *dev = adap->port[port_id];
++	struct net_device *dev = adap->port[port_id];
+ 	const struct port_info *pi = netdev_priv(dev);
+ 
+ 	if (pi->phy.modtype == phy_modtype_none)

@@ -1,0 +1,538 @@
+commit 5a43bc90abe8aeca09470f946a16c43616bffac1
+Author: Andy Grover <andy.grover@oracle.com>
+Date:   Tue Feb 23 15:45:50 2010 -0800
+
+    backport to .27
+
+diff --git a/net/rds/bind.c b/net/rds/bind.c
+index 5d95fc0..d48528b 100644
+--- a/net/rds/bind.c
++++ b/net/rds/bind.c
+@@ -96,7 +96,7 @@ struct rds_sock *rds_find_bound(__be32 addr, __be16 port)
+ 		rs = NULL;
+ 	spin_unlock_irqrestore(&rds_bind_lock, flags);
+ 
+-	rdsdebug("returning rs %p for %pI4:%u\n", rs, &addr,
++	rdsdebug("returning rs %p for %u.%u.%u.%u:%u\n", rs, NIPQUAD(addr),
+ 		ntohs(port));
+ 	return rs;
+ }
+@@ -133,8 +133,8 @@ static int rds_add_bound(struct rds_sock *rs, __be32 addr, __be16 *port)
+ 		rs->rs_bound_port = *port;
+ 		rds_sock_addref(rs);
+ 
+-		rdsdebug("rs %p binding to %pI4:%d\n",
+-		  rs, &addr, (int)ntohs(*port));
++		rdsdebug("rs %p binding to %u.%u.%u.%u:%d\n",
++		  rs, NIPQUAD(addr), (int)ntohs(*port));
+ 	}
+ 
+ 	spin_unlock_irqrestore(&rds_bind_lock, flags);
+@@ -149,8 +149,8 @@ void rds_remove_bound(struct rds_sock *rs)
+ 	spin_lock_irqsave(&rds_bind_lock, flags);
+ 
+ 	if (rs->rs_bound_addr) {
+-		rdsdebug("rs %p unbinding from %pI4:%d\n",
+-		  rs, &rs->rs_bound_addr,
++		rdsdebug("rs %p unbinding from %u.%u.%u.%u:%d\n",
++		  rs, NIPQUAD(rs->rs_bound_addr),
+ 		  ntohs(rs->rs_bound_port));
+ 
+ 		rb_erase(&rs->rs_bound_node, &rds_bind_tree);
+diff --git a/net/rds/cong.c b/net/rds/cong.c
+index dd2711d..6b24bba 100644
+--- a/net/rds/cong.c
++++ b/net/rds/cong.c
+@@ -229,8 +229,8 @@ void rds_cong_queue_updates(struct rds_cong_map *map)
+ 
+ void rds_cong_map_updated(struct rds_cong_map *map, uint64_t portmask)
+ {
+-	rdsdebug("waking map %p for %pI4\n",
+-	  map, &map->m_addr);
++	rdsdebug("waking map %p for %u.%u.%u.%u\n",
++	  map, NIPQUAD(map->m_addr));
+ 	rds_stats_inc(s_cong_update_received);
+ 	atomic_inc(&rds_cong_generation);
+ 	if (waitqueue_active(&map->m_waitq))
+@@ -278,8 +278,8 @@ void rds_cong_set_bit(struct rds_cong_map *map, __be16 port)
+ 	unsigned long i;
+ 	unsigned long off;
+ 
+-	rdsdebug("setting congestion for %pI4:%u in map %p\n",
+-	  &map->m_addr, ntohs(port), map);
++	rdsdebug("setting congestion for %u.%u.%u.%u:%u in map %p\n",
++	  NIPQUAD(map->m_addr), ntohs(port), map);
+ 
+ 	i = be16_to_cpu(port) / RDS_CONG_MAP_PAGE_BITS;
+ 	off = be16_to_cpu(port) % RDS_CONG_MAP_PAGE_BITS;
+@@ -292,8 +292,8 @@ void rds_cong_clear_bit(struct rds_cong_map *map, __be16 port)
+ 	unsigned long i;
+ 	unsigned long off;
+ 
+-	rdsdebug("clearing congestion for %pI4:%u in map %p\n",
+-	  &map->m_addr, ntohs(port), map);
++	rdsdebug("clearing congestion for %u.%u.%u.%u:%u in map %p\n",
++	  NIPQUAD(map->m_addr), ntohs(port), map);
+ 
+ 	i = be16_to_cpu(port) / RDS_CONG_MAP_PAGE_BITS;
+ 	off = be16_to_cpu(port) % RDS_CONG_MAP_PAGE_BITS;
+diff --git a/net/rds/connection.c b/net/rds/connection.c
+index 159ef57..5988509 100644
+--- a/net/rds/connection.c
++++ b/net/rds/connection.c
+@@ -88,8 +88,8 @@ static struct rds_connection *rds_conn_lookup(struct hlist_head *head,
+ 			break;
+ 		}
+ 	}
+-	rdsdebug("returning conn %p for %pI4 -> %pI4\n", ret,
+-		 &laddr, &faddr);
++	rdsdebug("returning conn %p for %u.%u.%u.%u -> %u.%u.%u.%u\n", ret,
++		 NIPQUAD(laddr), NIPQUAD(faddr));
+ 	return ret;
+ }
+ 
+@@ -101,8 +101,8 @@ static struct rds_connection *rds_conn_lookup(struct hlist_head *head,
+  */
+ void rds_conn_reset(struct rds_connection *conn)
+ {
+-	rdsdebug("connection %pI4 to %pI4 reset\n",
+-	  &conn->c_laddr, &conn->c_faddr);
++	rdsdebug("connection %u.%u.%u.%u to %u.%u.%u.%u reset\n",
++	  NIPQUAD(conn->c_laddr), NIPQUAD(conn->c_faddr));
+ 
+ 	rds_stats_inc(s_conn_reset);
+ 	rds_send_reset(conn);
+@@ -207,8 +207,8 @@ static struct rds_connection *__rds_conn_create(__be32 laddr, __be32 faddr,
+ 	mutex_init(&conn->c_cm_lock);
+ 	conn->c_flags = 0;
+ 
+-	rdsdebug("allocated conn %p for %pI4 -> %pI4 over %s %s\n",
+-	  conn, &laddr, &faddr,
++	rdsdebug("allocated conn %p for %u.%u.%u.%u -> %u.%u.%u.%u over %s %s\n",
++	  conn, NIPQUAD(laddr), NIPQUAD(faddr),
+ 	  trans->t_name ? trans->t_name : "[unknown]",
+ 	  is_outgoing ? "(outgoing)" : "");
+ 
+@@ -270,9 +270,9 @@ void rds_conn_destroy(struct rds_connection *conn)
+ {
+ 	struct rds_message *rm, *rtmp;
+ 
+-	rdsdebug("freeing conn %p for %pI4 -> "
+-		 "%pI4\n", conn, &conn->c_laddr,
+-		 &conn->c_faddr);
++	rdsdebug("freeing conn %p for %u.%u.%u.%u -> "
++		"%u.%u.%u.%u\n", conn, NIPQUAD(conn->c_laddr),
++		NIPQUAD(conn->c_faddr));
+ 
+ 	hlist_del_init(&conn->c_hash_node);
+ 
+diff --git a/net/rds/ib.c b/net/rds/ib.c
+index 6fb8891..8a38556 100644
+--- a/net/rds/ib.c
++++ b/net/rds/ib.c
+@@ -238,8 +238,8 @@ static int rds_ib_laddr_check(__be32 addr)
+ 	if (ret || cm_id->device->node_type != RDMA_NODE_IB_CA)
+ 		ret = -EADDRNOTAVAIL;
+ 
+-	rdsdebug("addr %pI4 ret %d node type %d\n",
+-		&addr, ret,
++	rdsdebug("addr %u.%u.%u.%u ret %d node type %d\n",
++		NIPQUAD(addr), ret,
+ 		cm_id->device ? cm_id->device->node_type : -1);
+ 
+ 	rdma_destroy_id(cm_id);
+diff --git a/net/rds/ib_cm.c b/net/rds/ib_cm.c
+index 6f3e21c..e51a5f6 100644
+--- a/net/rds/ib_cm.c
++++ b/net/rds/ib_cm.c
+@@ -110,8 +110,8 @@ void rds_ib_cm_connect_complete(struct rds_connection *conn, struct rdma_cm_even
+ 		}
+ 	}
+ 
+-	printk(KERN_NOTICE "RDS/IB: connected to %pI4 version %u.%u%s\n",
+-			&conn->c_faddr,
++	printk(KERN_NOTICE "RDS/IB: connected to %u.%u.%u.%u version %u.%u%s\n",
++			NIPQUAD(conn->c_faddr),
+ 			RDS_PROTOCOL_MAJOR(conn->c_version),
+ 			RDS_PROTOCOL_MINOR(conn->c_version),
+ 			ic->i_flowctl ? ", flow control" : "");
+@@ -204,8 +204,8 @@ static void rds_ib_qp_event_handler(struct ib_event *event, void *data)
+ 		break;
+ 	default:
+ 		rdsdebug("Fatal QP Event %u "
+-			"- connection %pI4->%pI4, reconnecting\n",
+-			event->event, &conn->c_laddr, &conn->c_faddr);
++			"- connection %u.%u.%u.%u->%u.%u.%u.%u, reconnecting\n",
++			event->event, NIPQUAD(conn->c_laddr), NIPQUAD(conn->c_faddr));
+ 		rds_conn_drop(conn);
+ 		break;
+ 	}
+@@ -390,9 +390,9 @@ static u32 rds_ib_protocol_compatible(struct rdma_cm_event *event)
+ 		while ((common >>= 1) != 0)
+ 			version++;
+ 	} else if (printk_ratelimit()) {
+-		printk(KERN_NOTICE "RDS: Connection from %pI4 using "
++		printk(KERN_NOTICE "RDS: Connection from %u.%u.%u.%u using "
+ 			"incompatible protocol version %u.%u\n",
+-			&dp->dp_saddr,
++			NIPQUAD(dp->dp_saddr),
+ 			dp->dp_protocol_major,
+ 			dp->dp_protocol_minor);
+ 	}
+@@ -417,8 +417,8 @@ int rds_ib_cm_handle_connect(struct rdma_cm_id *cm_id,
+ 	if (!version)
+ 		goto out;
+ 
+-	rdsdebug("saddr %pI4 daddr %pI4 RDSv%u.%u lguid 0x%llx fguid "
+-		 "0x%llx\n", &dp->dp_saddr, &dp->dp_daddr,
++	rdsdebug("saddr %u.%u.%u.%u daddr %u.%u.%u.%u RDSv%u.%u lguid 0x%llx fguid "
++		 "0x%llx\n", NIPQUAD(dp->dp_saddr), NIPQUAD(dp->dp_daddr),
+ 		 RDS_PROTOCOL_MAJOR(version), RDS_PROTOCOL_MINOR(version),
+ 		 (unsigned long long)be64_to_cpu(lguid),
+ 		 (unsigned long long)be64_to_cpu(fguid));
+diff --git a/net/rds/ib_recv.c b/net/rds/ib_recv.c
+index 2421e58..e99593c 100644
+--- a/net/rds/ib_recv.c
++++ b/net/rds/ib_recv.c
+@@ -253,8 +253,8 @@ int rds_ib_recv_refill(struct rds_connection *conn, gfp_t kptr_gfp,
+ 			 (long) recv->r_frag->f_mapped, ret);
+ 		if (ret) {
+ 			rds_ib_conn_error(conn, "recv post on "
+-			       "%pI4 returned %d, disconnecting and "
+-			       "reconnecting\n", &conn->c_faddr,
++			       "%u.%u.%u.%u returned %d, disconnecting and "
++			       "reconnecting\n", NIPQUAD(conn->c_faddr),
+ 			       ret);
+ 			ret = -1;
+ 			break;
+@@ -701,10 +701,10 @@ static void rds_ib_process_recv(struct rds_connection *conn,
+ 
+ 	if (data_len < sizeof(struct rds_header)) {
+ 		rds_ib_conn_error(conn, "incoming message "
+-		       "from %pI4 didn't inclue a "
++		       "from %u.%u.%u.%u didn't inclue a "
+ 		       "header, disconnecting and "
+ 		       "reconnecting\n",
+-		       &conn->c_faddr);
++		       NIPQUAD(conn->c_faddr));
+ 		return;
+ 	}
+ 	data_len -= sizeof(struct rds_header);
+@@ -714,9 +714,9 @@ static void rds_ib_process_recv(struct rds_connection *conn,
+ 	/* Validate the checksum. */
+ 	if (!rds_message_verify_checksum(ihdr)) {
+ 		rds_ib_conn_error(conn, "incoming message "
+-		       "from %pI4 has corrupted header - "
++		       "from %u.%u.%u.%u has corrupted header - "
+ 		       "forcing a reconnect\n",
+-		       &conn->c_faddr);
++		       NIPQUAD(conn->c_faddr));
+ 		rds_stats_inc(s_recv_drop_bad_checksum);
+ 		return;
+ 	}
+@@ -861,8 +861,8 @@ static inline void rds_poll_cq(struct rds_ib_connection *ic,
+ 				rds_ib_process_recv(conn, recv, wc.byte_len, state);
+ 			} else {
+ 				rds_ib_conn_error(conn, "recv completion on "
+-				       "%pI4 had status %u, disconnecting and "
+-				       "reconnecting\n", &conn->c_faddr,
++				       "%u.%u.%u.%u had status %u, disconnecting and "
++				       "reconnecting\n", NIPQUAD(conn->c_faddr),
+ 				       wc.status);
+ 			}
+ 		}
+diff --git a/net/rds/ib_send.c b/net/rds/ib_send.c
+index da7bd53..2ea3551 100644
+--- a/net/rds/ib_send.c
++++ b/net/rds/ib_send.c
+@@ -259,9 +259,9 @@ void rds_ib_send_cq_comp_handler(struct ib_cq *cq, void *context)
+ 		/* We expect errors as the qp is drained during shutdown */
+ 		if (wc.status != IB_WC_SUCCESS && rds_conn_up(conn)) {
+ 			rds_ib_conn_error(conn,
+-				"send completion on %pI4 "
++				"send completion on %u.%u.%u.%u "
+ 				"had status %u, disconnecting and reconnecting\n",
+-				&conn->c_faddr, wc.status);
++				NIPQUAD(conn->c_faddr), wc.status);
+ 		}
+ 	}
+ }
+@@ -713,8 +713,8 @@ add_header:
+ 		 first, &first->s_wr, ret, failed_wr);
+ 	BUG_ON(failed_wr != &first->s_wr);
+ 	if (ret) {
+-		printk(KERN_WARNING "RDS/IB: ib_post_send to %pI4 "
+-		       "returned %d\n", &conn->c_faddr, ret);
++		printk(KERN_WARNING "RDS/IB: ib_post_send to %u.%u.%u.%u "
++		       "returned %d\n", NIPQUAD(conn->c_faddr), ret);
+ 		rds_ib_ring_unalloc(&ic->i_send_ring, work_alloc);
+ 		if (prev->s_rm) {
+ 			ic->i_rm = prev->s_rm;
+@@ -854,8 +854,8 @@ int rds_ib_xmit_rdma(struct rds_connection *conn, struct rds_rdma_op *op)
+ 		 first, &first->s_wr, ret, failed_wr);
+ 	BUG_ON(failed_wr != &first->s_wr);
+ 	if (ret) {
+-		printk(KERN_WARNING "RDS/IB: rdma ib_post_send to %pI4 "
+-		       "returned %d\n", &conn->c_faddr, ret);
++		printk(KERN_WARNING "RDS/IB: rdma ib_post_send to %u.%u.%u.%u "
++		       "returned %d\n", NIPQUAD(conn->c_faddr), ret);
+ 		rds_ib_ring_unalloc(&ic->i_send_ring, work_alloc);
+ 		goto out;
+ 	}
+diff --git a/net/rds/iw.c b/net/rds/iw.c
+index 41999cf..d56d3cc 100644
+--- a/net/rds/iw.c
++++ b/net/rds/iw.c
+@@ -240,8 +240,8 @@ static int rds_iw_laddr_check(__be32 addr)
+ 	if (ret || cm_id->device->node_type != RDMA_NODE_RNIC)
+ 		ret = -EADDRNOTAVAIL;
+ 
+-	rdsdebug("addr %pI4 ret %d node type %d\n",
+-		&addr, ret,
++	rdsdebug("addr %u.%u.%u.%u ret %d node type %d\n",
++		NIPQUAD(addr), ret,
+ 		cm_id->device ? cm_id->device->node_type : -1);
+ 
+ 	rdma_destroy_id(cm_id);
+diff --git a/net/rds/iw_cm.c b/net/rds/iw_cm.c
+index b266632..af28b54 100644
+--- a/net/rds/iw_cm.c
++++ b/net/rds/iw_cm.c
+@@ -93,8 +93,8 @@ void rds_iw_cm_connect_complete(struct rds_connection *conn, struct rdma_cm_even
+ 	if (dp && dp->dp_ack_seq)
+ 		rds_send_drop_acked(conn, be64_to_cpu(dp->dp_ack_seq), NULL);
+ 
+-	printk(KERN_NOTICE "RDS/IW: connected to %pI4<->%pI4 version %u.%u%s\n",
+-			&conn->c_laddr, &conn->c_faddr,
++	printk(KERN_NOTICE "RDS/IW: connected to %u.%u.%u.%u<->%u.%u.%u.%u version %u.%u%s\n",
++			NIPQUAD(conn->c_laddr), NIPQUAD(conn->c_faddr),
+ 			RDS_PROTOCOL_MAJOR(conn->c_version),
+ 			RDS_PROTOCOL_MINOR(conn->c_version),
+ 			ic->i_flowctl ? ", flow control" : "");
+@@ -157,9 +157,9 @@ static void rds_iw_qp_event_handler(struct ib_event *event, void *data)
+ 	case IB_EVENT_QP_FATAL:
+ 	default:
+ 		rdsdebug("Fatal QP Event %u "
+-			"- connection $pI4->%pI4, reconnecting\n",
+-			event->event, &conn->c_laddr,
+-			&conn->c_faddr);
++			"- connection %u.%u.%u.%u->%u.%u.%u.%u, reconnecting\n",
++			event->event, NIPQUAD(conn->c_laddr),
++			NIPQUAD(conn->c_faddr));
+ 		rds_conn_drop(conn);
+ 		break;
+ 	}
+@@ -365,9 +365,9 @@ static u32 rds_iw_protocol_compatible(const struct rds_iw_connect_private *dp)
+ 		while ((common >>= 1) != 0)
+ 			version++;
+ 	} else if (printk_ratelimit()) {
+-		printk(KERN_NOTICE "RDS: Connection from %pI4 using "
++		printk(KERN_NOTICE "RDS: Connection from %u.%u.%u.%u using "
+ 			"incompatible protocol version %u.%u\n",
+-			&dp->dp_saddr,
++			NIPQUAD(dp->dp_saddr),
+ 			dp->dp_protocol_major,
+ 			dp->dp_protocol_minor);
+ 	}
+@@ -391,8 +391,8 @@ int rds_iw_cm_handle_connect(struct rdma_cm_id *cm_id,
+ 	if (!version)
+ 		goto out;
+ 
+-	rdsdebug("saddr %pI4 daddr %pI4 RDSv%u.%u\n",
+-		 &dp->dp_saddr, &dp->dp_daddr,
++	rdsdebug("saddr %u.%u.%u.%u daddr %u.%u.%u.%u RDSv%u.%u\n",
++		 NIPQUAD(dp->dp_saddr), NIPQUAD(dp->dp_daddr),
+ 		 RDS_PROTOCOL_MAJOR(version), RDS_PROTOCOL_MINOR(version));
+ 
+ 	conn = rds_conn_create(dp->dp_daddr, dp->dp_saddr, &rds_iw_transport,
+@@ -537,8 +537,8 @@ int rds_iw_conn_connect(struct rds_connection *conn)
+ 	/* First, bind to the local address and device. */
+ 	ret = rdma_bind_addr(ic->i_cm_id, (struct sockaddr *) &src);
+ 	if (ret) {
+-		rdsdebug("rdma_bind_addr(%pI4) failed: %d\n",
+-				&conn->c_laddr, ret);
++		rdsdebug("rdma_bind_addr(%u.%u.%u.%u) failed: %d\n",
++				NIPQUAD(conn->c_laddr), ret);
+ 		rdma_destroy_id(ic->i_cm_id);
+ 		ic->i_cm_id = NULL;
+ 		goto out;
+diff --git a/net/rds/iw_recv.c b/net/rds/iw_recv.c
+index b3dca08..7691100 100644
+--- a/net/rds/iw_recv.c
++++ b/net/rds/iw_recv.c
+@@ -253,8 +253,8 @@ int rds_iw_recv_refill(struct rds_connection *conn, gfp_t kptr_gfp,
+ 			 (long) recv->r_frag->f_mapped, ret);
+ 		if (ret) {
+ 			rds_iw_conn_error(conn, "recv post on "
+-			       "%pI4 returned %d, disconnecting and "
+-			       "reconnecting\n", &conn->c_faddr,
++			       "%u.%u.%u.%u returned %d, disconnecting and "
++			       "reconnecting\n", NIPQUAD(conn->c_faddr),
+ 			       ret);
+ 			ret = -1;
+ 			break;
+@@ -660,10 +660,10 @@ static void rds_iw_process_recv(struct rds_connection *conn,
+ 
+ 	if (byte_len < sizeof(struct rds_header)) {
+ 		rds_iw_conn_error(conn, "incoming message "
+-		       "from %pI4 didn't inclue a "
++		       "from %u.%u.%u.%u didn't inclue a "
+ 		       "header, disconnecting and "
+ 		       "reconnecting\n",
+-		       &conn->c_faddr);
++		       NIPQUAD(conn->c_faddr));
+ 		return;
+ 	}
+ 	byte_len -= sizeof(struct rds_header);
+@@ -673,9 +673,9 @@ static void rds_iw_process_recv(struct rds_connection *conn,
+ 	/* Validate the checksum. */
+ 	if (!rds_message_verify_checksum(ihdr)) {
+ 		rds_iw_conn_error(conn, "incoming message "
+-		       "from %pI4 has corrupted header - "
++		       "from %u.%u.%u.%u has corrupted header - "
+ 		       "forcing a reconnect\n",
+-		       &conn->c_faddr);
++		       NIPQUAD(conn->c_faddr));
+ 		rds_stats_inc(s_recv_drop_bad_checksum);
+ 		return;
+ 	}
+@@ -820,8 +820,8 @@ static inline void rds_poll_cq(struct rds_iw_connection *ic,
+ 				rds_iw_process_recv(conn, recv, wc.byte_len, state);
+ 			} else {
+ 				rds_iw_conn_error(conn, "recv completion on "
+-				       "%pI4 had status %u, disconnecting and "
+-				       "reconnecting\n", &conn->c_faddr,
++				       "%u.%u.%u.%u had status %u, disconnecting and "
++				       "reconnecting\n", NIPQUAD(conn->c_faddr),
+ 				       wc.status);
+ 			}
+ 		}
+diff --git a/net/rds/iw_send.c b/net/rds/iw_send.c
+index 603262f..fb0473c 100644
+--- a/net/rds/iw_send.c
++++ b/net/rds/iw_send.c
+@@ -295,9 +295,9 @@ void rds_iw_send_cq_comp_handler(struct ib_cq *cq, void *context)
+ 		/* We expect errors as the qp is drained during shutdown */
+ 		if (wc.status != IB_WC_SUCCESS && rds_conn_up(conn)) {
+ 			rds_iw_conn_error(conn,
+-				"send completion on %pI4 "
++				"send completion on %u.%u.%u.%u "
+ 				"had status %u, disconnecting and reconnecting\n",
+-				&conn->c_faddr, wc.status);
++				NIPQUAD(conn->c_faddr), wc.status);
+ 		}
+ 	}
+ }
+@@ -749,8 +749,8 @@ add_header:
+ 		 first, &first->s_wr, ret, failed_wr);
+ 	BUG_ON(failed_wr != &first->s_wr);
+ 	if (ret) {
+-		printk(KERN_WARNING "RDS/IW: ib_post_send to %pI4 "
+-		       "returned %d\n", &conn->c_faddr, ret);
++		printk(KERN_WARNING "RDS/IW: ib_post_send to %u.%u.%u.%u "
++		       "returned %d\n", NIPQUAD(conn->c_faddr), ret);
+ 		rds_iw_ring_unalloc(&ic->i_send_ring, work_alloc);
+ 		if (prev->s_rm) {
+ 			ic->i_rm = prev->s_rm;
+@@ -954,8 +954,8 @@ int rds_iw_xmit_rdma(struct rds_connection *conn, struct rds_rdma_op *op)
+ 		 first, &first->s_wr, ret, failed_wr);
+ 	BUG_ON(failed_wr != &first->s_wr);
+ 	if (ret) {
+-		printk(KERN_WARNING "RDS/IW: rdma ib_post_send to %pI4 "
+-		       "returned %d\n", &conn->c_faddr, ret);
++		printk(KERN_WARNING "RDS/IW: rdma ib_post_send to %u.%u.%u.%u "
++		       "returned %d\n", NIPQUAD(conn->c_faddr), ret);
+ 		rds_iw_ring_unalloc(&ic->i_send_ring, work_alloc);
+ 		goto out;
+ 	}
+diff --git a/net/rds/rdma_transport.c b/net/rds/rdma_transport.c
+index 7154c77..ce77c3a 100644
+--- a/net/rds/rdma_transport.c
++++ b/net/rds/rdma_transport.c
+@@ -102,8 +102,8 @@ int rds_rdma_cm_event_handler(struct rdma_cm_id *cm_id,
+ 
+ 	case RDMA_CM_EVENT_DISCONNECTED:
+ 		rdsdebug("DISCONNECT event - dropping connection "
+-			"%pI4->%pI4\n", &conn->c_laddr,
+-			 &conn->c_faddr);
++			"%u.%u.%u.%u->%u.%u.%u.%u\n", NIPQUAD(conn->c_laddr),
++			 NIPQUAD(conn->c_faddr));
+ 		rds_conn_drop(conn);
+ 		break;
+ 
+diff --git a/net/rds/recv.c b/net/rds/recv.c
+index fdff33c..1584ab7 100644
+--- a/net/rds/recv.c
++++ b/net/rds/recv.c
+@@ -78,9 +78,9 @@ static void rds_recv_rcvbuf_delta(struct rds_sock *rs, struct sock *sk,
+ 	rs->rs_rcv_bytes += delta;
+ 	now_congested = rs->rs_rcv_bytes > rds_sk_rcvbuf(rs);
+ 
+-	rdsdebug("rs %p (%pI4:%u) recv bytes %d buf %d "
++	rdsdebug("rs %p (%u.%u.%u.%u:%u) recv bytes %d buf %d "
+ 	  "now_cong %d delta %d\n",
+-	  rs, &rs->rs_bound_addr,
++	  rs, NIPQUAD(rs->rs_bound_addr),
+ 	  ntohs(rs->rs_bound_port), rs->rs_rcv_bytes,
+ 	  rds_sk_rcvbuf(rs), now_congested, delta);
+ 
+@@ -447,8 +447,8 @@ int rds_recvmsg(struct kiocb *iocb, struct socket *sock, struct msghdr *msg,
+ 			break;
+ 		}
+ 
+-		rdsdebug("copying inc %p from %pI4:%u to user\n", inc,
+-			 &inc->i_conn->c_faddr,
++		rdsdebug("copying inc %p from %u.%u.%u.%u:%u to user\n", inc,
++			 NIPQUAD(inc->i_conn->c_faddr),
+ 			 ntohs(inc->i_hdr.h_sport));
+ 		ret = inc->i_conn->c_trans->inc_copy_to_user(inc, msg->msg_iov,
+ 							     size);
+diff --git a/net/rds/threads.c b/net/rds/threads.c
+index dd7e0ca..562141f 100644
+--- a/net/rds/threads.c
++++ b/net/rds/threads.c
+@@ -82,8 +82,8 @@ void rds_connect_complete(struct rds_connection *conn)
+ 		return;
+ 	}
+ 
+-	rdsdebug("conn %p for %pI4 to %pI4 complete\n",
+-	  conn, &conn->c_laddr, &conn->c_faddr);
++	rdsdebug("conn %p for %u.%u.%u.%u to %u.%u.%u.%u complete\n",
++	  conn, NIPQUAD(conn->c_laddr), NIPQUAD(conn->c_faddr));
+ 
+ 	conn->c_reconnect_jiffies = 0;
+ 	set_bit(0, &conn->c_map_queued);
+@@ -114,8 +114,8 @@ static void rds_queue_reconnect(struct rds_connection *conn)
+ {
+ 	unsigned long rand;
+ 
+-	rdsdebug("conn %p for %pI4 to %pI4 reconnect jiffies %lu\n",
+-	  conn, &conn->c_laddr, &conn->c_faddr,
++	rdsdebug("conn %p for %u.%u.%u.%u to %u.%u.%u.%u reconnect jiffies %lu\n",
++	  conn, NIPQUAD(conn->c_laddr), NIPQUAD(conn->c_faddr),
+ 	  conn->c_reconnect_jiffies);
+ 
+ 	set_bit(RDS_RECONNECT_PENDING, &conn->c_flags);
+@@ -126,9 +126,9 @@ static void rds_queue_reconnect(struct rds_connection *conn)
+ 	}
+ 
+ 	get_random_bytes(&rand, sizeof(rand));
+-	rdsdebug("%lu delay %lu ceil conn %p for %pI4 -> %pI4\n",
++	rdsdebug("%lu delay %lu ceil conn %p for %u.%u.%u.%u -> %u.%u.%u.%u\n",
+ 		 rand % conn->c_reconnect_jiffies, conn->c_reconnect_jiffies,
+-		 conn, &conn->c_laddr, &conn->c_faddr);
++		 conn, NIPQUAD(conn->c_laddr), NIPQUAD(conn->c_faddr));
+ 	queue_delayed_work(rds_wq, &conn->c_conn_w,
+ 			   rand % conn->c_reconnect_jiffies);
+ 
+@@ -144,8 +144,8 @@ void rds_connect_worker(struct work_struct *work)
+ 	clear_bit(RDS_RECONNECT_PENDING, &conn->c_flags);
+ 	if (rds_conn_transition(conn, RDS_CONN_DOWN, RDS_CONN_CONNECTING)) {
+ 		ret = conn->c_trans->conn_connect(conn);
+-		rdsdebug("conn %p for %pI4 to %pI4 dispatched, ret %d\n",
+-			conn, &conn->c_laddr, &conn->c_faddr, ret);
++		rdsdebug("conn %p for %u.%u.%u.%u to %u.%u.%u.%u dispatched, ret %d\n",
++			conn, NIPQUAD(conn->c_laddr), NIPQUAD(conn->c_faddr), ret);
+ 
+ 		if (ret) {
+ 			if (rds_conn_transition(conn, RDS_CONN_CONNECTING, RDS_CONN_DOWN))

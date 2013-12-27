@@ -1,0 +1,35 @@
+commit 54e05f15ccb510c0fb3b03dfe9186811021fd5ad
+Author: Steve Wise <swise@opengridcomputing.com>
+Date:   Wed Oct 7 15:38:12 2009 -0700
+
+    RDMA/iwcm: Don't call provider reject func with irqs disabled
+    
+    In commit cb58160e ("RDMA/iwcm: Reject the connection when the cm_id
+    is destroyed") a call to the provider's reject handler was added to
+    destroy_cm_id() to fix a provider endpoint leak.  This call needs to
+    be done with interrupts enabled.  So unlock and relock around this
+    call.  This is safe because:
+    
+    1) the provider will do nothing with this endpoint until the iwcm either
+       accepts or rejects.
+    2) the lock is only released after the iwcm state is changed, so an
+       errant iwcm app that is destroying -and- rejecting the connection
+       concurrently will get a failure on one of the calls.
+    
+    Signed-off-by: Steve Wise <swise@opengridcomputing.com>
+    Signed-off-by: Roland Dreier <rolandd@cisco.com>
+
+diff --git a/drivers/infiniband/core/iwcm.c b/drivers/infiniband/core/iwcm.c
+index 55d093a..625fec5 100644
+--- a/drivers/infiniband/core/iwcm.c
++++ b/drivers/infiniband/core/iwcm.c
+@@ -362,7 +362,9 @@ static void destroy_cm_id(struct iw_cm_id *cm_id)
+ 		 * In either case, must tell the provider to reject.
+ 		 */
+ 		cm_id_priv->state = IW_CM_STATE_DESTROYING;
++		spin_unlock_irqrestore(&cm_id_priv->lock, flags);
+ 		cm_id->device->iwcm->reject(cm_id, NULL, 0);
++		spin_lock_irqsave(&cm_id_priv->lock, flags);
+ 		break;
+ 	case IW_CM_STATE_CONN_SENT:
+ 	case IW_CM_STATE_DESTROYING:

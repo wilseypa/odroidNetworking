@@ -1,0 +1,25 @@
+From c979822cabbffe176b2afd80d9ef4a8fa9692621 Mon Sep 17 00:00:00 2001
+From: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+Date: Mon, 15 Jun 2009 22:22:57 +0300
+Subject: [PATCH] mlx4_en: no napi del
+
+Signed-off-by: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+---
+ drivers/net/mlx4/en_cq.c |    1 -
+ 1 files changed, 0 insertions(+), 1 deletions(-)
+
+diff --git a/drivers/net/mlx4/en_cq.c b/drivers/net/mlx4/en_cq.c
+index a276125..20cd817 100644
+--- a/drivers/net/mlx4/en_cq.c
++++ b/drivers/net/mlx4/en_cq.c
+@@ -127,7 +127,6 @@ void mlx4_en_deactivate_cq(struct mlx4_en_priv *priv, struct mlx4_en_cq *cq)
+ 		del_timer(&cq->timer);
+ 	else {
+ 		napi_disable(&cq->napi);
+-		netif_napi_del(&cq->napi);
+ 	}
+ 
+ 	mlx4_cq_free(mdev->dev, &cq->mcq);
+-- 
+1.6.3
+

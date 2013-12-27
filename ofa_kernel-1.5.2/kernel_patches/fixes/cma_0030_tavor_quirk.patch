@@ -1,0 +1,37 @@
+Tavor systems get better performance with 1K MTU. Since there does
+not seem to be any way to find out whether the remote system uses Tavor,
+add an option to limit the MTU globally.
+
+Signed-off-by: Michael S. Tsirkin <mst@mellanox.co.il>
+
+---
+ drivers/infiniband/core/cma.c |    9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+Index: ofed_kernel/drivers/infiniband/core/cma.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/core/cma.c
++++ ofed_kernel/drivers/infiniband/core/cma.c
+@@ -54,6 +54,10 @@ MODULE_AUTHOR("Sean Hefty");
+ MODULE_DESCRIPTION("Generic RDMA CM Agent");
+ MODULE_LICENSE("Dual BSD/GPL");
+ 
++static int tavor_quirk = 0;
++module_param_named(tavor_quirk, tavor_quirk, int, 0644);
++MODULE_PARM_DESC(tavor_quirk, "Tavor performance quirk: limit MTU to 1K if > 0");
++
+ #define CMA_CM_RESPONSE_TIMEOUT 20
+ #define CMA_MAX_CM_RETRIES 15
+ #define CMA_CM_MRA_SETTING (IB_CM_MRA_FLAG_DELAY | 24)
+@@ -1581,6 +1585,11 @@ static int cma_query_ib_route(struct rdm
+ 		comp_mask |= IB_SA_PATH_REC_TRAFFIC_CLASS;
+ 	}
+ 
++	if (tavor_quirk) {
++		path_rec.mtu_selector = IB_SA_LT;
++		path_rec.mtu = IB_MTU_2048;
++	}
++
+ 	id_priv->query_id = ib_sa_path_rec_get(&sa_client, id_priv->id.device,
+ 					       id_priv->id.port_num, &path_rec,
+ 					       comp_mask, timeout_ms,

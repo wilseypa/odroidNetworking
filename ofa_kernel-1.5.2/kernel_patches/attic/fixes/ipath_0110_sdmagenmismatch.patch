@@ -1,0 +1,64 @@
+IB/ipath: Fix recovery on sdmagenmismatch errors
+
+    The recovery code wasn't working because a status bit was being cleared
+    prior to the recovery code.  Change the order, and improve debug messages.
+    
+Signed-off-by: Dave Olson <dave.olson@qlogic.com>
+
+---
+ drivers/infiniband/hw/ipath/ipath_intr.c |   29 +++++++++++++++++++++--------
+ 1 file changed, 21 insertions(+), 8 deletions(-)
+
+Index: ofa_kernel-1.4/drivers/infiniband/hw/ipath/ipath_intr.c
+===================================================================
+--- ofa_kernel-1.4.orig/drivers/infiniband/hw/ipath/ipath_intr.c
++++ ofa_kernel-1.4/drivers/infiniband/hw/ipath/ipath_intr.c
+@@ -549,13 +549,20 @@ static void handle_sdma_errors(struct ip
+ 		ipath_cdbg(VERBOSE, "sdma tl 0x%lx hd 0x%lx status 0x%lx "
+ 			"lengen 0x%lx\n", tl, hd, status, lengen);
+ 	}
+-
++	expected = test_bit(IPATH_SDMA_ABORTING, &dd->ipath_sdma_status);
++	ipath_dbg("%sxpected sdma error, sdma_status 0x%lx\n",
++		expected ?  "e" : "une", dd->ipath_sdma_status);
++	/*
++	 * we are in interrupt context (and only one interrupt vector),
++	 * so we won't get another interrupt and process the sdma state
++	 * change before the set_bit of SDMA_DISABLED.  We set DISABLED
++	 * here because there are cases where abort_task will not.
++	 */
++	if (!expected) /* must be prior to setting SDMA_DISABLED */
++		ipath_cancel_sends(dd, 1);
+ 	spin_lock_irqsave(&dd->ipath_sdma_lock, flags);
+ 	__set_bit(IPATH_SDMA_DISABLED, &dd->ipath_sdma_status);
+-	expected = test_bit(IPATH_SDMA_ABORTING, &dd->ipath_sdma_status);
+ 	spin_unlock_irqrestore(&dd->ipath_sdma_lock, flags);
+-	if (!expected)
+-		ipath_cancel_sends(dd, 1);
+ }
+ 
+ static void handle_sdma_intr(struct ipath_devdata *dd, u64 istat)
+@@ -570,13 +577,19 @@ static void handle_sdma_intr(struct ipat
+ 	if (istat & INFINIPATH_I_SDMADISABLED) {
+ 		expected = test_bit(IPATH_SDMA_ABORTING,
+ 			&dd->ipath_sdma_status);
+-		ipath_dbg("%s SDmaDisabled intr\n",
+-			expected ? "expected" : "unexpected");
++		ipath_dbg("%sxpected sdma disabled intr, sdma_status 0x%lx\n",
++			expected ?  "e" : "une", dd->ipath_sdma_status);
++		/*
++		 * we are in interrupt context (and only one interrupt vector),
++		 * so we won't get another interrupt and process the sdma state
++		 * change before the set_bit of SDMA_DISABLED.  We set DISABLED
++		 * here because there are cases where abort_task will not.
++		 */
++		if (!expected) /* must be prior to setting SDMA_DISABLED */
++			ipath_cancel_sends(dd, 1);
+ 		spin_lock_irqsave(&dd->ipath_sdma_lock, flags);
+ 		__set_bit(IPATH_SDMA_DISABLED, &dd->ipath_sdma_status);
+ 		spin_unlock_irqrestore(&dd->ipath_sdma_lock, flags);
+-		if (!expected)
+-			ipath_cancel_sends(dd, 1);
+ 		if (!test_bit(IPATH_SDMA_SHUTDOWN, &dd->ipath_sdma_status))
+ 			tasklet_hi_schedule(&dd->ipath_sdma_abort_task);
+ 	}

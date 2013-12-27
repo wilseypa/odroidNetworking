@@ -1,0 +1,23 @@
+diff -up a/drivers/infiniband/hw/ipath/ipath_mad.c b/drivers/infiniband/hw/ipath/ipath_mad.c
+--- a/drivers/infiniband/hw/ipath/ipath_mad.c	2009-03-16 10:19:00.000000000 -0700
++++ b/drivers/infiniband/hw/ipath/ipath_mad.c	2009-03-16 10:34:35.000000000 -0700
+@@ -760,6 +760,7 @@ static int set_pkeys(struct ipath_devdat
+ 		pd->port_pkeys[i] = key;
+ 	}
+ 	if (changed) {
++		struct ib_event event;
+ 		u64 pkey;
+ 
+ 		pkey = (u64) dd->ipath_pkeys[0] |
+@@ -770,6 +771,11 @@ static int set_pkeys(struct ipath_devdat
+ 			   (unsigned long long) pkey);
+ 		ipath_write_kreg(dd, dd->ipath_kregs->kr_partitionkey,
+ 				 pkey);
++
++		event.event = IB_EVENT_PKEY_CHANGE;
++		event.device = &dd->verbs_dev->ibdev;
++		event.element.port_num = 1;
++		ib_dispatch_event(&event);
+ 	}
+ 	return 0;
+ }

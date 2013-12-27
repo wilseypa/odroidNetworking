@@ -1,0 +1,59 @@
+diff -up a/drivers/infiniband/hw/ipath/ipath_ud.c b/drivers/infiniband/hw/ipath/ipath_ud.c
+--- a/drivers/infiniband/hw/ipath/ipath_ud.c	2009-03-09 18:09:24.000000000 -0700
++++ b/drivers/infiniband/hw/ipath/ipath_ud.c	2009-03-09 18:51:50.000000000 -0700
+@@ -228,8 +228,8 @@ static void ipath_ud_loopback(struct ipa
+ 	wc.opcode = IB_WC_RECV;
+ 	wc.qp = &qp->ibqp;
+ 	wc.src_qp = sqp->ibqp.qp_num;
+-	/* XXX do we know which pkey matched? Only needed for GSI. */
+-	wc.pkey_index = 0;
++	wc.pkey_index = qp->ibqp.qp_type == IB_QPT_GSI ?
++		swqe->wr.wr.ud.pkey_index : 0;
+ 	wc.slid = dev->dd->ipath_lid |
+ 		(ah_attr->src_path_bits &
+ 		 ((1 << dev->dd->ipath_lmc) - 1));
+@@ -379,7 +379,8 @@ int ipath_make_ud_req(struct ipath_qp *q
+ 		bth0 |= 1 << 23;
+ 	bth0 |= extra_bytes << 20;
+ 	bth0 |= qp->ibqp.qp_type == IB_QPT_SMI ? IPATH_DEFAULT_P_KEY :
+-		ipath_get_pkey(dev->dd, qp->s_pkey_index);
++		ipath_get_pkey(dev->dd, qp->ibqp.qp_type == IB_QPT_GSI ?
++				wqe->wr.wr.ud.pkey_index : qp->s_pkey_index);
+ 	ohdr->bth[0] = cpu_to_be32(bth0);
+ 	/*
+ 	 * Use the multicast QP if the destination LID is a multicast LID.
+@@ -408,6 +409,23 @@ unlock:
+ 	return ret;
+ }
+ 
++static unsigned ipath_lookup_pkey(struct ipath_devdata *dd, u16 pkey)
++{
++	unsigned i;
++
++	pkey &= 0x7fff;	/* remove limited/full membership bit */
++
++	for (i = 0; i < ARRAY_SIZE(dd->ipath_pd[0]->port_pkeys); ++i)
++		if ((dd->ipath_pd[0]->port_pkeys[i] & 0x7fff) == pkey)
++			return i;
++
++	/*
++	 * Should not get here, this means hardware failed to validate pkeys.
++	 * Punt and return index 0.
++	 */
++	return 0;
++}
++
+ /**
+  * ipath_ud_rcv - receive an incoming UD packet
+  * @dev: the device the packet came in on
+@@ -580,8 +598,8 @@ void ipath_ud_rcv(struct ipath_ibdev *de
+ 	wc.vendor_err = 0;
+ 	wc.qp = &qp->ibqp;
+ 	wc.src_qp = src_qp;
+-	/* XXX do we know which pkey matched? Only needed for GSI. */
+-	wc.pkey_index = 0;
++	wc.pkey_index = qp->ibqp.qp_type == IB_QPT_GSI ?
++		ipath_lookup_pkey(dev->dd, be32_to_cpu(ohdr->bth[0])) : 0;
+ 	wc.slid = be16_to_cpu(hdr->lrh[3]);
+ 	wc.sl = (be16_to_cpu(hdr->lrh[0]) >> 4) & 0xF;
+ 	dlid = be16_to_cpu(hdr->lrh[1]);

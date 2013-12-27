@@ -1,0 +1,28 @@
+diff --git a/drivers/net/mlx4/en_params.c b/drivers/net/mlx4/en_params.c
+index d2daa9d..4a8f036 100644
+--- a/drivers/net/mlx4/en_params.c
++++ b/drivers/net/mlx4/en_params.c
+@@ -238,13 +238,10 @@ static char perf_strings[NUM_PERF_COUNTERS][ETH_GSTRING_LEN] = {
+ };
+ 
+ 
+-static int mlx4_en_get_sset_count(struct net_device *dev, int sset)
++static int mlx4_en_get_sset_count(struct net_device *dev)
+ {
+ 	struct mlx4_en_priv *priv = netdev_priv(dev);
+ 
+-	if (sset != ETH_SS_STATS)
+-		return -EOPNOTSUPP;
+-
+ 	return NUM_ALL_STATS + (priv->tx_ring_num + priv->rx_ring_num) * 2;
+ }
+ 
+@@ -450,7 +447,7 @@ const struct ethtool_ops mlx4_en_ethtool_ops = {
+ 	.get_tx_csum = ethtool_op_get_tx_csum,
+ 	.set_tx_csum = ethtool_op_set_tx_ipv6_csum,
+ 	.get_strings = mlx4_en_get_strings,
+-	.get_sset_count = mlx4_en_get_sset_count,
++	.get_stats_count = mlx4_en_get_sset_count,
+ 	.get_ethtool_stats = mlx4_en_get_ethtool_stats,
+ 	.get_coalesce = mlx4_en_get_coalesce,
+ 	.set_coalesce = mlx4_en_set_coalesce,

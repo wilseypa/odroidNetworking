@@ -1,0 +1,27 @@
+diff -Nurp linux-2.6/drivers/infiniband/hw/nes/nes.c nes.2_6_24_patch/drivers/infiniband/hw/nes/nes.c
+--- linux-2.6/drivers/infiniband/hw/nes/nes.c	2010-05-10 11:20:10.905359000 +0200
++++ nes.2_6_24_patch/drivers/infiniband/hw/nes/nes.c	2010-05-10 11:21:29.680495000 +0200
+@@ -1104,19 +1104,19 @@ static ssize_t nes_show_wqm_quanta(struc
+ static ssize_t nes_store_wqm_quanta(struct device_driver *ddp,
+ 					const char *buf, size_t count)
+ {
+-	unsigned long wqm_quanta_value;
++	u32 wqm_quanta;
+ 	u32 wqm_config1;
+ 	u32 i = 0;
+ 	struct nes_device *nesdev;
+ 
+-	strict_strtoul(buf, 0, &wqm_quanta_value);
++	wqm_quanta = simple_strtoul(buf, NULL, 0);
+ 	list_for_each_entry(nesdev, &nes_dev_list, list) {
+ 		if (i == ee_flsh_adapter) {
+-			nesdev->nesadapter->wqm_quanta = wqm_quanta_value;
++			nesdev->nesadapter->wqm_quanta = wqm_quanta;
+ 			wqm_config1 = nes_read_indexed(nesdev,
+ 						NES_IDX_WQM_CONFIG1);
+ 			nes_write_indexed(nesdev, NES_IDX_WQM_CONFIG1,
+-					((wqm_quanta_value << 1) |
++					((wqm_quanta << 1) |
+ 					(wqm_config1 & 0x00000001)));
+ 			break;
+ 		}

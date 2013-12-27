@@ -1,0 +1,66 @@
+backports: 2.6.25: fix device_create calls.
+
+Signed-off-by: Jack Morgenstein <jackm@dev.mellanox.co.il>
+
+Index: ofed_kernel-2.6.25/drivers/infiniband/core/cm.c
+===================================================================
+--- ofed_kernel-2.6.25.orig/drivers/infiniband/core/cm.c
++++ ofed_kernel-2.6.25/drivers/infiniband/core/cm.c
+@@ -3738,7 +3738,7 @@ static void cm_add_one(struct ib_device 
+ 	cm_get_ack_delay(cm_dev);
+ 
+ 	cm_dev->device = device_create(&cm_class, &ib_device->dev,
+-				       MKDEV(0, 0), NULL,
++				       MKDEV(0, 0),
+ 				       "%s", ib_device->name);
+ 	if (!cm_dev->device) {
+ 		kfree(cm_dev);
+Index: ofed_kernel-2.6.25/drivers/infiniband/core/user_mad.c
+===================================================================
+--- ofed_kernel-2.6.25.orig/drivers/infiniband/core/user_mad.c
++++ ofed_kernel-2.6.25/drivers/infiniband/core/user_mad.c
+@@ -1017,8 +1017,7 @@ static int ib_umad_init_port(struct ib_d
+ 		goto err_cdev;
+ 
+ 	port->dev = device_create(umad_class, device->dma_device,
+-				  port->cdev->dev, port,
+-				  "umad%d", port->dev_num);
++				  port->cdev->dev, "umad%d", port->dev_num);
+ 	if (IS_ERR(port->dev))
+ 		goto err_cdev;
+ 
+@@ -1037,11 +1036,14 @@ static int ib_umad_init_port(struct ib_d
+ 		goto err_sm_cdev;
+ 
+ 	port->sm_dev = device_create(umad_class, device->dma_device,
+-				     port->sm_cdev->dev, port,
++				     port->sm_cdev->dev,
+ 				     "issm%d", port->dev_num);
+ 	if (IS_ERR(port->sm_dev))
+ 		goto err_sm_cdev;
+ 
++	dev_set_drvdata(port->dev,    port);
++	dev_set_drvdata(port->sm_dev, port);
++
+ 	if (device_create_file(port->sm_dev, &dev_attr_ibdev))
+ 		goto err_sm_dev;
+ 	if (device_create_file(port->sm_dev, &dev_attr_port))
+Index: ofed_kernel-2.6.25/drivers/infiniband/core/uverbs_main.c
+===================================================================
+--- ofed_kernel-2.6.25.orig/drivers/infiniband/core/uverbs_main.c
++++ ofed_kernel-2.6.25/drivers/infiniband/core/uverbs_main.c
+@@ -801,11 +801,13 @@ static void ib_uverbs_add_one(struct ib_
+ 		goto err_cdev;
+ 
+ 	uverbs_dev->dev = device_create(uverbs_class, device->dma_device,
+-					uverbs_dev->cdev->dev, uverbs_dev,
++					uverbs_dev->cdev->dev,
+ 					"uverbs%d", uverbs_dev->devnum);
+ 	if (IS_ERR(uverbs_dev->dev))
+ 		goto err_cdev;
+ 
++	dev_set_drvdata(uverbs_dev->dev, uverbs_dev);
++
+ 	if (device_create_file(uverbs_dev->dev, &dev_attr_ibdev))
+ 		goto err_class;
+ 	if (device_create_file(uverbs_dev->dev, &dev_attr_abi_version))

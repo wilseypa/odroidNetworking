@@ -1,0 +1,69 @@
+core: fix memory leak in XRC userspace cleanup.
+
+When userspace invoked close_xrc_domain, the domain was deleted from
+the active-domains list for that process -- even if the process had
+active QPs and SRQs using that domain.
+
+The domain, however was not destroyed, and its resources were still
+allocated.
+
+As a result of deleting the domain from the active domains for the
+process, however, no attempt would be made to destroy the domain
+during cleanup. If it was the last process using that domain,
+the domain's resources remained allocated forever (memory/resource leak).
+
+The fix is to avoid deleting the domain from the active list if there
+are outstanding resources (QPs or SRQs) in the process which use it
+(same as is done for XRC_RCV qp's and xrc qp registration).
+
+Signed-off-by: Jack Morgenstein <jackm@dev.mellanox.co.il>
+
+---
+ drivers/infiniband/core/uverbs_cmd.c |   27 ++++++++++++++++++++++++++-
+ 1 file changed, 26 insertions(+), 1 deletion(-)
+
+Index: ofed_kernel/drivers/infiniband/core/uverbs_cmd.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/core/uverbs_cmd.c
++++ ofed_kernel/drivers/infiniband/core/uverbs_cmd.c
+@@ -2567,7 +2567,7 @@ ssize_t ib_uverbs_close_xrc_domain(struc
+ 				   int out_len)
+ {
+ 	struct ib_uverbs_close_xrc_domain cmd;
+-	struct ib_uobject *uobj;
++	struct ib_uobject *uobj, *t_uobj;
+ 	struct ib_uxrcd_object *xrcd_uobj;
+ 	struct ib_xrcd *xrcd = NULL;
+ 	struct inode *inode = NULL;
+@@ -2584,6 +2584,31 @@ ssize_t ib_uverbs_close_xrc_domain(struc
+ 		goto err_unlock_mutex;
+ 	}
+ 
++	mutex_lock(&file->mutex);
++	if (!ret) {
++		list_for_each_entry(t_uobj, &file->ucontext->qp_list, list) {
++			struct ib_qp *qp = t_uobj->object;
++			if (qp->xrcd && qp->xrcd == uobj->object) {
++				ret = -EBUSY;
++				break;
++			}
++		}
++	}
++	if (!ret) {
++		list_for_each_entry(t_uobj, &file->ucontext->srq_list, list) {
++			struct ib_srq *srq = t_uobj->object;
++			if (srq->xrcd && srq->xrcd == uobj->object) {
++				ret = -EBUSY;
++				break;
++			}
++		}
++	}
++	mutex_unlock(&file->mutex);
++	if (ret) {
++		put_uobj_write(uobj);
++		goto err_unlock_mutex;
++	}
++
+ 	xrcd_uobj = container_of(uobj, struct ib_uxrcd_object, uobject);
+ 	if (!list_empty(&xrcd_uobj->xrc_reg_qp_list)) {
+ 		ret = -EBUSY;

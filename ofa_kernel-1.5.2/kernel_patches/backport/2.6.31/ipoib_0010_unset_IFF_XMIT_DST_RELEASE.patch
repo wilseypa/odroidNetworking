@@ -1,0 +1,24 @@
+ipoib: unset IFF_XMIT_DST_RELEASE
+
+IPoIB need skb->dst in its start_xmit() function
+
+Tell dev_hard_start_xmit() to no release it by unsetting  IFF_XMIT_DST_RELEASE
+
+Signed-off-by: Eric Dumazet <eric.dumazet@gmail.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>
+---
+ drivers/infiniband/ulp/ipoib/ipoib_main.c |    1 +
+ 1 files changed, 1 insertions(+)
+
+diff --git a/drivers/infiniband/ulp/ipoib/ipoib_main.c b/drivers/infiniband/ulp/ipoib/ipoib_main.c
+index ab2c192..69c6304 100644
+--- a/drivers/infiniband/ulp/ipoib/ipoib_main.c
++++ b/drivers/infiniband/ulp/ipoib/ipoib_main.c
+@@ -1053,6 +1053,7 @@ static void ipoib_setup(struct net_device *dev)
+	dev->tx_queue_len	 = ipoib_sendq_size * 2;
+	dev->features		 = (NETIF_F_VLAN_CHALLENGED	|
+				    NETIF_F_HIGHDMA);
++	dev->priv_flags		&= ~IFF_XMIT_DST_RELEASE;
+ 
+	memcpy(dev->broadcast, ipv4_bcast_addr, INFINIBAND_ALEN);
+

@@ -1,0 +1,41 @@
+diff --git a/rxe/rxe.c b/rxe/rxe.c
+index 3ba7a59..0b09538 100644
+--- a/drivers/infiniband/hw/rxe/rxe.c
++++ b/drivers/infiniband/hw/rxe/rxe.c
+@@ -35,6 +35,7 @@
+ 
+ #include "rxe.h"
+ #include "rxe_loc.h"
++#include "rxe_debug.h"
+ 
+ atomic_t rxe_lock_ct;
+ EXPORT_SYMBOL(rxe_lock_ct);
+diff --git a/rxe/rxe_debug.h b/rxe/rxe_debug.h
+index 791554b..cc25170 100644
+--- a/drivers/infiniband/hw/rxe/rxe_debug.h
++++ b/drivers/infiniband/hw/rxe/rxe_debug.h
+@@ -120,4 +120,12 @@ char *rxe_indent(int ind);
+ 
+ #endif	/* CONFIG_INFINIBAND_RXE_DEBUG */
+ 
++#ifndef pr_fmt
++#define pr_fmt(fmt) fmt
++#endif
++#define pr_err(fmt, ...) \
++	printk(KERN_ERR pr_fmt(fmt), ##__VA_ARGS__)
++#define pr_warning(fmt, ...)					\
++	printk(KERN_WARNING pr_fmt(fmt), ##__VA_ARGS__)
++
+ #endif /* RXE_DEBUG_H */
+diff --git a/rxe/rxe_net_sysfs.c b/rxe/rxe_net_sysfs.c
+index e6a862f..249fade 100644
+--- a/drivers/infiniband/hw/rxe/rxe_net_sysfs.c
++++ b/drivers/infiniband/hw/rxe/rxe_net_sysfs.c
+@@ -33,6 +33,7 @@
+ 
+ #include "rxe.h"
+ #include "rxe_net.h"
++#include "rxe_debug.h"
+ 
+ /* Copy argument and remove trailing CR. Return the new length. */
+ static int sanitize_arg(const char *val, char *intf, int intf_len)

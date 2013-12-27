@@ -1,0 +1,13 @@
+Index: ofa_kernel-1.5.1/drivers/infiniband/hw/ehca/ehca_main.c
+===================================================================
+--- ofa_kernel-1.5.1.orig/drivers/infiniband/hw/ehca/ehca_main.c
++++ ofa_kernel-1.5.1/drivers/infiniband/hw/ehca/ehca_main.c
+@@ -52,7 +52,7 @@
+ #include "ehca_tools.h"
+ #include "hcp_if.h"
+ 
+-#define HCAD_VERSION "0029"
++#define HCAD_VERSION "0030"
+ 
+ MODULE_LICENSE("Dual BSD/GPL");
+ MODULE_AUTHOR("Christoph Raisch <raisch@de.ibm.com>");

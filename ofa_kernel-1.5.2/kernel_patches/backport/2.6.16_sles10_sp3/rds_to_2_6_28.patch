@@ -1,0 +1,43 @@
+commit 5e2de0589a6002f63f82fa3974c5bc0d4ef31eff
+Author: Andy Grover <andy.grover@oracle.com>
+Date:   Fri Jul 17 12:37:48 2009 -0700
+
+    RDS backport patch for pre-2.6.23
+    
+    Signed-off-by: Andy Grover <andy.grover@oracle.com>
+
+diff --git a/net/rds/rds.h b/net/rds/rds.h
+index 7179444..7f23b90 100644
+--- a/net/rds/rds.h
++++ b/net/rds/rds.h
+@@ -7,6 +7,7 @@
+ #include <rdma/rdma_cm.h>
+ #include <linux/mutex.h>
+ #include <linux/rds.h>
++#include <asm/kmap_types.h>
+ 
+ #include "info.h"
+ 
+@@ -638,7 +639,7 @@ struct rds_message *rds_send_get_message(struct rds_connection *,
+ void rds_rdma_unuse(struct rds_sock *rs, u32 r_key, int force);
+ 
+ /* stats.c */
+-DECLARE_PER_CPU_SHARED_ALIGNED(struct rds_statistics, rds_stats);
++DECLARE_PER_CPU(struct rds_statistics, rds_stats);
+ #define rds_stats_inc_which(which, member) do {		\
+ 	per_cpu(which, get_cpu()).member++;		\
+ 	put_cpu();					\
+diff --git a/net/rds/stats.c b/net/rds/stats.c
+index 6371468..758a5df 100644
+--- a/net/rds/stats.c
++++ b/net/rds/stats.c
+@@ -36,7 +36,7 @@
+ 
+ #include "rds.h"
+ 
+-DEFINE_PER_CPU_SHARED_ALIGNED(struct rds_statistics, rds_stats);
++DEFINE_PER_CPU(struct rds_statistics, rds_stats) ____cacheline_aligned;
+ EXPORT_PER_CPU_SYMBOL_GPL(rds_stats);
+
+ /* :.,$s/unsigned long\>.*\<s_\(.*\);/"\1",/g */
+

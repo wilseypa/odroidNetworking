@@ -1,0 +1,91 @@
+From 2211e5f9890a97ebe1b04a43c2c6500becc5326e Mon Sep 17 00:00:00 2001
+From: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+Date: Thu, 25 Dec 2008 17:19:58 +0200
+Subject: [PATCH] mlx4: Added documentation to the port management part.
+
+Signed-off-by: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+---
+ drivers/net/mlx4/main.c  |   18 ++++++++++++++++++
+ drivers/net/mlx4/sense.c |    2 +-
+ 2 files changed, 19 insertions(+), 1 deletions(-)
+
+diff --git a/drivers/net/mlx4/main.c b/drivers/net/mlx4/main.c
+index 4ac6896..74553b9 100644
+--- a/drivers/net/mlx4/main.c
++++ b/drivers/net/mlx4/main.c
+@@ -372,6 +372,8 @@ int mlx4_change_port_types(struct mlx4_dev *dev,
+ 	int port;
+ 
+ 	for (port = 0; port <  dev->caps.num_ports; port++) {
++		/* Change the port type only if the new type is different
++		 * from the current, and not set to Auto */
+ 		if (port_types[port] != dev->caps.port_type[port + 1] &&
+ 		    port_types[port] != MLX4_PORT_TYPE_AUTO) {
+ 			change = 1;
+@@ -442,8 +444,12 @@ static ssize_t set_port_type(struct device *dev,
+ 	}
+ 
+ 	mutex_lock(&priv->port_mutex);
++	/* Possible type is always the one that was delivered */
+ 	mdev->caps.possible_type[info->port] = info->tmp_type;
+ 	if (info->tmp_type == MLX4_PORT_TYPE_AUTO) {
++		/* Sense immediatelly to find the actual port type
++		 * If no port was sensed, assign the currently 
++		 * configured port type */
+ 		err = mlx4_SENSE_PORT(mdev, info->port, &tmp_type);
+ 		if (!err && (tmp_type == MLX4_PORT_TYPE_ETH ||
+ 			     tmp_type == MLX4_PORT_TYPE_IB)) {
+@@ -452,11 +458,15 @@ static ssize_t set_port_type(struct device *dev,
+ 			info->tmp_type = mdev->caps.port_type[info->port];
+ 	}
+ 
++	/* Collect the required port types from all ports,
++	 * If not specified, use the currently configured */
+ 	for (i = 0; i < mdev->caps.num_ports; i++)
+ 		types[i] = priv->port[i+1].tmp_type ? priv->port[i+1].tmp_type :
+ 					mdev->caps.possible_type[i+1];
+ 
+ 	if (priv->trig) {
++		/* Wait for the other ports to be modified, or perform
++		 * the change now */
+ 		if (++priv->changed_ports < mdev->caps.num_ports)
+ 			goto out;
+ 		else
+@@ -466,6 +476,9 @@ static ssize_t set_port_type(struct device *dev,
+ 	if (err)
+ 		goto out;
+ 
++	/* We are about to apply the changes after the configuration
++	 * was verified, no need to remember the temporary types
++	 * any more */
+ 	for (i = 0; i < mdev->caps.num_ports; i++) {
+ 		priv->port[i + 1].tmp_type = 0;
+ 	}
+@@ -477,6 +490,11 @@ out:
+ 	return err ? err : count;
+ }
+ 
++/*
++ * This function is invoked if user wants to modify all port types
++ * at once. We will wait for all the ports to be assigned new values,
++ * and only then will perform the change.
++ */
+ static ssize_t trigger_port(struct device *dev,
+ 			    struct device_attribute *attr,
+ 			    const char *buf, size_t count)
+diff --git a/drivers/net/mlx4/sense.c b/drivers/net/mlx4/sense.c
+index c3e556d..44e1a08 100644
+--- a/drivers/net/mlx4/sense.c
++++ b/drivers/net/mlx4/sense.c
+@@ -98,7 +98,7 @@ static void mlx4_sense_port(struct work_struct *work)
+ 	}
+ 
+ 	/*
+-	 * If both sensed nothing, remain in current configuration.
++	 * If sensed nothing, remain in current configuration.
+ 	 */
+         for (i = 0; i < dev->caps.num_ports; i++)
+ 		stype[i] = stype[i] ? stype[i] : dev->caps.port_type[i+1];
+-- 
+1.5.3
+

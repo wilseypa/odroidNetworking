@@ -1,0 +1,30 @@
+---
+ drivers/infiniband/ulp/ipoib/ipoib_main.c |    8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+Index: ofed_kernel/drivers/infiniband/ulp/ipoib/ipoib_main.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/ipoib/ipoib_main.c
++++ ofed_kernel/drivers/infiniband/ulp/ipoib/ipoib_main.c
+@@ -813,6 +813,13 @@ out:
+ 	return NETDEV_TX_OK;
+ }
+ 
++static struct net_device_stats *ipoib_get_stats(struct net_device *dev)
++{
++	struct ipoib_dev_priv *priv = netdev_priv(dev);
++
++	return &priv->stats;
++}
++
+ static void ipoib_timeout(struct net_device *dev)
+ {
+ 	struct ipoib_dev_priv *priv = netdev_priv(dev);
+@@ -1051,6 +1058,7 @@ static void ipoib_setup(struct net_devic
+ 	dev->stop		 = ipoib_stop;
+ 	dev->change_mtu		 = ipoib_change_mtu;
+ 	dev->hard_start_xmit	 = ipoib_start_xmit;
++	dev->get_stats 		 = ipoib_get_stats;
+ 	dev->tx_timeout		 = ipoib_timeout;
+ 	dev->hard_header         = ipoib_hard_header;
+ 	dev->set_multicast_list	 = ipoib_set_mcast_list;

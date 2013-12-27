@@ -1,0 +1,22 @@
+diff --git a/drivers/infiniband/hw/nes/nes_ud.c b/drivers/infiniband/hw/nes/nes_ud.c
+index 714759a..1bc88e8 100644
+--- a/drivers/infiniband/hw/nes/nes_ud.c
++++ b/drivers/infiniband/hw/nes/nes_ud.c
+@@ -1178,12 +1178,15 @@ struct nes_ud_mem_region *nes_ud_lookup_mr(u32 stag)
+ 
+ 	key = nes_ud_get_hash_entry(stag);
+ 
++	mutex_lock(&ud_mem.mutex);
+ 	list_for_each_entry(mr, &ud_mem.mrs[key].list, list) {
+ 		ud_mem.mrs[key].read_stats++;
+-		if (mr->stag == stag)
++		if (mr->stag == stag) {
++			mutex_unlock(&ud_mem.mutex);
+ 			return mr;
+-
++		}
+ 	}
++	mutex_unlock(&ud_mem.mutex);
+ 	return NULL;
+ }
+ 

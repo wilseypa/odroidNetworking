@@ -1,0 +1,143 @@
+BACKPORT - avoid using vmalloc_user() in 2.6.18 due to bugs.
+
+Signed-off-by: Ralph Campbell <ralph.campbell@qlogic.com>
+
+diff -up a/drivers/infiniband/hw/ipath/ipath_cq.c b/drivers/infiniband/hw/ipath/ipath_cq.c
+--- a/drivers/infiniband/hw/ipath/ipath_cq.c	2008-10-24 10:40:30.000000000 -0700
++++ b/drivers/infiniband/hw/ipath/ipath_cq.c	2008-10-24 10:45:56.000000000 -0700
+@@ -230,11 +230,12 @@ struct ib_cq *ipath_create_cq(struct ib_
+ 		sz += sizeof(struct ib_uverbs_wc) * (entries + 1);
+ 	else
+ 		sz += sizeof(struct ib_wc) * (entries + 1);
+-	wc = vmalloc_user(sz);
++	wc = vmalloc(sz);
+ 	if (!wc) {
+ 		ret = ERR_PTR(-ENOMEM);
+ 		goto bail_cq;
+ 	}
++	memset(wc, 0, sz);
+ 
+ 	/*
+ 	 * Return the address of the WC as the offset to mmap.
+@@ -389,11 +390,12 @@ int ipath_resize_cq(struct ib_cq *ibcq, 
+ 		sz += sizeof(struct ib_uverbs_wc) * (cqe + 1);
+ 	else
+ 		sz += sizeof(struct ib_wc) * (cqe + 1);
+-	wc = vmalloc_user(sz);
++	wc = vmalloc(sz);
+ 	if (!wc) {
+ 		ret = -ENOMEM;
+ 		goto bail;
+ 	}
++	memset(wc, 0, sz);
+ 
+ 	/* Check that we can write the offset to mmap. */
+ 	if (udata && udata->outlen >= sizeof(__u64)) {
+diff -up a/drivers/infiniband/hw/ipath/ipath_mmap.c b/drivers/infiniband/hw/ipath/ipath_mmap.c
+--- a/drivers/infiniband/hw/ipath/ipath_mmap.c	2008-10-24 10:40:30.000000000 -0700
++++ b/drivers/infiniband/hw/ipath/ipath_mmap.c	2008-10-24 10:45:56.000000000 -0700
+@@ -74,9 +74,40 @@ static void ipath_vma_close(struct vm_ar
+ 	kref_put(&ip->ref, ipath_release_mmap_info);
+ }
+ 
++/*
++ * ipath_vma_nopage - handle a VMA page fault.
++ */
++static struct page *ipath_vma_nopage(struct vm_area_struct *vma,
++				     unsigned long address, int *type)
++{
++	struct ipath_mmap_info *ip = vma->vm_private_data;
++	unsigned long offset = address - vma->vm_start;
++	struct page *page = NOPAGE_SIGBUS;
++	void *pageptr;
++
++	if (offset >= ip->size)
++		goto out; /* out of range */
++
++	/*
++	 * Convert the vmalloc address into a struct page.
++	 */
++	pageptr = (void *)(offset + ip->obj);
++	page = vmalloc_to_page(pageptr);
++	if (!page)
++		goto out;
++
++	/* Increment the reference count. */
++	get_page(page);
++	if (type)
++		*type = VM_FAULT_MINOR;
++out:
++	return page;
++}
++
+ static struct vm_operations_struct ipath_vm_ops = {
+ 	.open =     ipath_vma_open,
+ 	.close =    ipath_vma_close,
++	.nopage =   ipath_vma_nopage,
+ };
+ 
+ /**
+@@ -111,10 +142,10 @@ int ipath_mmap(struct ib_ucontext *conte
+ 		list_del_init(&ip->pending_mmaps);
+ 		spin_unlock_irq(&dev->pending_lock);
+ 
+-		ret = remap_vmalloc_range(vma, ip->obj, 0);
+-		if (ret)
+-			goto done;
++		ret = 0;
++
+ 		vma->vm_ops = &ipath_vm_ops;
++		vma->vm_flags |= VM_RESERVED | VM_DONTEXPAND;
+ 		vma->vm_private_data = ip;
+ 		ipath_vma_open(vma);
+ 		goto done;
+diff -up a/drivers/infiniband/hw/ipath/ipath_qp.c b/drivers/infiniband/hw/ipath/ipath_qp.c
+--- a/drivers/infiniband/hw/ipath/ipath_qp.c	2008-10-24 10:40:33.000000000 -0700
++++ b/drivers/infiniband/hw/ipath/ipath_qp.c	2008-10-24 10:47:56.000000000 -0700
+@@ -827,12 +827,14 @@ struct ib_qp *ipath_create_qp(struct ib_
+ 			qp->r_rq.max_sge = init_attr->cap.max_recv_sge;
+ 			sz = (sizeof(struct ib_sge) * qp->r_rq.max_sge) +
+ 				sizeof(struct ipath_rwqe);
+-			qp->r_rq.wq = vmalloc_user(sizeof(struct ipath_rwq) +
++			qp->r_rq.wq = vmalloc(sizeof(struct ipath_rwq) +
+ 					      qp->r_rq.size * sz);
+ 			if (!qp->r_rq.wq) {
+ 				ret = ERR_PTR(-ENOMEM);
+ 				goto bail_sg_list;
+ 			}
++			memset(qp->r_rq.wq, 0,
++			       sizeof(struct ipath_rwq) + qp->r_rq.size * sz);
+ 		}
+ 
+ 		/*
+diff -up a/drivers/infiniband/hw/ipath/ipath_srq.c b/drivers/infiniband/hw/ipath/ipath_srq.c
+--- a/drivers/infiniband/hw/ipath/ipath_srq.c	2008-10-24 10:40:30.000000000 -0700
++++ b/drivers/infiniband/hw/ipath/ipath_srq.c	2008-10-24 10:45:56.000000000 -0700
+@@ -130,11 +130,12 @@ struct ib_srq *ipath_create_srq(struct i
+ 	srq->rq.max_sge = srq_init_attr->attr.max_sge;
+ 	sz = sizeof(struct ib_sge) * srq->rq.max_sge +
+ 		sizeof(struct ipath_rwqe);
+-	srq->rq.wq = vmalloc_user(sizeof(struct ipath_rwq) + srq->rq.size * sz);
++	srq->rq.wq = vmalloc(sizeof(struct ipath_rwq) + srq->rq.size * sz);
+ 	if (!srq->rq.wq) {
+ 		ret = ERR_PTR(-ENOMEM);
+ 		goto bail_srq;
+ 	}
++	memset(srq->rq.wq, 0, sizeof(struct ipath_rwq) + srq->rq.size * sz);
+ 
+ 	/*
+ 	 * Return the address of the RWQ as the offset to mmap.
+@@ -230,11 +231,12 @@ int ipath_modify_srq(struct ib_srq *ibsr
+ 		sz = sizeof(struct ipath_rwqe) +
+ 			srq->rq.max_sge * sizeof(struct ib_sge);
+ 		size = attr->max_wr + 1;
+-		wq = vmalloc_user(sizeof(struct ipath_rwq) + size * sz);
++		wq = vmalloc(sizeof(struct ipath_rwq) + size * sz);
+ 		if (!wq) {
+ 			ret = -ENOMEM;
+ 			goto bail;
+ 		}
++		memset(wq, 0, sizeof(struct ipath_rwq) + size * sz);
+ 
+ 		/* Check that we can write the offset to mmap. */
+ 		if (udata && udata->inlen >= sizeof(__u64)) {

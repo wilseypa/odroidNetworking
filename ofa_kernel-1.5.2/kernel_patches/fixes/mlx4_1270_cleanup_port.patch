@@ -1,0 +1,13 @@
+diff --git a/drivers/net/mlx4/main.c b/drivers/net/mlx4/main.c 
+index 5290bb2..7204063 100644 
+--- a/drivers/net/mlx4/main.c 
++++ b/drivers/net/mlx4/main.c
+@@ -1354,7 +1344,7 @@ static int __mlx4_init_one(struct pci_dev *pdev, const struct pci_device_id *id)
+ err_register:
+ 	mlx4_unregister_device(dev);
+ err_port:
+-	for (port = 1; port <= dev->caps.num_ports; port++)
++	for (--port; port >= 1; --port)
+ 		mlx4_cleanup_port_info(&priv->port[port]);
+ 
+ 	mlx4_cleanup_mcg_table(dev);

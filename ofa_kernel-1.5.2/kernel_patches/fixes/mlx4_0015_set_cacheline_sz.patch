@@ -1,0 +1,31 @@
+Set cacheline size to 64 for x86_64 and PPC64 architectures.
+
+Signed-off-by: Jack Morgenstein <jackm@dev.mellanox.co.il>
+
+---
+ drivers/net/mlx4/fw.c |    5 +++++
+ 1 file changed, 5 insertions(+)
+
+Index: ofed_kernel/drivers/net/mlx4/fw.c
+===================================================================
+--- ofed_kernel.orig/drivers/net/mlx4/fw.c
++++ ofed_kernel/drivers/net/mlx4/fw.c
+@@ -686,6 +686,8 @@ int mlx4_INIT_HCA(struct mlx4_dev *dev, 
+ #define INIT_HCA_IN_SIZE		 0x200
+ #define INIT_HCA_VERSION_OFFSET		 0x000
+ #define	 INIT_HCA_VERSION		 2
++#define INIT_HCA_CACHELINE_SZ_OFFSET	 0x0e
++#define INIT_HCA_X86_64_BYTE_CACHELINE_SZ	 0x40
+ #define INIT_HCA_FLAGS_OFFSET		 0x014
+ #define INIT_HCA_QPC_OFFSET		 0x020
+ #define	 INIT_HCA_QPC_BASE_OFFSET	 (INIT_HCA_QPC_OFFSET + 0x10)
+@@ -722,6 +724,9 @@ int mlx4_INIT_HCA(struct mlx4_dev *dev, 
+ 	memset(inbox, 0, INIT_HCA_IN_SIZE);
+ 
+ 	*((u8 *) mailbox->buf + INIT_HCA_VERSION_OFFSET) = INIT_HCA_VERSION;
++#if defined(__x86_64__) || defined(__PPC64__)
++	*((u8 *) mailbox->buf + INIT_HCA_CACHELINE_SZ_OFFSET) = INIT_HCA_X86_64_BYTE_CACHELINE_SZ;
++#endif
+ 
+ #if defined(__LITTLE_ENDIAN)
+ 	*(inbox + INIT_HCA_FLAGS_OFFSET / 4) &= ~cpu_to_be32(1 << 1);

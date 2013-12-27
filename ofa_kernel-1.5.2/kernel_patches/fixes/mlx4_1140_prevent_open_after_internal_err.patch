@@ -1,0 +1,69 @@
+mlx4:  Do not allow ib userspace open following a fatal event.
+
+Userspace apps are supposed to release all ib device resources if
+they receive a fatal async event (IBV_EVENT_DEVICE_FATAL).  However,
+the app has no way of knowing when the device has come back up, except
+to repeatedly attempt ibv_open_device() until it succeeds.
+
+However, currently there is no protection against open succeeding when
+the device is in the midst of the removal following the fatal event.
+In this case, the open will succeed, but as a result the device waits
+in the middle of its removal until the new app releases its ib resources
+ -- and the new app will not do so, since the open succeeded at a point
+following the fatal event generation.
+
+This patch adds an "active" flag to the device. The active flag is set to
+false (in the fatal event flow) before the "fatal" event is generated,
+so any subsequent ibv_dev_open() call to the device will fail until the
+device comes back up, thus preventing the above deadlock.
+
+V2: move active flag from net to hw/mlx4, and use only for fatal event flow.
+(per feedback from Roland).
+
+V3: fixed checkpatch.pl warnings.
+
+Signed-off-by: Jack Morgenstein <jackm@dev.mellanox.co.il>
+
+Index: ofed_kernel/drivers/infiniband/hw/mlx4/main.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/hw/mlx4/main.c	2009-08-11 10:30:40.818650000 +0300
++++ ofed_kernel/drivers/infiniband/hw/mlx4/main.c	2009-08-11 10:30:41.259650000 +0300
+@@ -354,6 +354,9 @@ static struct ib_ucontext *mlx4_ib_alloc
+ 	struct mlx4_ib_alloc_ucontext_resp resp;
+ 	int err;
+ 
++	if (!dev->ib_active)
++		return ERR_PTR(-EAGAIN);
++
+ 	resp.qp_tab_size      = dev->dev->caps.num_qps;
+ 
+ 	if (mlx4_wc_enabled()) {
+@@ -918,6 +921,8 @@ static void *mlx4_ib_add(struct mlx4_dev
+ 	if(sysfs_create_group(&ibdev->ib_dev.dev.kobj, &diag_counters_group))
+ 		goto err_reg;
+ 
++	ibdev->ib_active = 1;
++
+ 	return ibdev;
+ 
+ err_reg:
+@@ -976,6 +981,7 @@ static void mlx4_ib_event(struct mlx4_de
+ 		break;
+ 
+ 	case MLX4_DEV_EVENT_CATASTROPHIC_ERROR:
++		ibdev->ib_active = 0;
+ 		ibev.event = IB_EVENT_DEVICE_FATAL;
+ 		break;
+ 
+Index: ofed_kernel/drivers/infiniband/hw/mlx4/mlx4_ib.h
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/hw/mlx4/mlx4_ib.h	2009-08-11 10:30:40.266669000 +0300
++++ ofed_kernel/drivers/infiniband/hw/mlx4/mlx4_ib.h	2009-08-11 10:30:41.263651000 +0300
+@@ -212,6 +212,7 @@ struct mlx4_ib_dev {
+ 
+ 	struct mutex		cap_mask_mutex;
+ 	struct mutex		xrc_reg_mutex;
++	int			ib_active;
+ };
+ 
+ static inline struct mlx4_ib_dev *to_mdev(struct ib_device *ibdev)

@@ -1,0 +1,65 @@
+From 34a43622ec035aa41a5383c31245838472784c1b Mon Sep 17 00:00:00 2001
+From: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+Date: Sun, 31 May 2009 11:59:25 +0300
+Subject: [PATCH 1/8] mlx4_en: Don't use netdev_ops
+
+Signed-off-by: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+---
+ drivers/net/mlx4/en_netdev.c |   34 +++++++++++++++-------------------
+ 1 files changed, 15 insertions(+), 19 deletions(-)
+
+diff --git a/drivers/net/mlx4/en_netdev.c b/drivers/net/mlx4/en_netdev.c
+index a38adf5..4ad5f3c 100644
+--- a/drivers/net/mlx4/en_netdev.c
++++ b/drivers/net/mlx4/en_netdev.c
+@@ -933,24 +933,6 @@ static int mlx4_en_change_mtu(struct net_device *dev, int new_mtu)
+ 	return 0;
+ }
+ 
+-static const struct net_device_ops mlx4_netdev_ops = {
+-	.ndo_open		= mlx4_en_open,
+-	.ndo_stop		= mlx4_en_close,
+-	.ndo_start_xmit		= mlx4_en_xmit,
+-	.ndo_select_queue	= mlx4_en_select_queue,
+-	.ndo_get_stats		= mlx4_en_get_stats,
+-	.ndo_set_multicast_list	= mlx4_en_set_multicast,
+-	.ndo_set_mac_address	= mlx4_en_set_mac,
+-	.ndo_validate_addr	= eth_validate_addr,
+-	.ndo_change_mtu		= mlx4_en_change_mtu,
+-	.ndo_tx_timeout		= mlx4_en_tx_timeout,
+-	.ndo_vlan_rx_register	= mlx4_en_vlan_rx_register,
+-	.ndo_vlan_rx_add_vid	= mlx4_en_vlan_rx_add_vid,
+-	.ndo_vlan_rx_kill_vid	= mlx4_en_vlan_rx_kill_vid,
+-#ifdef CONFIG_NET_POLL_CONTROLLER
+-	.ndo_poll_controller	= mlx4_en_netpoll,
+-#endif
+-};
+ 
+ int mlx4_en_init_netdev(struct mlx4_en_dev *mdev, int port,
+ 			struct mlx4_en_port_profile *prof)
+@@ -1026,7 +1008,21 @@ int mlx4_en_init_netdev(struct mlx4_en_dev *mdev, int port,
+ 	/*
+ 	 * Initialize netdev entry points
+ 	 */
+-	dev->netdev_ops = &mlx4_netdev_ops;
++	dev->open		= mlx4_en_open;
++	dev->stop		= mlx4_en_close;
++	dev->hard_start_xmit	= mlx4_en_xmit,
++	dev->select_queue	= mlx4_en_select_queue,
++	dev->get_stats		= mlx4_en_get_stats,
++	dev->set_multicast_list	= mlx4_en_set_multicast,
++	dev->set_mac_address	= mlx4_en_set_mac,
++	dev->change_mtu		= mlx4_en_change_mtu,
++	dev->tx_timeout		= mlx4_en_tx_timeout,
++	dev->vlan_rx_register	= mlx4_en_vlan_rx_register,
++	dev->vlan_rx_add_vid	= mlx4_en_vlan_rx_add_vid,
++	dev->vlan_rx_kill_vid	= mlx4_en_vlan_rx_kill_vid,
++#ifdef CONFIG_NET_POLL_CONTROLLER
++	dev->poll_controller	= mlx4_en_netpoll,
++#endif
+ 	dev->watchdog_timeo = MLX4_EN_WATCHDOG_TIMEOUT;
+ 
+ 	SET_ETHTOOL_OPS(dev, &mlx4_en_ethtool_ops);
+-- 
+1.6.1.3
+

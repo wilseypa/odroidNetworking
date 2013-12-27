@@ -1,0 +1,59 @@
+RDMA/core: add support for iWarp multicast acceleration over
+	IB_QPT_RAW_ETY QP type
+
+The patch enables usage of attach_mcast()/detach_mcast driver
+specific verbs for iWARP devices.
+
+IB path is unchanged.
+iWARP path adds checking for raw ethernet QP type
+
+Signed-off-by: Mirek Walukiewicz <miroslaw.walukiewicz@intel.com>
+
+---
+drivers/infiniband/core/verbs.c |   24 ++++++++++++++++++++----
+ 1 files changed, 20 insertions(+), 4 deletions(-)
+
+Index: ofed_kernel-fixes/drivers/infiniband/core/verbs.c
+===================================================================
+--- ofed_kernel-fixes.orig/drivers/infiniband/core/verbs.c	2010-05-27 13:36:10.000000000 +0300
++++ ofed_kernel-fixes/drivers/infiniband/core/verbs.c	2010-05-27 13:42:05.000000000 +0300
+@@ -1001,9 +1001,17 @@ int ib_attach_mcast(struct ib_qp *qp, un
+ {
+ 	if (!qp->device->attach_mcast)
+ 		return -ENOSYS;
+-	if (gid->raw[0] != 0xff || qp->qp_type != IB_QPT_UD)
+-		return -EINVAL;
+ 
++	switch (rdma_node_get_transport(qp->device->node_type)) {
++	case RDMA_TRANSPORT_IB:
++		if (gid->raw[0] != 0xff || qp->qp_type != IB_QPT_UD)
++			return -EINVAL;
++		break;
++	case RDMA_TRANSPORT_IWARP:
++		if (qp->qp_type != IB_QPT_RAW_ETY)
++			return -EINVAL;
++		break;
++	}
+ 	return qp->device->attach_mcast(qp, gid, lid);
+ }
+ EXPORT_SYMBOL(ib_attach_mcast);
+@@ -1012,9 +1020,17 @@ int ib_detach_mcast(struct ib_qp *qp, un
+ {
+ 	if (!qp->device->detach_mcast)
+ 		return -ENOSYS;
+-	if (gid->raw[0] != 0xff || qp->qp_type != IB_QPT_UD)
+-		return -EINVAL;
+ 
++	switch (rdma_node_get_transport(qp->device->node_type)) {
++	case RDMA_TRANSPORT_IB:
++		if (gid->raw[0] != 0xff || qp->qp_type != IB_QPT_UD)
++			return -EINVAL;
++		break;
++	case RDMA_TRANSPORT_IWARP:
++		if (qp->qp_type != IB_QPT_RAW_ETY)
++			return -EINVAL;
++		break;
++	}
+ 	return qp->device->detach_mcast(qp, gid, lid);
+ }
+ EXPORT_SYMBOL(ib_detach_mcast);

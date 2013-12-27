@@ -1,0 +1,135 @@
+IB/ipath - fix IBC register hazard, can't do back to back writes
+
+A hazard was found that could cause writes to IBC registers to be ignored.
+Write the scratch register after each IBC register write to prevent this.
+No locking for this version.
+
+Signed-off-by: Dave Olson <dave.olson@qlogic.com>
+
+diff --git a/drivers/infiniband/hw/ipath/ipath_driver.c b/drivers/infiniband/hw/ipath/ipath_driver.c
+index ad0aab6..baf9e1f 100644
+--- a/drivers/infiniband/hw/ipath/ipath_driver.c
++++ b/drivers/infiniband/hw/ipath/ipath_driver.c
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 2006, 2007, 2008 QLogic Corporation. All rights reserved.
++ * Copyright (c) 2006, 2007, 2008, 2009 QLogic Corporation. All rights reserved.
+  * Copyright (c) 2003, 2004, 2005, 2006 PathScale, Inc. All rights reserved.
+  *
+  * This software is available to you under a choice of one of two
+@@ -2098,6 +2098,7 @@ int ipath_set_linkstate(struct ipath_devdata *dd, u8 newstate)
+ 		dd->ipath_ibcctrl |= INFINIPATH_IBCC_LOOPBACK;
+ 		ipath_write_kreg(dd, dd->ipath_kregs->kr_ibcctrl,
+ 				 dd->ipath_ibcctrl);
++		ipath_write_kreg(dd, dd->ipath_kregs->kr_scratch, 0xfeedbeef);
+ 
+ 		/* turn heartbeat off, as it causes loopback to fail */
+ 		dd->ipath_f_set_ib_cfg(dd, IPATH_IB_CFG_HRTBT,
+@@ -2114,6 +2115,7 @@ int ipath_set_linkstate(struct ipath_devdata *dd, u8 newstate)
+ 		dd->ipath_ibcctrl &= ~INFINIPATH_IBCC_LOOPBACK;
+ 		ipath_write_kreg(dd, dd->ipath_kregs->kr_ibcctrl,
+ 				 dd->ipath_ibcctrl);
++		ipath_write_kreg(dd, dd->ipath_kregs->kr_scratch, 0xfeedbeef);
+ 		/* don't wait */
+ 		ret = 0;
+ 		goto bail;
+@@ -2215,6 +2217,7 @@ int ipath_set_mtu(struct ipath_devdata *dd, u16 arg)
+ 		dd->ipath_ibcctrl = ibc;
+ 		ipath_write_kreg(dd, dd->ipath_kregs->kr_ibcctrl,
+ 				 dd->ipath_ibcctrl);
++		ipath_write_kreg(dd, dd->ipath_kregs->kr_scratch, 0xfeedbeef);
+ 		dd->ipath_f_tidtemplate(dd);
+ 	}
+ 
+diff --git a/drivers/infiniband/hw/ipath/ipath_iba7220.c b/drivers/infiniband/hw/ipath/ipath_iba7220.c
+index 9839e20..809638b 100644
+--- a/drivers/infiniband/hw/ipath/ipath_iba7220.c
++++ b/drivers/infiniband/hw/ipath/ipath_iba7220.c
+@@ -996,8 +996,10 @@ static int ipath_7220_bringup_serdes(struct ipath_devdata *dd)
+ 
+ 	ipath_write_kreg(dd, dd->ipath_kregs->kr_ibcddrctrl,
+ 			dd->ipath_ibcddrctrl);
++	ipath_write_kreg(dd, dd->ipath_kregs->kr_scratch, 0xfeedbeef);
+ 
+ 	ipath_write_kreg(dd, IPATH_KREG_OFFSET(IBNCModeCtrl), 0Ull);
++	ipath_write_kreg(dd, dd->ipath_kregs->kr_scratch, 0xfeedbeef);
+ 
+ 	/* IBA7220 has SERDES MPU reset in D0 of what _was_ IBPLLCfg */
+ 	val = ipath_read_kreg64(dd, dd->ipath_kregs->kr_ibserdesctrl);
+@@ -1045,6 +1047,7 @@ static int ipath_7220_bringup_serdes(struct ipath_devdata *dd)
+ 		ipath_cdbg(VERBOSE, "Wrote %llX to HRTBT_GUID\n",
+ 			(unsigned long long) guid);
+ 	ipath_write_kreg(dd, dd->ipath_kregs->kr_hrtbt_guid, guid);
++	ipath_write_kreg(dd, dd->ipath_kregs->kr_scratch, 0xfeedbeef);
+ 	return ret;
+ }
+ 
+@@ -2121,6 +2124,7 @@ static int ipath_7220_set_ib_cfg(struct ipath_devdata *dd, int which, u32 val)
+ 	dd->ipath_ibcddrctrl |= (((u64) val & maskr) << lsb);
+ 	ipath_write_kreg(dd, dd->ipath_kregs->kr_ibcddrctrl,
+ 			 dd->ipath_ibcddrctrl);
++	ipath_write_kreg(dd, dd->ipath_kregs->kr_scratch, 0xfeedbeef);
+ 	if (setforce)
+ 		dd->ipath_flags |= IPATH_IB_FORCE_NOTIFY;
+ bail:
+@@ -2294,6 +2298,7 @@ static void set_speed_fast(struct ipath_devdata *dd, u32 speed)
+ 		IBA7220_IBC_WIDTH_SHIFT;
+ 	ipath_write_kreg(dd, dd->ipath_kregs->kr_ibcddrctrl,
+ 			dd->ipath_ibcddrctrl);
++	ipath_write_kreg(dd, dd->ipath_kregs->kr_scratch, 0xfeedbeef);
+ 	ipath_cdbg(VERBOSE, "setup for IB speed (%x) done\n", speed);
+ }
+ 
+@@ -2313,6 +2318,7 @@ static void try_auto_neg(struct ipath_devdata *dd)
+ 	 */
+ 	ipath_write_kreg(dd, IPATH_KREG_OFFSET(IBNCModeCtrl),
+ 		0x3b9dc07);
++	ipath_write_kreg(dd, dd->ipath_kregs->kr_scratch, 0xfeedbeef);
+ 	dd->ipath_flags |= IPATH_IB_AUTONEG_INPROG;
+ 	ipath_autoneg_send(dd, 0);
+ 	set_speed_fast(dd, IPATH_IB_DDR);
+@@ -2404,6 +2410,9 @@ static int ipath_7220_ib_updown(struct ipath_devdata *dd, int ibup, u64 ibcs)
+ 				ipath_write_kreg(dd,
+ 					IPATH_KREG_OFFSET(IBNCModeCtrl), 0);
++				ipath_write_kreg(dd,
++					dd->ipath_kregs->kr_scratch,
++					0xfeedbeef);
+ 				symadj = 1;
+ 			}
+ 		}
+ 		/*
+diff --git a/drivers/infiniband/hw/ipath/ipath_mad.c b/drivers/infiniband/hw/ipath/ipath_mad.c
+index be4fc9a..4e5a0ff 100644
+--- a/drivers/infiniband/hw/ipath/ipath_mad.c
++++ b/drivers/infiniband/hw/ipath/ipath_mad.c
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 2006, 2007, 2008 QLogic Corporation. All rights reserved.
++ * Copyright (c) 2006, 2007, 2008, 2009 QLogic Corporation. All rights reserved.
+  * Copyright (c) 2005, 2006 PathScale, Inc. All rights reserved.
+  *
+  * This software is available to you under a choice of one of two
+@@ -184,6 +184,7 @@ static int set_overrunthreshold(struct ipath_devdata *dd, unsigned n)
+ 			(u64) n << INFINIPATH_IBCC_OVERRUNTHRESHOLD_SHIFT;
+ 		ipath_write_kreg(dd, dd->ipath_kregs->kr_ibcctrl,
+ 				 dd->ipath_ibcctrl);
++		ipath_write_kreg(dd, dd->ipath_kregs->kr_scratch, 0xfeedbeef);
+ 	}
+ 	return 0;
+ }
+@@ -216,6 +217,7 @@ static int set_phyerrthreshold(struct ipath_devdata *dd, unsigned n)
+ 			(u64) n << INFINIPATH_IBCC_PHYERRTHRESHOLD_SHIFT;
+ 		ipath_write_kreg(dd, dd->ipath_kregs->kr_ibcctrl,
+ 				 dd->ipath_ibcctrl);
++		ipath_write_kreg(dd, dd->ipath_kregs->kr_scratch, 0xfeedbeef);
+ 	}
+ 	return 0;
+ }
+@@ -401,6 +403,7 @@ static int set_linkdowndefaultstate(struct ipath_devdata *dd, int sleep)
+ 		dd->ipath_ibcctrl &= ~INFINIPATH_IBCC_LINKDOWNDEFAULTSTATE;
+ 	ipath_write_kreg(dd, dd->ipath_kregs->kr_ibcctrl,
+ 			 dd->ipath_ibcctrl);
++	ipath_write_kreg(dd, dd->ipath_kregs->kr_scratch, 0xfeedbeef);
+ 	return 0;
+ }
+ 

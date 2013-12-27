@@ -1,0 +1,36 @@
+diff --git a/drivers/infiniband/hw/nes/nes_hw.c b/drivers/infiniband/hw/nes/nes_hw.c
+index 9b3f834..c6928a8 100644
+--- a/drivers/infiniband/hw/nes/nes_hw.c
++++ b/drivers/infiniband/hw/nes/nes_hw.c
+@@ -483,7 +483,7 @@ struct nes_adapter *nes_init_adapter(struct nes_device *nesdev, u8 hw_rev) {
+ 	nesadapter->max_irrq_wr = (u32temp >> 16) & 3;
+ 
+ 	nesadapter->max_sge = 4;
+-	nesadapter->max_cqe = 32767;
++	nesadapter->max_cqe = 32766;
+ 
+ 	if (nes_read_eeprom_values(nesdev, nesadapter)) {
+ 		printk(KERN_ERR PFX "Unable to read EEPROM data.\n");
+diff --git a/drivers/infiniband/hw/nes/nes_verbs.c b/drivers/infiniband/hw/nes/nes_verbs.c
+index 9a52ff2..e26b8f8 100644
+--- a/drivers/infiniband/hw/nes/nes_verbs.c
++++ b/drivers/infiniband/hw/nes/nes_verbs.c
+@@ -861,7 +861,7 @@ static int nes_query_device(struct ib_device *ibdev, struct ib_device_attr *prop
+ 	props->max_qp_wr = nesdev->nesadapter->max_qp_wr - 2;
+ 	props->max_sge = nesdev->nesadapter->max_sge;
+ 	props->max_cq = nesibdev->max_cq;
+-	props->max_cqe = nesdev->nesadapter->max_cqe - 1;
++	props->max_cqe = nesdev->nesadapter->max_cqe;
+ 	props->max_mr = nesibdev->max_mr;
+ 	props->max_mw = nesibdev->max_mr;
+ 	props->max_pd = nesibdev->max_pd;
+@@ -1883,6 +1883,9 @@ static struct ib_cq *nes_create_cq(struct ib_device *ibdev, int entries,
+ 	unsigned long flags;
+ 	int ret;
+ 
++	if (entries > nesadapter->max_cqe)
++		return ERR_PTR(-EINVAL);
++
+ 	err = nes_alloc_resource(nesadapter, nesadapter->allocated_cqs,
+ 			nesadapter->max_cq, &cq_num, &nesadapter->next_cq);
+ 	if (err) {

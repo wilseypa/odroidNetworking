@@ -1,0 +1,53 @@
+From b3cd8d45a764e6edb06e7bd386faf99a879569b8 Mon Sep 17 00:00:00 2001
+From: Tom Talpey <talpey@netapp.com>
+Date: Thu, 9 Oct 2008 15:02:02 -0400
+Subject: [PATCH] RPC/RDMA: optionally emit useful transport info upon connect/disconnect.
+
+Signed-off-by: Tom Talpey <talpey@netapp.com>
+Signed-off-by: Trond Myklebust <Trond.Myklebust@netapp.com>
+
+diff --git a/net/sunrpc/xprtrdma/transport.c b/net/sunrpc/xprtrdma/transport.c
+index c7d2380..c2da680 100644
+--- a/net/sunrpc/xprtrdma/transport.c
++++ b/net/sunrpc/xprtrdma/transport.c
+@@ -784,7 +784,7 @@ static void __exit xprt_rdma_cleanup(void)
+ {
+ 	int rc;
+ 
+-	dprintk("RPCRDMA Module Removed, deregister RPC RDMA transport\n");
++	dprintk(KERN_INFO "RPCRDMA Module Removed, deregister RPC RDMA transport\n");
+ #ifdef RPC_DEBUG
+ 	if (sunrpc_table_header) {
+ 		unregister_sysctl_table(sunrpc_table_header);
+diff --git a/net/sunrpc/xprtrdma/verbs.c b/net/sunrpc/xprtrdma/verbs.c
+index f46fb93..170e69c 100644
+--- a/net/sunrpc/xprtrdma/verbs.c
++++ b/net/sunrpc/xprtrdma/verbs.c
+@@ -344,6 +344,27 @@ connected:
+ 		break;
+ 	}
+ 
++#ifdef RPC_DEBUG
++	if (connstate == 1) {
++		int ird = attr.max_dest_rd_atomic;
++		int tird = ep->rep_remote_cma.responder_resources;
++		printk(KERN_INFO "rpcrdma: connection to %u.%u.%u.%u:%u "
++			"on %s, memreg %d slots %d ird %d%s\n",
++			NIPQUAD(addr->sin_addr.s_addr),
++			ntohs(addr->sin_port),
++			ia->ri_id->device->name,
++			ia->ri_memreg_strategy,
++			xprt->rx_buf.rb_max_requests,
++			ird, ird < 4 && ird < tird / 2 ? " (low!)" : "");
++	} else if (connstate < 0) {
++		printk(KERN_INFO "rpcrdma: connection to %u.%u.%u.%u:%u "
++			"closed (%d)\n",
++			NIPQUAD(addr->sin_addr.s_addr),
++			ntohs(addr->sin_port),
++			connstate);
++	}
++#endif
++
+ 	return 0;
+ }
+ 

@@ -1,0 +1,95 @@
+---
+ drivers/infiniband/ulp/srp/ib_srp.c |   33 +++++++++++++++++++--------------
+ 1 file changed, 19 insertions(+), 14 deletions(-)
+
+Index: ofed_kernel/drivers/infiniband/ulp/srp/ib_srp.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/srp/ib_srp.c
++++ ofed_kernel/drivers/infiniband/ulp/srp/ib_srp.c
+@@ -1380,8 +1380,7 @@ static int srp_send_tsk_mgmt(struct srp_
+ {
+ 	struct srp_iu *iu;
+ 	struct srp_tsk_mgmt *tsk_mgmt;
+-
+-	spin_lock_irq(target->scsi_host->host_lock);
++	int ret;
+ 
+ 	if (target->state == SRP_TARGET_DEAD ||
+ 	    target->state == SRP_TARGET_REMOVED) {
+@@ -1409,16 +1408,22 @@ static int srp_send_tsk_mgmt(struct srp_
+ 
+ 	req->tsk_mgmt = iu;
+ 
++	/*
++   	 * In 2.6.11 the SCSI driver hold a spin_lock while calling
++	 * eh_abort_handler and eh_device_reset_handler
++	 * So we need to unlock it here before going to sleep.
++	 *
++	 */
+ 	spin_unlock_irq(target->scsi_host->host_lock);
+-
+-	if (!wait_for_completion_timeout(&req->done,
+-					 msecs_to_jiffies(SRP_ABORT_TIMEOUT_MS)))
++ 	ret = wait_for_completion_timeout(&req->done,
++ 					 msecs_to_jiffies(SRP_ABORT_TIMEOUT_MS));
++ 	spin_lock_irq(target->scsi_host->host_lock);
++ 	if (!ret)
+ 		return -1;
+ 
+ 	return 0;
+ 
+ out:
+-	spin_unlock_irq(target->scsi_host->host_lock);
+ 	return -1;
+ }
+ 
+@@ -1449,8 +1454,6 @@ static int srp_abort(struct scsi_cmnd *s
+ 	if (srp_send_tsk_mgmt(target, req, SRP_TSK_ABORT_TASK))
+ 		return FAILED;
+ 
+-	spin_lock_irq(target->scsi_host->host_lock);
+-
+ 	if (req->cmd_done) {
+ 		srp_remove_req(target, req);
+ 		scmnd->scsi_done(scmnd);
+@@ -1460,8 +1463,6 @@ static int srp_abort(struct scsi_cmnd *s
+ 	} else
+ 		ret = FAILED;
+ 
+-	spin_unlock_irq(target->scsi_host->host_lock);
+-
+ 	return ret;
+ }
+ 
+@@ -1481,14 +1482,10 @@ static int srp_reset_device(struct scsi_
+ 	if (req->tsk_status)
+ 		return FAILED;
+ 
+-	spin_lock_irq(target->scsi_host->host_lock);
+-
+ 	list_for_each_entry_safe(req, tmp, &target->req_queue, list)
+ 		if (req->scmnd->device == scmnd->device)
+ 			srp_reset_req(target, req, DID_RESET);
+ 
+-	spin_unlock_irq(target->scsi_host->host_lock);
+-
+ 	return SUCCESS;
+ }
+ 
+@@ -1511,8 +1508,16 @@ static int srp_reset_host(struct scsi_cm
+ 		return SUCCESS;
+ 	}
+ 
++	/*
++   	 * In 2.6.11 the SCSI driver hold a spin_lock while calling
++	 * eh_host_reset_handler.
++	 * So we need to unlock it here before going to sleep.
++	 *
++	 */
++ 	spin_unlock_irq(target->scsi_host->host_lock);
+ 	if (!srp_reconnect_target(target))
+ 		ret = SUCCESS;
++	spin_lock_irq(target->scsi_host->host_lock);
+ 
+ 	return ret;
+ }

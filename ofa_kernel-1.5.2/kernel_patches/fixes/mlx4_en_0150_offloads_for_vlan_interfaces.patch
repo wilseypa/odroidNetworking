@@ -1,0 +1,109 @@
+From da1e3eb7d0ec01db203ed839f4e12dc525e900b6 Mon Sep 17 00:00:00 2001
+From: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+Date: Sun, 24 Jan 2010 11:36:05 +0200
+Subject: [PATCH] mlx4_en: Setting offloads for vlan interfaces
+
+Signed-off-by: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+---
+ drivers/net/mlx4/en_ethtool.c |   30 +++++++++++++++++++++++++++++-
+ drivers/net/mlx4/en_netdev.c  |   14 ++++++++++++++
+ 2 files changed, 43 insertions(+), 1 deletions(-)
+
+Index: ofed_kernel-fixes/drivers/net/mlx4/en_ethtool.c
+===================================================================
+--- ofed_kernel-fixes.orig/drivers/net/mlx4/en_ethtool.c	2010-02-15 18:44:44.000000000 +0200
++++ ofed_kernel-fixes/drivers/net/mlx4/en_ethtool.c	2010-02-15 18:50:11.000000000 +0200
+@@ -34,6 +34,7 @@
+ #include <linux/kernel.h>
+ #include <linux/ethtool.h>
+ #include <linux/netdevice.h>
++#include <linux/if_vlan.h>
+ 
+ #include "mlx4_en.h"
+ #include "en_port.h"
+@@ -85,8 +86,35 @@ static int mlx4_en_set_tso(struct net_de
+ 		if (!priv->mdev->LSO_support)
+ 			return -EPERM;
+ 		dev->features |= (NETIF_F_TSO | NETIF_F_TSO6);
+-	} else
++#ifdef HAVE_NETDEV_VLAN_FEATURES
++		dev->vlan_features |= (NETIF_F_TSO | NETIF_F_TSO6);
++#else
++		if (priv->vlgrp) {
++			int i;
++			struct net_device *vdev;
++			for (i = 0; i < VLAN_GROUP_ARRAY_LEN; i++) {
++				vdev = vlan_group_get_device(priv->vlgrp, i);
++				vdev->features |= (NETIF_F_TSO | NETIF_F_TSO6);
++				vlan_group_set_device(priv->vlgrp, i, vdev);
++			}
++		}
++#endif
++	} else {
+ 		dev->features &= ~(NETIF_F_TSO | NETIF_F_TSO6);
++#ifdef HAVE_NETDEV_VLAN_FEATURES
++		dev->vlan_features &= ~(NETIF_F_TSO | NETIF_F_TSO6);
++#else
++		if (priv->vlgrp) {
++			int i;
++			struct net_device *vdev;
++			for (i = 0; i < VLAN_GROUP_ARRAY_LEN; i++) {
++				vdev = vlan_group_get_device(priv->vlgrp, i);
++				vdev->features &= ~(NETIF_F_TSO | NETIF_F_TSO6);
++				vlan_group_set_device(priv->vlgrp, i, vdev);
++			}
++		}
++#endif
++	}
+ 	return 0;
+ }
+ 
+Index: ofed_kernel-fixes/drivers/net/mlx4/en_netdev.c
+===================================================================
+--- ofed_kernel-fixes.orig/drivers/net/mlx4/en_netdev.c	2010-02-15 18:44:44.000000000 +0200
++++ ofed_kernel-fixes/drivers/net/mlx4/en_netdev.c	2010-02-15 18:53:10.000000000 +0200
+@@ -69,6 +69,9 @@ static void mlx4_en_vlan_rx_add_vid(stru
+ 	struct mlx4_en_dev *mdev = priv->mdev;
+ 	int err;
+ 	int idx;
++#ifndef HAVE_NETDEV_VLAN_FEATURES
++	struct net_device *vdev;
++#endif
+ 
+ 	if (!priv->vlgrp)
+ 		return;
+@@ -87,6 +90,12 @@ static void mlx4_en_vlan_rx_add_vid(stru
+ 		en_err(priv, "failed adding vlan %d\n", vid);
+ 	mutex_unlock(&mdev->state_lock);
+ 
++#ifndef HAVE_NETDEV_VLAN_FEATURES
++	vdev = vlan_group_get_device(priv->vlgrp, vid);
++	vdev->features |= dev->features;
++	vdev->features |= NETIF_F_LLTX;
++	vlan_group_set_device(priv->vlgrp, vid, vdev);
++#endif
+ }
+ 
+ static void mlx4_en_vlan_rx_kill_vid(struct net_device *dev, unsigned short vid)
+@@ -1066,8 +1075,10 @@ int mlx4_en_init_netdev(struct mlx4_en_d
+ 	 */
+ 	dev->features |= NETIF_F_SG;
+ 	dev->features |= NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM;
++#ifdef HAVE_NETDEV_VLAN_FEATURES
+ 	dev->vlan_features |= NETIF_F_SG;
+ 	dev->vlan_features |= NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM;
++#endif
+ 	dev->features |= NETIF_F_HIGHDMA;
+ 	dev->features |= NETIF_F_HW_VLAN_TX |
+ 			 NETIF_F_HW_VLAN_RX |
+@@ -1077,8 +1088,10 @@ int mlx4_en_init_netdev(struct mlx4_en_d
+ 	if (mdev->LSO_support) {
+ 		dev->features |= NETIF_F_TSO;
+ 		dev->features |= NETIF_F_TSO6;
++#ifdef HAVE_NETDEV_VLAN_FEATURES
+ 		dev->vlan_features |= NETIF_F_TSO;
+ 		dev->vlan_features |= NETIF_F_TSO6;
++#endif
+ 	}
+ 
+ 	mdev->pndev[port] = dev;

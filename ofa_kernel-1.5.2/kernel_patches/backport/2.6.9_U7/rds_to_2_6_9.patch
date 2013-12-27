@@ -1,0 +1,84 @@
+diff --git a/net/rds/af_rds.c b/net/rds/af_rds.c
+index c9602f5..2214f67 100644
+--- a/net/rds/af_rds.c
++++ b/net/rds/af_rds.c
+@@ -187,7 +187,7 @@ static unsigned int rds_poll(struct file *file, struct socket *sock,
+ 
+ static int rds_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
+ {
+-	return -ENOIOCTLCMD;
++	return dev_ioctl(cmd, (void __user *)arg);
+ }
+ 
+ static int rds_cancel_sent_to(struct rds_sock *rs, char __user *optval,
+@@ -356,8 +356,7 @@ out:
+ 
+ static struct proto rds_proto = {
+ 	.name	  = "RDS",
+-	.owner	  = THIS_MODULE,
+-	.obj_size = sizeof(struct rds_sock),
++	.slab_obj_size = sizeof(struct rds_sock),
+ };
+ 
+ static struct proto_ops rds_proto_ops = {
+diff --git a/net/rds/tcp_listen.c b/net/rds/tcp_listen.c
+index 24b743e..d3daec2 100644
+--- a/net/rds/tcp_listen.c
++++ b/net/rds/tcp_listen.c
+@@ -49,7 +49,7 @@ static int rds_tcp_accept_one(struct socket *sock)
+ 	struct socket *new_sock = NULL;
+ 	struct rds_connection *conn;
+ 	int ret;
+-	struct inet_sock *inet;
++	struct inet_opt *inet;
+ 
+ 	ret = sock_create_lite(sock->sk->sk_family, sock->sk->sk_type,
+ 			       sock->sk->sk_protocol, &new_sock);
+diff --git a/net/rds/ib_recv.c b/net/rds/ib_recv.c
+index 3415e72..012a8c1 100644
+--- a/net/rds/ib_recv.c
++++ b/net/rds/ib_recv.c
+@@ -143,16 +143,15 @@ static int rds_ib_recv_refill_one(struct rds_connection *conn,
+ 	int ret = -ENOMEM;
+ 
+ 	if (recv->r_ibinc == NULL) {
+-		if (!atomic_add_unless(&rds_ib_allocation, 1, rds_ib_sysctl_max_recv_allocation)) {
++		if (atomic_read(&rds_ib_allocation) >= rds_ib_sysctl_max_recv_allocation) {
+ 			rds_ib_stats_inc(s_ib_rx_alloc_limit);
+ 			goto out;
+ 		}
+ 		recv->r_ibinc = kmem_cache_alloc(rds_ib_incoming_slab,
+ 						 kptr_gfp);
+-		if (recv->r_ibinc == NULL) {
+-			atomic_dec(&rds_ib_allocation);
++		if (recv->r_ibinc == NULL)
+ 			goto out;
+-		}
++		atomic_inc(&rds_ib_allocation);
+ 		INIT_LIST_HEAD(&recv->r_ibinc->ii_frags);
+ 		rds_inc_init(&recv->r_ibinc->ii_inc, conn, conn->c_faddr);
+ 	}
+diff --git a/net/rds/iw_recv.c b/net/rds/iw_recv.c
+index 3501f06..27ac05d 100644
+--- a/net/rds/iw_recv.c
++++ b/net/rds/iw_recv.c
+@@ -143,16 +143,15 @@ static int rds_iw_recv_refill_one(struct rds_connection *conn,
+ 	int ret = -ENOMEM;
+ 
+ 	if (recv->r_iwinc == NULL) {
+-		if (!atomic_add_unless(&rds_iw_allocation, 1, rds_iw_sysctl_max_recv_allocation)) {
++		if (atomic_read(&rds_iw_allocation) >= rds_iw_sysctl_max_recv_allocation) {
+ 			rds_iw_stats_inc(s_iw_rx_alloc_limit);
+ 			goto out;
+ 		}
+ 		recv->r_iwinc = kmem_cache_alloc(rds_iw_incoming_slab,
+ 						 kptr_gfp);
+-		if (recv->r_iwinc == NULL) {
+-			atomic_dec(&rds_iw_allocation);
++		if (recv->r_iwinc == NULL)
+ 			goto out;
+-		}
++		atomic_inc(&rds_iw_allocation);
+ 		INIT_LIST_HEAD(&recv->r_iwinc->ii_frags);
+ 		rds_inc_init(&recv->r_iwinc->ii_inc, conn, conn->c_faddr);
+ 	}

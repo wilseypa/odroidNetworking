@@ -1,0 +1,55 @@
+---
+ drivers/infiniband/ulp/sdp/sdp_cma.c  |    1 +
+ drivers/infiniband/ulp/sdp/sdp_main.c |    8 ++++----
+ 2 files changed, 5 insertions(+), 4 deletions(-)
+
+Index: ofed_kernel-2.6.16_sles10_sp2/drivers/infiniband/ulp/sdp/sdp_cma.c
+===================================================================
+--- ofed_kernel-2.6.16_sles10_sp2.orig/drivers/infiniband/ulp/sdp/sdp_cma.c	2010-06-01 13:19:35.000000000 +0300
++++ ofed_kernel-2.6.16_sles10_sp2/drivers/infiniband/ulp/sdp/sdp_cma.c	2010-06-01 13:33:16.000000000 +0300
+@@ -31,6 +31,7 @@
+  *
+  * $Id$
+  */
++#include <asm/semaphore.h>
+ #include <linux/device.h>
+ #include <linux/in.h>
+ #include <linux/err.h>
+Index: ofed_kernel-2.6.16_sles10_sp2/drivers/infiniband/ulp/sdp/sdp_main.c
+===================================================================
+--- ofed_kernel-2.6.16_sles10_sp2.orig/drivers/infiniband/ulp/sdp/sdp_main.c	2010-06-01 13:20:25.000000000 +0300
++++ ofed_kernel-2.6.16_sles10_sp2/drivers/infiniband/ulp/sdp/sdp_main.c	2010-06-01 13:33:16.000000000 +0300
+@@ -686,7 +686,7 @@
+ 	if (data_was_unread ||
+ 		(sock_flag(sk, SOCK_LINGER) && !sk->sk_lingertime)) {
+ 		/* Unread data was tossed, zap the connection. */
+-		NET_INC_STATS_USER(sock_net(sk), LINUX_MIB_TCPABORTONCLOSE);
++		NET_INC_STATS_USER(LINUX_MIB_TCPABORTONCLOSE);
+ 		sdp_exch_state(sk, TCPF_CLOSE_WAIT | TCPF_ESTABLISHED,
+ 			       TCP_TIME_WAIT);
+ 
+@@ -2546,9 +2546,9 @@
+ 	return mask;
+ }
+ 
+-static void sdp_enter_memory_pressure(struct sock *sk)
++static void sdp_enter_memory_pressure(void)
+ {
+-	sdp_dbg(sk, "%s\n", __func__);
++	sdp_dbg(NULL, "%s\n", __func__);
+ }
+ 
+ void sdp_urg(struct sdp_sock *ssk, struct sk_buff *skb)
+Index: ofed_kernel-2.6.16_sles10_sp2/drivers/infiniband/ulp/sdp/sdp_dbg.h
+===================================================================
+--- ofed_kernel-2.6.16_sles10_sp2.orig/drivers/infiniband/ulp/sdp/sdp_dbg.h	2010-06-01 13:19:35.000000000 +0300
++++ ofed_kernel-2.6.16_sles10_sp2/drivers/infiniband/ulp/sdp/sdp_dbg.h	2010-06-01 13:42:32.000000000 +0300
+@@ -8,7 +8,7 @@
+ #endif
+ //#define GETNSTIMEODAY_SUPPORTED
+ 
+-#define SDP_WARN_ON(x) WARN_ON(x)
++#define SDP_WARN_ON(x) BUG_TRAP(!(x))
+ 
+ #define _sdp_printk(func, line, level, sk, format, arg...) do {               \
+ 	preempt_disable(); \

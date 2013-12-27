@@ -1,0 +1,24 @@
+commit dce7d1d031aeaa8c65bd37ff2480dc450a68185e
+Author: Divy Le Ray <divy@chelsio.com>
+Date:   Tue Jul 7 19:48:59 2009 +0000
+
+    cxgb3: Fix mss table initialization
+    
+    Fix the HW SMT table initialization to avoid random
+    mss miscomputations for offload connections.
+    
+    Signed-off-by: Divy Le Ray <divy@chelsio.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+
+diff --git a/drivers/net/cxgb3/cxgb3_main.c b/drivers/net/cxgb3/cxgb3_main.c
+index 27e7ef5..d4c4076 100644
+--- a/drivers/net/cxgb3/cxgb3_main.c
++++ b/drivers/net/cxgb3/cxgb3_main.c
+@@ -443,6 +443,7 @@ static int init_tp_parity(struct adapter *adap)
+ 		memset(req, 0, sizeof(*req));
+ 		req->wr.wr_hi = htonl(V_WR_OP(FW_WROPCODE_FORWARD));
+ 		OPCODE_TID(req) = htonl(MK_OPCODE_TID(CPL_SMT_WRITE_REQ, i));
++		req->mtu_idx = NMTUS - 1;
+ 		req->iff = i;
+ 		t3_mgmt_tx(adap, skb);
+ 		if (skb == adap->nofail_skb) {

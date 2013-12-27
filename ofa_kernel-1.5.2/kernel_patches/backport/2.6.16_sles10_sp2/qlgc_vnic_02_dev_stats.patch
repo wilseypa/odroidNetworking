@@ -1,0 +1,46 @@
+---
+ drivers/infiniband/ulp/qlgc_vnic/vnic_main.c |    6 +++---
+ drivers/infiniband/ulp/qlgc_vnic/vnic_main.h |    1 +
+ 2 files changed, 4 insertions(+), 3 deletions(-)
+
+Index: ofed_kernel/drivers/infiniband/ulp/qlgc_vnic/vnic_main.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/qlgc_vnic/vnic_main.c
++++ ofed_kernel/drivers/infiniband/ulp/qlgc_vnic/vnic_main.c
+@@ -204,13 +204,13 @@ static struct net_device_stats *vnic_get
+ 	if (np && np->viport) {
+ 		atomic_inc(&np->viport->reference_count);
+ 		spin_unlock_irqrestore(&vnic->current_path_lock, flags);
+-		viport_get_stats(np->viport, &vnic->netdevice->stats);
++		viport_get_stats(np->viport, &vnic->stats);
+ 		atomic_dec(&np->viport->reference_count);
+ 		wake_up(&np->viport->reference_queue);
+ 	} else
+ 		spin_unlock_irqrestore(&vnic->current_path_lock, flags);
+ 
+-	return &vnic->netdevice->stats;
++	return &vnic->stats;
+ }
+ 
+ static int vnic_open(struct net_device *device)
+@@ -259,7 +259,7 @@ static int vnic_hard_start_xmit(struct s
+ 	if (ret) {
+ 		vnic_xmit_fail_stats(vnic);
+ 		dev_kfree_skb_any(skb);
+-		vnic->netdevice->stats.tx_dropped++;
++		vnic->stats.tx_dropped++;
+ 		goto out;
+ 	}
+ 
+Index: ofed_kernel/drivers/infiniband/ulp/qlgc_vnic/vnic_main.h
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/qlgc_vnic/vnic_main.h
++++ ofed_kernel/drivers/infiniband/ulp/qlgc_vnic/vnic_main.h
+@@ -102,6 +102,7 @@ struct vnic {
+ 	int				forced_failover;
+ 	int				failed_over;
+ 	int				mac_set;
++	struct net_device_stats 	stats;
+ 	struct net_device		*netdevice;
+ 	struct class_dev_info		class_dev_info;
+ 	struct dev_mc_list		*mc_list;

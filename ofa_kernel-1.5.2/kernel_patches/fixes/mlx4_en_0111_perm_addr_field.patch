@@ -1,0 +1,31 @@
+From 204a676fd1512a99e7da71744a71c9935963c6ac Mon Sep 17 00:00:00 2001
+From: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+Date: Wed, 26 Aug 2009 15:40:50 +0300
+Subject: [PATCH 5/7] mlx4_en: Settign dev->perm_addr field
+
+Signed-off-by: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+---
+ drivers/net/mlx4/en_netdev.c |    7 ++++---
+ 1 files changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/net/mlx4/en_netdev.c b/drivers/net/mlx4/en_netdev.c
+index 501d27c..591f09f 100644
+--- a/drivers/net/mlx4/en_netdev.c
++++ b/drivers/net/mlx4/en_netdev.c
+@@ -1038,9 +1038,10 @@ int mlx4_en_init_netdev(struct mlx4_en_dev *mdev, int port,
+ 
+ 	/* Set defualt MAC */
+ 	dev->addr_len = ETH_ALEN;
+-	for (i = 0; i < ETH_ALEN; i++)
+-		dev->dev_addr[ETH_ALEN - 1 - i] =
+-		(u8) (priv->mac >> (8 * i));
++	for (i = 0; i < ETH_ALEN; i++) {
++		dev->dev_addr[ETH_ALEN - 1 - i] = (u8) (priv->mac >> (8 * i));
++		dev->perm_addr[ETH_ALEN - 1 - i] = (u8) (priv->mac >> (8 * i));
++	}
+ 
+ 	/*
+ 	 * Set driver features
+-- 
+1.6.3
+

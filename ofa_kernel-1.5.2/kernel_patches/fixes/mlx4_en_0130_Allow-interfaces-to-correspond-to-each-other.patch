@@ -1,0 +1,59 @@
+From 7fe795fee3827f804d12fb117cf06ace16ba50d3 Mon Sep 17 00:00:00 2001
+From: Eli Cohen <eli@mellanox.co.il>
+Date: Sun, 3 Jan 2010 16:03:29 +0200
+Subject: [PATCH 08/12] mlx4: Allow interfaces to correspond to each other
+
+Add a mechanism for mlx4 core interfaces to get a pointer to other interfaces'
+device object. For this, an exported function, mlx4_get_prot_dev() is added,
+which allows an interfaces to get some other interface's device based on the
+protocol that interface implements. Two new protocols are added, MLX4_PROT_IB
+and MLX4_PROT_EN. This comes as a preperation for RoCEE so that mlx4_ib will be
+able to refer to the corresponding en device.
+
+Signed-off-by: Eli Cohen <eli@mellanox.co.il>
+---
+ drivers/net/mlx4/en_main.c  |   15 ++++++++++++---
+ drivers/net/mlx4/intf.c     |   20 ++++++++++++++++++++
+ drivers/net/mlx4/main.c     |    6 ++++++
+ drivers/net/mlx4/mlx4.h     |    1 +
+ include/linux/mlx4/driver.h |   16 ++++++++++++----
+ 5 files changed, 51 insertions(+), 7 deletions(-)
+
+Index: ofed_kernel-fixes/drivers/net/mlx4/en_main.c
+===================================================================
+--- ofed_kernel-fixes.orig/drivers/net/mlx4/en_main.c	2010-02-14 15:44:57.000000000 +0200
++++ ofed_kernel-fixes/drivers/net/mlx4/en_main.c	2010-02-14 15:44:57.000000000 +0200
+@@ -104,6 +104,13 @@ static int mlx4_en_get_profile(struct ml
+ 	return 0;
+ }
+ 
++static void *get_netdev(struct mlx4_dev *dev, void *ctx, u8 port)
++{
++	struct mlx4_en_dev *endev = ctx;
++
++	return endev->pndev[port];
++}
++
+ static void mlx4_en_event(struct mlx4_dev *dev, void *endev_ptr,
+ 			  enum mlx4_dev_event event, int port)
+ {
+@@ -337,7 +344,9 @@ static struct mlx4_interface mlx4_en_int
+ 	.add	= mlx4_en_add,
+ 	.remove	= mlx4_en_remove,
+ 	.event	= mlx4_en_event,
+-	.query  = mlx4_en_query
++	.query  = mlx4_en_query,
++	.get_prot_dev	= get_netdev,
++	.protocol	= MLX4_PROT_EN,
+ };
+ 
+ static int __init mlx4_en_init(void)
+Index: ofed_kernel-fixes/drivers/net/mlx4/intf.c
+===================================================================
+--- ofed_kernel-fixes.orig/drivers/net/mlx4/intf.c	2010-02-14 15:44:56.000000000 +0200
++++ ofed_kernel-fixes/drivers/net/mlx4/intf.c	2010-02-14 15:44:57.000000000 +0200
+@@ -209,3 +209,4 @@ void *mlx4_find_get_prot_dev(struct mlx4
+ 
+ 	return result;
+ }
++

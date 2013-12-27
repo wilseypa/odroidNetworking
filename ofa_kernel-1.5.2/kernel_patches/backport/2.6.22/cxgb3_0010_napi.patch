@@ -1,0 +1,599 @@
+commit ff1cdde3746d4c7b6003eb2d1b4d27d340958c11
+Author: root <root@almus.(none)>
+Date:   Thu Aug 27 11:04:03 2009 -0700
+
+    cxgb3_0010_napi
+
+diff --git a/drivers/net/cxgb3/adapter.h b/drivers/net/cxgb3/adapter.h
+index f8c6b1b..cc5dbda 100644
+--- a/drivers/net/cxgb3/adapter.h
++++ b/drivers/net/cxgb3/adapter.h
+@@ -47,7 +47,6 @@
+ 
+ struct vlan_group;
+ struct adapter;
+-struct sge_qset;
+ 
+ enum {			/* rx_offload flags */
+ 	T3_RX_CSUM	= 1 << 0,
+@@ -57,7 +56,6 @@ enum {			/* rx_offload flags */
+ struct port_info {
+ 	struct adapter *adapter;
+ 	struct vlan_group *vlan_grp;
+-	struct sge_qset *qs;
+ 	u8 port_id;
+ 	u8 rx_offload;
+ 	u8 nqsets;
+@@ -189,15 +187,13 @@ enum {				/* per port SGE statistics */
+ struct napi_gro_fraginfo;
+ 
+ struct sge_qset {		/* an SGE queue set */
+-	struct adapter *adap;
+-	struct napi_struct napi;
+ 	struct sge_rspq rspq;
+ 	struct sge_fl fl[SGE_RXQ_PER_SET];
+ 	struct sge_txq txq[SGE_TXQ_PER_SET];
+ 	struct napi_gro_fraginfo lro_frag_tbl;
+ 	int lro_enabled;
+ 	void *lro_va;
+-	struct net_device *netdev;
++	struct net_device *netdev;	/* associated net device */
+ 	unsigned long txq_stopped;	/* which Tx queues are stopped */
+ 	struct timer_list tx_reclaim_timer;	/* reclaims TX buffers */
+ 	struct timer_list rx_reclaim_timer;	/* reclaims RX buffers */
+@@ -246,6 +242,12 @@ struct adapter {
+ 	struct work_struct fatal_error_handler_task;
+ 	struct work_struct link_fault_handler_task;
+ 
++	/*
++	 * Dummy netdevices are needed when using multiple receive queues with
++	 * NAPI as each netdevice can service only one queue.
++	 */
++	struct net_device *dummy_netdev[SGE_QSETS - 1];
++
+ 	struct dentry *debugfs_root;
+ 
+ 	struct mutex mdio_lock;
+@@ -282,6 +284,12 @@ static inline int phy2portid(struct cphy *phy)
+ 	return &port0->phy == phy ? 0 : 1;
+ }
+ 
++/*
++ * We use the spare atalk_ptr to map a net device to its SGE queue set.
++ * This is a macro so it can be used as l-value.
++ */
++#define dev2qset(netdev) ((netdev)->atalk_ptr)
++
+ #define OFFLOAD_DEVMAP_BIT 15
+ 
+ #define tdev2adap(d) container_of(d, struct adapter, tdev)
+@@ -312,7 +320,7 @@ int t3_mgmt_tx(struct adapter *adap, struct sk_buff *skb);
+ void t3_update_qset_coalesce(struct sge_qset *qs, const struct qset_params *p);
+ int t3_sge_alloc_qset(struct adapter *adapter, unsigned int id, int nports,
+ 		      int irq_vec_idx, const struct qset_params *p,
+-		      int ntxq, struct net_device *dev);
++		      int ntxq, struct net_device *netdev);
+ int t3_get_desc(const struct sge_qset *qs, unsigned int qnum, unsigned int idx,
+ 		unsigned char *data);
+ irqreturn_t t3_sge_intr_msix(int irq, void *cookie);
+diff --git a/drivers/net/cxgb3/cxgb3_main.c b/drivers/net/cxgb3/cxgb3_main.c
+index e15a719..1e793b1 100644
+--- a/drivers/net/cxgb3/cxgb3_main.c
++++ b/drivers/net/cxgb3/cxgb3_main.c
+@@ -587,17 +587,49 @@ static void setup_rss(struct adapter *adap)
+ 		      V_RRCPLCPUSIZE(6) | F_HASHTOEPLITZ, cpus, rspq_map);
+ }
+ 
+-static void init_napi(struct adapter *adap)
++/*
++ * If we have multiple receive queues per port serviced by NAPI we need one
++ * netdevice per queue as NAPI operates on netdevices.  We already have one
++ * netdevice, namely the one associated with the interface, so we use dummy
++ * ones for any additional queues.  Note that these netdevices exist purely
++ * so that NAPI has something to work with, they do not represent network
++ * ports and are not registered.
++ */
++static int init_dummy_netdevs(struct adapter *adap)
+ {
+-	int i;
++	int i, j, dummy_idx = 0;
++	struct net_device *nd;
++
++	for_each_port(adap, i) {
++		struct net_device *dev = adap->port[i];
++		const struct port_info *pi = netdev_priv(dev);
+ 
+-	for (i = 0; i < SGE_QSETS; i++) {
+-		struct sge_qset *qs = &adap->sge.qs[i];
++		for (j = 0; j < pi->nqsets - 1; j++) {
++			if (!adap->dummy_netdev[dummy_idx]) {
++				struct port_info *p;
++
++				nd = alloc_netdev(sizeof(*p), "", ether_setup);
++				if (!nd)
++					goto free_all;
++
++				p = netdev_priv(nd);
++				p->adapter = adap;
++				nd->weight = 64;
++				set_bit(__LINK_STATE_START, &nd->state);
++				adap->dummy_netdev[dummy_idx] = nd;
++			}
++			strcpy(adap->dummy_netdev[dummy_idx]->name, dev->name);
++			dummy_idx++;
++		}
++	}
++	return 0;
+ 
+-		if (qs->adap)
+-			netif_napi_add(qs->netdev, &qs->napi, qs->napi.poll,
+-				       64);
++free_all:
++	while (--dummy_idx >= 0) {
++		free_netdev(adap->dummy_netdev[dummy_idx]);
++		adap->dummy_netdev[dummy_idx] = NULL;
+ 	}
++	return -ENOMEM;
+ }
+ 
+ /*
+@@ -608,18 +640,20 @@ static void init_napi(struct adapter *adap)
+ static void quiesce_rx(struct adapter *adap)
+ {
+ 	int i;
++	struct net_device *dev;
+ 
+-	for (i = 0; i < SGE_QSETS; i++)
+-		if (adap->sge.qs[i].adap)
+-			napi_disable(&adap->sge.qs[i].napi);
+-}
++	for_each_port(adap, i) {
++		dev = adap->port[i];
++		while (test_bit(__LINK_STATE_RX_SCHED, &dev->state))
++			msleep(1);
++	}
+ 
+-static void enable_all_napi(struct adapter *adap)
+-{
+-	int i;
+-	for (i = 0; i < SGE_QSETS; i++)
+-		if (adap->sge.qs[i].adap)
+-			napi_enable(&adap->sge.qs[i].napi);
++	for (i = 0; i < ARRAY_SIZE(adap->dummy_netdev); i++) {
++		dev = adap->dummy_netdev[i];
++		if (dev)
++			while (test_bit(__LINK_STATE_RX_SCHED, &dev->state))
++				msleep(1);
++	}
+ }
+ 
+ /**
+@@ -652,7 +686,7 @@ static void set_qset_lro(struct net_device *dev, int qset_idx, int val)
+  */
+ static int setup_sge_qsets(struct adapter *adap)
+ {
+-	int i, j, err, irq_idx = 0, qset_idx = 0;
++	int i, j, err, irq_idx = 0, qset_idx = 0, dummy_dev_idx = 0;
+ 	unsigned int ntxq = SGE_TXQ_PER_SET;
+ 
+ 	if (adap->params.rev > 0 && !(adap->flags & USING_MSI))
+@@ -660,15 +694,16 @@ static int setup_sge_qsets(struct adapter *adap)
+ 
+ 	for_each_port(adap, i) {
+ 		struct net_device *dev = adap->port[i];
+-		struct port_info *pi = netdev_priv(dev);
++		const struct port_info *pi = netdev_priv(dev);
+ 
+-		pi->qs = &adap->sge.qs[pi->first_qset];
+ 		for (j = 0; j < pi->nqsets; ++j, ++qset_idx) {
+ 			set_qset_lro(dev, qset_idx, pi->rx_offload & T3_LRO);
+ 			err = t3_sge_alloc_qset(adap, qset_idx, 1,
+ 				(adap->flags & USING_MSIX) ? qset_idx + 1 :
+ 							     irq_idx,
+-				&adap->params.sge.qset[qset_idx], ntxq, dev);
++				&adap->params.sge.qset[qset_idx], ntxq, 
++				j == 0 ? dev :
++					adap->dummy_netdev[dummy_dev_idx++]);
+ 			if (err) {
+ 				t3_free_sge_resources(adap);
+ 				return err;
+@@ -1179,6 +1214,10 @@ static int cxgb_up(struct adapter *adap)
+ 		 */
+ 		t3_intr_clear(adap);
+ 
++ 		err = init_dummy_netdevs(adap);
++ 		if (err)
++ 			goto out;
++
+ 		err = t3_init_hw(adap, 0);
+ 		if (err)
+ 			goto out;
+@@ -1191,7 +1230,6 @@ static int cxgb_up(struct adapter *adap)
+ 			goto out;
+ 
+ 		setup_rss(adap);
+-		init_napi(adap);
+ 
+ 		t3_start_sge_timers(adap);
+ 		adap->flags |= FULL_INIT_DONE;
+@@ -1221,7 +1259,6 @@ static int cxgb_up(struct adapter *adap)
+ 				      adap->name, adap)))
+ 		goto irq_err;
+ 
+-	enable_all_napi(adap);
+ 	t3_sge_start(adap);
+ 	t3_intr_enable(adap);
+ 
+@@ -1356,10 +1393,8 @@ static int cxgb_open(struct net_device *dev)
+ 	int other_ports = adapter->open_device_map & PORT_MASK;
+ 	int err;
+ 
+-	if (!adapter->open_device_map && (err = cxgb_up(adapter)) < 0) {
+-		quiesce_rx(adapter);
++	if (!adapter->open_device_map && (err = cxgb_up(adapter)) < 0)
+ 		return err;
+-	}
+ 
+ 	set_bit(pi->port_id, &adapter->open_device_map);
+ 	if (is_offload(adapter) && !ofld_disable) {
+@@ -3262,6 +3297,7 @@ static int __devinit init_one(struct pci_dev *pdev,
+ #ifdef CONFIG_NET_POLL_CONTROLLER
+ 		netdev->poll_controller = cxgb_netpoll;
+ #endif
++		netdev->weight = 64;
+ 		SET_ETHTOOL_OPS(netdev, &cxgb_ethtool_ops);
+ 	}
+ 
+@@ -3364,6 +3400,12 @@ static void __devexit remove_one(struct pci_dev *pdev)
+ 		t3_free_sge_resources(adapter);
+ 		cxgb_disable_msi(adapter);
+ 
++		for (i = 0; i < ARRAY_SIZE(adapter->dummy_netdev); i++)
++			if (adapter->dummy_netdev[i]) {
++				free_netdev(adapter->dummy_netdev[i]);
++				adapter->dummy_netdev[i] = NULL;
++			}
++
+ 		for_each_port(adapter, i)
+ 			if (adapter->port[i])
+ 				free_netdev(adapter->port[i]);
+diff --git a/drivers/net/cxgb3/sge.c b/drivers/net/cxgb3/sge.c
+index 210dc8b..3c47c8f 100644
+--- a/drivers/net/cxgb3/sge.c
++++ b/drivers/net/cxgb3/sge.c
+@@ -683,6 +683,9 @@ static void t3_free_qset(struct adapter *adapter, struct sge_qset *q)
+ 				  q->rspq.desc, q->rspq.phys_addr);
+ 	}
+ 
++	if (q->netdev)
++		q->netdev->atalk_ptr = NULL;
++
+ 	memset(q, 0, sizeof(*q));
+ }
+ 
+@@ -1193,7 +1196,7 @@ int t3_eth_xmit(struct sk_buff *skb, struct net_device *dev)
+ 	unsigned int ndesc, pidx, credits, gen, compl;
+ 	const struct port_info *pi = netdev_priv(dev);
+ 	struct adapter *adap = pi->adapter;
+-	struct sge_qset *qs = pi->qs;
++	struct sge_qset *qs = dev2qset(dev);
+ 	struct sge_txq *q = &qs->txq[TXQ_ETH];
+ 
+ 	/*
+@@ -1442,12 +1445,13 @@ static void restart_ctrlq(unsigned long data)
+ 	struct sk_buff *skb;
+ 	struct sge_qset *qs = (struct sge_qset *)data;
+ 	struct sge_txq *q = &qs->txq[TXQ_CTRL];
++	const struct port_info *pi = netdev_priv(qs->netdev);
++	struct adapter *adap = pi->adapter;
+ 
+ 	spin_lock(&q->lock);
+       again:reclaim_completed_tx_imm(q);
+ 
+-	while (q->in_use < q->size &&
+-	       (skb = __skb_dequeue(&q->sendq)) != NULL) {
++	while (q->in_use < q->size && (skb = __skb_dequeue(&q->sendq)) != NULL) {
+ 
+ 		write_imm(&q->desc[q->pidx], skb, skb->len, q->gen);
+ 
+@@ -1470,7 +1474,7 @@ static void restart_ctrlq(unsigned long data)
+ 
+ 	spin_unlock(&q->lock);
+ 	wmb();
+-	t3_write_reg(qs->adap, A_SG_KDOORBELL,
++	t3_write_reg(adap, A_SG_KDOORBELL,
+ 		     F_SELEGRCNTX | V_EGRCNTX(q->cntxt_id));
+ }
+ 
+@@ -1761,7 +1765,8 @@ static inline void offload_enqueue(struct sge_rspq *q, struct sk_buff *skb)
+ 	if (was_empty) {
+ 		struct sge_qset *qs = rspq_to_qset(q);
+ 
+-		napi_schedule(&qs->napi);
++		if (__netif_rx_schedule_prep(qs->netdev))
++			__netif_rx_schedule(qs->netdev);
+ 	}
+ }
+ 
+@@ -1795,14 +1800,15 @@ static inline void deliver_partial_bundle(struct t3cdev *tdev,
+  *	receive handler.  Batches need to be of modest size as we do prefetches
+  *	on the packets in each.
+  */
+-static int ofld_poll(struct napi_struct *napi, int budget)
++static int ofld_poll(struct net_device *dev, int *budget)
+ {
+-	struct sge_qset *qs = container_of(napi, struct sge_qset, napi);
++	const struct port_info *pi = netdev_priv(dev);
++	struct adapter *adapter = pi->adapter;
++	struct sge_qset *qs = dev2qset(dev);
+ 	struct sge_rspq *q = &qs->rspq;
+-	struct adapter *adapter = qs->adap;
+-	int work_done = 0;
++	int work_done, limit = min(*budget, dev->quota), avail = limit;
+ 
+-	while (work_done < budget) {
++	while (avail) {
+ 		struct sk_buff *skb, *tmp, *skbs[RX_BUNDLE_SIZE];
+ 		struct sk_buff_head queue;
+ 		int ngathered;
+@@ -1811,17 +1817,20 @@ static int ofld_poll(struct napi_struct *napi, int budget)
+ 		__skb_queue_head_init(&queue);
+ 		skb_queue_splice_init(&q->rx_queue, &queue);
+ 		if (skb_queue_empty(&queue)) {
+-			napi_complete(napi);
++			work_done = limit - avail;
++			*budget -= work_done;
++			dev->quota -= work_done;
++			__netif_rx_complete(dev);
+ 			spin_unlock_irq(&q->lock);
+-			return work_done;
++			return 0;
+ 		}
+ 		spin_unlock_irq(&q->lock);
+ 
+ 		ngathered = 0;
+ 		skb_queue_walk_safe(&queue, skb, tmp) {
+-			if (work_done >= budget)
++			if (!avail)
+ 				break;
+-			work_done++;
++			avail--;
+ 
+ 			__skb_unlink(skb, &queue);
+ 			prefetch(skb->data);
+@@ -1841,8 +1850,10 @@ static int ofld_poll(struct napi_struct *napi, int budget)
+ 		}
+ 		deliver_partial_bundle(&adapter->tdev, q, skbs, ngathered);
+ 	}
+-
+-	return work_done;
++	work_done = limit - avail;
++	*budget -= work_done;
++	dev->quota -= work_done;
++	return 1;
+ }
+ 
+ /**
+@@ -2362,47 +2373,50 @@ static inline int is_pure_response(const struct rsp_desc *r)
+ 
+ /**
+  *	napi_rx_handler - the NAPI handler for Rx processing
+- *	@napi: the napi instance
++ *	@dev: the net device
+  *	@budget: how many packets we can process in this round
+  *
+  *	Handler for new data events when using NAPI.
+  */
+-static int napi_rx_handler(struct napi_struct *napi, int budget)
++static int napi_rx_handler(struct net_device *dev, int *budget)
+ {
+-	struct sge_qset *qs = container_of(napi, struct sge_qset, napi);
+-	struct adapter *adap = qs->adap;
+-	int work_done = process_responses(adap, qs, budget);
++	const struct port_info *pi = netdev_priv(dev);
++	struct adapter *adap = pi->adapter;
++	struct sge_qset *qs = dev2qset(dev);
++	int effective_budget = min(*budget, dev->quota);
+ 
+-	if (likely(work_done < budget)) {
+-		napi_complete(napi);
++	int work_done = process_responses(adap, qs, effective_budget);
++	*budget -= work_done;
++	dev->quota -= work_done;
+ 
+-		/*
+-		 * Because we don't atomically flush the following
+-		 * write it is possible that in very rare cases it can
+-		 * reach the device in a way that races with a new
+-		 * response being written plus an error interrupt
+-		 * causing the NAPI interrupt handler below to return
+-		 * unhandled status to the OS.  To protect against
+-		 * this would require flushing the write and doing
+-		 * both the write and the flush with interrupts off.
+-		 * Way too expensive and unjustifiable given the
+-		 * rarity of the race.
+-		 *
+-		 * The race cannot happen at all with MSI-X.
+-		 */
+-		t3_write_reg(adap, A_SG_GTS, V_RSPQ(qs->rspq.cntxt_id) |
+-			     V_NEWTIMER(qs->rspq.next_holdoff) |
+-			     V_NEWINDEX(qs->rspq.cidx));
+-	}
+-	return work_done;
++	if (work_done >= effective_budget)
++		return 1;
++
++	netif_rx_complete(dev);
++
++	/*
++	 * Because we don't atomically flush the following write it is
++	 * possible that in very rare cases it can reach the device in a way
++	 * that races with a new response being written plus an error interrupt
++	 * causing the NAPI interrupt handler below to return unhandled status
++	 * to the OS.  To protect against this would require flushing the write
++	 * and doing both the write and the flush with interrupts off.  Way too
++	 * expensive and unjustifiable given the rarity of the race.
++	 *
++	 * The race cannot happen at all with MSI-X.
++	 */
++	t3_write_reg(adap, A_SG_GTS, V_RSPQ(qs->rspq.cntxt_id) |
++		     V_NEWTIMER(qs->rspq.next_holdoff) |
++		     V_NEWINDEX(qs->rspq.cidx));
++	return 0;
+ }
+ 
+ /*
+  * Returns true if the device is already scheduled for polling.
+  */
+-static inline int napi_is_scheduled(struct napi_struct *napi)
++static inline int napi_is_scheduled(struct net_device *dev)
+ {
+-	return test_bit(NAPI_STATE_SCHED, &napi->state);
++	return test_bit(__LINK_STATE_RX_SCHED, &dev->state);
+ }
+ 
+ /**
+@@ -2485,7 +2499,8 @@ static inline int handle_responses(struct adapter *adap, struct sge_rspq *q)
+ 			     V_NEWTIMER(q->holdoff_tmr) | V_NEWINDEX(q->cidx));
+ 		return 0;
+ 	}
+-	napi_schedule(&qs->napi);
++	if (likely(__netif_rx_schedule_prep(qs->netdev)))
++		__netif_rx_schedule(qs->netdev);
+ 	return 1;
+ }
+ 
+@@ -2496,7 +2511,8 @@ static inline int handle_responses(struct adapter *adap, struct sge_rspq *q)
+ irqreturn_t t3_sge_intr_msix(int irq, void *cookie)
+ {
+ 	struct sge_qset *qs = cookie;
+-	struct adapter *adap = qs->adap;
++	const struct port_info *pi = netdev_priv(qs->netdev);
++	struct adapter *adap = pi->adapter;
+ 	struct sge_rspq *q = &qs->rspq;
+ 
+ 	spin_lock(&q->lock);
+@@ -2515,11 +2531,13 @@ irqreturn_t t3_sge_intr_msix(int irq, void *cookie)
+ static irqreturn_t t3_sge_intr_msix_napi(int irq, void *cookie)
+ {
+ 	struct sge_qset *qs = cookie;
++	const struct port_info *pi = netdev_priv(qs->netdev);
++	struct adapter *adap = pi->adapter;
+ 	struct sge_rspq *q = &qs->rspq;
+ 
+ 	spin_lock(&q->lock);
+ 
+-	if (handle_responses(qs->adap, q) < 0)
++	if (handle_responses(adap, q) < 0)
+ 		q->unhandled_irqs++;
+ 	spin_unlock(&q->lock);
+ 	return IRQ_HANDLED;
+@@ -2562,13 +2580,11 @@ static irqreturn_t t3_intr_msi(int irq, void *cookie)
+ 	return IRQ_HANDLED;
+ }
+ 
+-static int rspq_check_napi(struct sge_qset *qs)
++static int rspq_check_napi(struct net_device *dev, struct sge_rspq *q)
+ {
+-	struct sge_rspq *q = &qs->rspq;
+-
+-	if (!napi_is_scheduled(&qs->napi) &&
+-	    is_new_response(&q->desc[q->cidx], q)) {
+-		napi_schedule(&qs->napi);
++	if (!napi_is_scheduled(dev) && is_new_response(&q->desc[q->cidx], q)) {
++		if (likely(__netif_rx_schedule_prep(dev)))
++			__netif_rx_schedule(dev);
+ 		return 1;
+ 	}
+ 	return 0;
+@@ -2589,9 +2605,10 @@ static irqreturn_t t3_intr_msi_napi(int irq, void *cookie)
+ 
+ 	spin_lock(&q->lock);
+ 
+-	new_packets = rspq_check_napi(&adap->sge.qs[0]);
++	new_packets = rspq_check_napi(adap->sge.qs[0].netdev, q);
+ 	if (adap->params.nports == 2)
+-		new_packets += rspq_check_napi(&adap->sge.qs[1]);
++		new_packets += rspq_check_napi(adap->sge.qs[1].netdev,
++					       &adap->sge.qs[1].rspq);
+ 	if (!new_packets && t3_slow_intr_handler(adap) == 0)
+ 		q->unhandled_irqs++;
+ 
+@@ -2694,9 +2711,9 @@ static irqreturn_t t3b_intr(int irq, void *cookie)
+ static irqreturn_t t3b_intr_napi(int irq, void *cookie)
+ {
+ 	u32 map;
++	struct net_device *dev;
+ 	struct adapter *adap = cookie;
+-	struct sge_qset *qs0 = &adap->sge.qs[0];
+-	struct sge_rspq *q0 = &qs0->rspq;
++	struct sge_rspq *q0 = &adap->sge.qs[0].rspq;
+ 
+ 	t3_write_reg(adap, A_PL_CLI, 0);
+ 	map = t3_read_reg(adap, A_SG_DATA_INTR);
+@@ -2709,11 +2726,18 @@ static irqreturn_t t3b_intr_napi(int irq, void *cookie)
+ 	if (unlikely(map & F_ERRINTR))
+ 		t3_slow_intr_handler(adap);
+ 
+-	if (likely(map & 1))
+-		napi_schedule(&qs0->napi);
++	if (likely(map & 1)) {
++		dev = adap->sge.qs[0].netdev;
+ 
+-	if (map & 2)
+-		napi_schedule(&adap->sge.qs[1].napi);
++		if (likely(__netif_rx_schedule_prep(dev)))
++			__netif_rx_schedule(dev);
++	}
++	if (map & 2) {
++		dev = adap->sge.qs[1].netdev;
++
++		if (likely(__netif_rx_schedule_prep(dev)))
++			__netif_rx_schedule(dev);
++	}
+ 
+ 	spin_unlock(&q0->lock);
+ 	return IRQ_HANDLED;
+@@ -2896,9 +2920,12 @@ out:
+  */
+ void t3_update_qset_coalesce(struct sge_qset *qs, const struct qset_params *p)
+ {
++	if (!qs->netdev)
++		return;
++
+ 	qs->rspq.holdoff_tmr = max(p->coalesce_usecs * 10, 1U);/* can't be 0 */
+ 	qs->rspq.polling = p->polling;
+-	qs->napi.poll = p->polling ? napi_rx_handler : ofld_poll;
++	qs->netdev->poll = p->polling ? napi_rx_handler : ofld_poll;
+ }
+ 
+ /**
+@@ -2918,7 +2945,7 @@ void t3_update_qset_coalesce(struct sge_qset *qs, const struct qset_params *p)
+  */
+ int t3_sge_alloc_qset(struct adapter *adapter, unsigned int id, int nports,
+ 		      int irq_vec_idx, const struct qset_params *p,
+-		      int ntxq, struct net_device *dev)
++		      int ntxq, struct net_device *netdev)
+ {
+ 	int i, avail, ret = -ENOMEM;
+ 	struct sge_qset *q = &adapter->sge.qs[id];
+@@ -3050,10 +3077,17 @@ int t3_sge_alloc_qset(struct adapter *adapter, unsigned int id, int nports,
+ 
+ 	spin_unlock_irq(&adapter->sge.reg_lock);
+ 
+-	q->adap = adapter;
+-	q->netdev = dev;
++	q->netdev = netdev;
+ 	t3_update_qset_coalesce(q, p);
+ 
++	/*
++	 * We use atalk_ptr as a backpointer to a qset. In case a device is
++	 * associated with multiple queue sets only the first one sets
++	 * atalk_ptr.
++	 */
++	if (netdev->atalk_ptr == NULL)
++		netdev->atalk_ptr = q;
++
+ 	avail = refill_fl(adapter, &q->fl[0], q->fl[0].size,
+ 			  GFP_KERNEL | __GFP_COMP);
+ 	if (!avail) {

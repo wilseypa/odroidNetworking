@@ -1,0 +1,56 @@
+>Post a replacement to 2_misc_device_to_2_6_19.patch, we'll test.
+
+I did not test this patch, but you can try replacing the contents of
+the 2_misc_device_to_2_6_19.patch with the changes below.  (It's
+possible that this may lead to some conflict further down in the patch
+chain...)  The function prototype for show_abi_version changed between
+2.6.20 to 2.6.19; this was the missing piece in the original backport
+patch.  I would have expected a build warning for this.
+
+Signed-off-by: Sean Hefty <sean.hefty@intel.com>
+
+---
+---
+ drivers/infiniband/core/ucma.c |   12 ++++++------
+ 1 file changed, 6 insertions(+), 6 deletions(-)
+
+Index: ofed_kernel/drivers/infiniband/core/ucma.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/core/ucma.c
++++ ofed_kernel/drivers/infiniband/core/ucma.c
+@@ -1207,13 +1207,11 @@ static struct miscdevice ucma_misc = {
+ 	.fops	= &ucma_fops,
+ };
+ 
+-static ssize_t show_abi_version(struct device *dev,
+-				struct device_attribute *attr,
+-				char *buf)
++static ssize_t show_abi_version(struct class_device *class_dev, char *buf)
+ {
+ 	return sprintf(buf, "%d\n", RDMA_USER_CM_ABI_VERSION);
+ }
+-static DEVICE_ATTR(abi_version, S_IRUGO, show_abi_version, NULL);
++static CLASS_DEVICE_ATTR(abi_version, S_IRUGO, show_abi_version, NULL);
+ 
+ static int __init ucma_init(void)
+ {
+@@ -1223,7 +1221,8 @@ static int __init ucma_init(void)
+ 	if (ret)
+ 		return ret;
+ 
+-	ret = device_create_file(ucma_misc.this_device, &dev_attr_abi_version);
++	ret = class_device_create_file(ucma_misc.class,
++				       &class_device_attr_abi_version);
+ 	if (ret) {
+ 		printk(KERN_ERR "rdma_ucm: couldn't create abi_version attr\n");
+ 		goto err;
+@@ -1236,7 +1235,8 @@ err:
+ 
+ static void __exit ucma_cleanup(void)
+ {
+-	device_remove_file(ucma_misc.this_device, &dev_attr_abi_version);
++	class_device_remove_file(ucma_misc.class,
++				 &class_device_attr_abi_version);
+ 	misc_deregister(&ucma_misc);
+ 	idr_destroy(&ctx_idr);
+ }

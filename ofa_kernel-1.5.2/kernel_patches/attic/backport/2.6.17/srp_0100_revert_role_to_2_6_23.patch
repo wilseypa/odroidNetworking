@@ -1,0 +1,30 @@
+commit aebd5e476ecc8ceb53577b20f2a352ff4ceffd8d
+Author: FUJITA Tomonori <tomof@acm.org>
+Date:   Wed Jul 11 15:08:15 2007 +0900
+
+    [SCSI] transport_srp: add rport roles attribute
+    
+    This adds a 'roles' attribute to rport like transport_fc. The role can
+    be initiator or target. That is, the initiator driver creates target
+    remote ports and the target driver creates initiator remote ports.
+    
+    Signed-off-by: FUJITA Tomonori <fujita.tomonori@lab.ntt.co.jp>
+    Signed-off-by: Mike Christie <michaelc@cs.wisc.edu>
+    Signed-off-by: James Bottomley <James.Bottomley@SteelEye.com>
+
+---
+ drivers/infiniband/ulp/srp/ib_srp.c |    1 -
+ 1 file changed, 1 deletion(-)
+
+Index: ofed_kernel/drivers/infiniband/ulp/srp/ib_srp.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/srp/ib_srp.c
++++ ofed_kernel/drivers/infiniband/ulp/srp/ib_srp.c
+@@ -1741,7 +1741,6 @@ static int srp_add_target(struct srp_hos
+ 
+ 	memcpy(ids.port_id, &target->id_ext, 8);
+ 	memcpy(ids.port_id + 8, &target->ioc_guid, 8);
+-	ids.roles = SRP_RPORT_ROLE_TARGET;
+ 	rport = srp_rport_add(target->scsi_host, &ids);
+ 	if (IS_ERR(rport)) {
+ 		scsi_remove_host(target->scsi_host);

@@ -1,0 +1,33 @@
+mlx4: check for FW version which properly supports resize_cq.
+
+If the ConnectX cards have earlier FW installed, the resize_cq command
+will return -ENOSYS.
+
+Fixes Bugzilla 1415.
+
+Signed-off-by: Jack Morgenstein <jackm@dev.mellanox.co.il>
+
+Index: ofed_kernel/drivers/infiniband/hw/mlx4/cq.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/hw/mlx4/cq.c	2008-12-02 16:23:45.000000000 +0200
++++ ofed_kernel/drivers/infiniband/hw/mlx4/cq.c	2008-12-03 16:56:34.969069000 +0200
+@@ -38,6 +38,9 @@
+ #include "mlx4_ib.h"
+ #include "user.h"
+ 
++/* Which firmware version adds support for Resize CQ */
++#define MLX4_FW_VER_RESIZE_CQ  mlx4_fw_ver(2, 5, 0)
++
+ static void mlx4_ib_cq_comp(struct mlx4_cq *cq)
+ {
+ 	struct ib_cq *ibcq = &to_mibcq(cq)->ibcq;
+@@ -352,6 +355,9 @@ int mlx4_ib_resize_cq(struct ib_cq *ibcq
+ 	int outst_cqe;
+ 	int err;
+ 
++	if (dev->dev->caps.fw_ver < MLX4_FW_VER_RESIZE_CQ)
++		return -ENOSYS;
++
+ 	mutex_lock(&cq->resize_mutex);
+ 
+ 	if (entries < 1 || entries > dev->dev->caps.max_cqes) {

@@ -1,0 +1,167 @@
+---
+ drivers/infiniband/ulp/sdp/sdp.h       |   26 --------------------------
+ drivers/infiniband/ulp/sdp/sdp_bcopy.c |   24 ++++++++++++------------
+ drivers/infiniband/ulp/sdp/sdp_cma.c   |    2 --
+ drivers/infiniband/ulp/sdp/sdp_main.c  |   19 +++++++++----------
+ 4 files changed, 21 insertions(+), 50 deletions(-)
+
+Index: ofed_kernel-2.6.16_sles10_sp2/drivers/infiniband/ulp/sdp/sdp.h
+===================================================================
+--- ofed_kernel-2.6.16_sles10_sp2.orig/drivers/infiniband/ulp/sdp/sdp.h	2010-08-22 08:57:47.000000000 +0300
++++ ofed_kernel-2.6.16_sles10_sp2/drivers/infiniband/ulp/sdp/sdp.h	2010-08-22 08:58:39.000000000 +0300
+@@ -610,32 +610,6 @@
+ 	return mid2str[mid];
+ }
+ 
+-static inline struct sk_buff *sdp_stream_alloc_skb(struct sock *sk, int size,
+-		gfp_t gfp)
+-{
+-	struct sk_buff *skb;
+-
+-	/* The TCP header must be at least 32-bit aligned.  */
+-	size = ALIGN(size, 4);
+-
+-	skb = alloc_skb_fclone(size + sk->sk_prot->max_header, gfp);
+-	if (skb) {
+-		if (sk_wmem_schedule(sk, skb->truesize)) {
+-			/*
+-			 * Make sure that we have exactly size bytes
+-			 * available to the caller, no more, no less.
+-			 */
+-			skb_reserve(skb, skb_tailroom(skb) - size);
+-			return skb;
+-		}
+-		__kfree_skb(skb);
+-	} else {
+-		sk->sk_prot->enter_memory_pressure(sk);
+-		sk_stream_moderate_sndbuf(sk);
+-	}
+-	return NULL;
+-}
+-
+ static inline struct sk_buff *sdp_alloc_skb(struct sock *sk, u8 mid, int size,
+ 		gfp_t gfp)
+ {
+@@ -649,7 +623,7 @@
+ 			gfp = GFP_KERNEL;
+ 	}
+ 
+-	skb = sdp_stream_alloc_skb(sk, size, gfp);
++	skb = sk_stream_alloc_skb(sk, size, gfp);
+ 	if (unlikely(!skb))
+ 		return NULL;
+ 
+Index: ofed_kernel-2.6.16_sles10_sp2/drivers/infiniband/ulp/sdp/sdp_main.c
+===================================================================
+--- ofed_kernel-2.6.16_sles10_sp2.orig/drivers/infiniband/ulp/sdp/sdp_main.c	2010-08-22 08:57:47.000000000 +0300
++++ ofed_kernel-2.6.16_sles10_sp2/drivers/infiniband/ulp/sdp/sdp_main.c	2010-08-22 08:58:39.000000000 +0300
+@@ -706,7 +706,7 @@
+ 		__kfree_skb(skb);
+ 	}
+ 
+-	sk_mem_reclaim(sk);
++	sk_stream_mem_reclaim(sk);
+ 
+ 	/* As outlined in draft-ietf-tcpimpl-prob-03.txt, section
+ 	 * 3.10, we send a RST here because data was lost.  To
+@@ -1439,8 +1439,7 @@
+ void sdp_skb_entail(struct sock *sk, struct sk_buff *skb)
+ {
+         __skb_queue_tail(&sk->sk_write_queue, skb);
+-	sk->sk_wmem_queued += skb->truesize;
+-        sk_mem_charge(sk, skb->truesize);
++	sk_charge_skb(sk, skb);
+         if (!sk->sk_send_head)
+                 sk->sk_send_head = skb;
+         if (sdp_sk(sk)->nonagle & TCP_NAGLE_PUSH)
+@@ -1657,7 +1656,7 @@
+ 		if (copy > PAGE_SIZE - off)
+ 			copy = PAGE_SIZE - off;
+ 
+-		if (!sk_wmem_schedule(sk, copy))
++		if (!sk_stream_wmem_schedule(sk, copy))
+ 			return SDP_DO_WAIT_MEM;
+ 
+ 		if (!page) {
+@@ -1729,7 +1728,7 @@
+ 		if (left <= this_page)
+ 			this_page = left;
+ 
+-		if (!sk_wmem_schedule(sk, copy))
++		if (!sk_stream_wmem_schedule(sk, copy))
+ 			return SDP_DO_WAIT_MEM;
+ 
+ 		/* put_page in skb_release_data() (called by __kfree_skb) */
+@@ -2069,7 +2068,7 @@
+ 		if (sk->sk_send_head == skb)
+ 			sk->sk_send_head = NULL;
+ 		__skb_unlink(skb, &sk->sk_write_queue);
+-		sk_wmem_free_skb(sk, skb);
++		sk_stream_free_skb(sk, skb);
+ 	}
+ 
+ do_error:
+Index: ofed_kernel-2.6.16_sles10_sp2/drivers/infiniband/ulp/sdp/sdp_rx.c
+===================================================================
+--- ofed_kernel-2.6.16_sles10_sp2.orig/drivers/infiniband/ulp/sdp/sdp_rx.c	2010-08-22 08:56:58.000000000 +0300
++++ ofed_kernel-2.6.16_sles10_sp2/drivers/infiniband/ulp/sdp/sdp_rx.c	2010-08-22 08:58:39.000000000 +0300
+@@ -128,7 +128,7 @@
+ 	}
+ 
+ 
+-	sk_mem_reclaim(sk);
++	sk_stream_mem_reclaim(sk);
+ 
+ 	if (!sock_flag(sk, SOCK_DEAD)) {
+ 		sk->sk_state_change(sk);
+@@ -164,11 +164,11 @@
+ 	/* TODO: allocate from cache */
+ 
+ 	if (unlikely(ssk->isk.sk.sk_allocation)) {
+-		skb = sdp_stream_alloc_skb(&ssk->isk.sk, SDP_SKB_HEAD_SIZE,
++		skb = sk_stream_alloc_skb(&ssk->isk.sk, SDP_SKB_HEAD_SIZE,
+ 					  ssk->isk.sk.sk_allocation);
+ 		gfp_page = ssk->isk.sk.sk_allocation | __GFP_HIGHMEM;
+ 	} else {
+-		skb = sdp_stream_alloc_skb(&ssk->isk.sk, SDP_SKB_HEAD_SIZE,
++		skb = sk_stream_alloc_skb(&ssk->isk.sk, SDP_SKB_HEAD_SIZE,
+ 					  GFP_KERNEL);
+ 		gfp_page = GFP_HIGHUSER;
+ 	}
+@@ -299,12 +299,12 @@
+ 			goto out;
+ 	}
+ 
+-	sk_mem_reclaim(&ssk->isk.sk);
++	sk_stream_mem_reclaim(&ssk->isk.sk);
+ 
+ 	if (sdp_post_recvs_needed(ssk))
+ 		goto again;
+ out:
+-	sk_mem_reclaim(&ssk->isk.sk);
++	sk_stream_mem_reclaim(&ssk->isk.sk);
+ }
+ 
+ static inline struct sk_buff *sdp_sock_queue_rcv_skb(struct sock *sk,
+@@ -803,7 +803,7 @@
+ 
+ 	sdp_post_sends(ssk, 0);
+ 
+-	sk_mem_reclaim(sk);
++	sk_stream_mem_reclaim(sk);
+ 
+ 	xmit_poll_force = sk->sk_write_pending &&
+ 		(tx_credits(ssk) > SDP_MIN_TX_CREDITS);
+Index: ofed_kernel-2.6.16_sles10_sp2/drivers/infiniband/ulp/sdp/sdp_tx.c
+===================================================================
+--- ofed_kernel-2.6.16_sles10_sp2.orig/drivers/infiniband/ulp/sdp/sdp_tx.c	2010-08-22 08:56:58.000000000 +0300
++++ ofed_kernel-2.6.16_sles10_sp2/drivers/infiniband/ulp/sdp/sdp_tx.c	2010-08-22 08:58:39.000000000 +0300
+@@ -230,7 +230,7 @@
+ 
+ 	sdp_prf1(&ssk->isk.sk, skb, "tx completion. mseq:%d", ntohl(h->mseq));
+ 
+-	sk_wmem_free_skb(&ssk->isk.sk, skb);
++	sk_stream_free_skb(&ssk->isk.sk, skb);
+ 
+ 	return 0;
+ }

@@ -1,0 +1,13 @@
+diff --git a/drivers/infiniband/hw/ipath/ipath_file_ops.c b/drivers/infiniband/hw/ipath/ipath_file_ops.c
+index 56c0eda..f113e4b 100644
+--- a/drivers/infiniband/hw/ipath/ipath_file_ops.c
++++ b/drivers/infiniband/hw/ipath/ipath_file_ops.c
+@@ -904,7 +904,7 @@ static int ipath_create_user_egr(struct ipath_portdata *pd)
+ 	chunk = pd->port_rcvegrbuf_chunks;
+ 	egrperchunk = pd->port_rcvegrbufs_perchunk;
+ 	size = pd->port_rcvegrbuf_size;
+-	pd->port_rcvegrbuf = kmalloc(chunk * sizeof(pd->port_rcvegrbuf[0]),
++	pd->port_rcvegrbuf = kzalloc(chunk * sizeof(pd->port_rcvegrbuf[0]),
+ 				     GFP_KERNEL);
+ 	if (!pd->port_rcvegrbuf) {
+ 		ret = -ENOMEM;

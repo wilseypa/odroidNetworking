@@ -1,0 +1,164 @@
+commit 6f4acfd8b284f1d20014469f5285f0ff47356c3c
+Author: root <root@almus.(none)>
+Date:   Sun Jun 14 07:20:57 2009 -0700
+
+    cxgb3_0002_undo_250.patch
+
+diff --git a/drivers/net/cxgb3/common.h b/drivers/net/cxgb3/common.h
+index e508dc3..17fc36b 100644
+--- a/drivers/net/cxgb3/common.h
++++ b/drivers/net/cxgb3/common.h
+@@ -735,7 +735,6 @@ void early_hw_init(struct adapter *adapter, const struct adapter_info *ai);
+ int t3_reset_adapter(struct adapter *adapter);
+ int t3_prep_adapter(struct adapter *adapter, const struct adapter_info *ai,
+ 		    int reset);
+-int t3_replay_prep_adapter(struct adapter *adapter);
+ void t3_led_ready(struct adapter *adapter);
+ void t3_fatal_err(struct adapter *adapter);
+ void t3_set_vlan_accel(struct adapter *adapter, unsigned int ports, int on);
+diff --git a/drivers/net/cxgb3/cxgb3_main.c b/drivers/net/cxgb3/cxgb3_main.c
+index d016db5..73ab94b 100644
+--- a/drivers/net/cxgb3/cxgb3_main.c
++++ b/drivers/net/cxgb3/cxgb3_main.c
+@@ -2725,6 +2725,9 @@ static int t3_adapter_error(struct adapter *adapter, int reset)
+ 	/* Stop SGE timers */
+ 	t3_stop_sge_timers(adapter);
+ 
++	/* Free sge resources */
++	t3_free_sge_resources(adapter);
++
+ 	adapter->flags &= ~FULL_INIT_DONE;
+ 
+ 	if (reset)
+@@ -2743,12 +2746,8 @@ static int t3_reenable_adapter(struct adapter *adapter)
+ 		goto err;
+ 	}
+ 	pci_set_master(adapter->pdev);
+-	pci_restore_state(adapter->pdev);
+-
+-	/* Free sge resources */
+-	t3_free_sge_resources(adapter);
+ 
+-	if (t3_replay_prep_adapter(adapter))
++	if (t3_prep_adapter(adapter, adapter->params.info, 1))
+ 		goto err;
+ 
+ 	return 0;
+@@ -3050,7 +3049,6 @@ static int __devinit init_one(struct pci_dev *pdev,
+ 	}
+ 
+ 	pci_set_master(pdev);
+-	pci_save_state(pdev);
+ 
+ 	mmio_start = pci_resource_start(pdev, 0);
+ 	mmio_len = pci_resource_len(pdev, 0);
+diff --git a/drivers/net/cxgb3/regs.h b/drivers/net/cxgb3/regs.h
+index 1b5327b..932e77a 100644
+--- a/drivers/net/cxgb3/regs.h
++++ b/drivers/net/cxgb3/regs.h
+@@ -452,14 +452,6 @@
+ 
+ #define A_PCIE_CFG 0x88
+ 
+-#define S_ENABLELINKDWNDRST    21
+-#define V_ENABLELINKDWNDRST(x) ((x) << S_ENABLELINKDWNDRST)
+-#define F_ENABLELINKDWNDRST    V_ENABLELINKDWNDRST(1U)
+-
+-#define S_ENABLELINKDOWNRST    20
+-#define V_ENABLELINKDOWNRST(x) ((x) << S_ENABLELINKDOWNRST)
+-#define F_ENABLELINKDOWNRST    V_ENABLELINKDOWNRST(1U)
+-
+ #define S_PCIE_CLIDECEN    16
+ #define V_PCIE_CLIDECEN(x) ((x) << S_PCIE_CLIDECEN)
+ #define F_PCIE_CLIDECEN    V_PCIE_CLIDECEN(1U)
+diff --git a/drivers/net/cxgb3/sge.c b/drivers/net/cxgb3/sge.c
+index d26d04f..364f580 100644
+--- a/drivers/net/cxgb3/sge.c
++++ b/drivers/net/cxgb3/sge.c
+@@ -632,33 +632,6 @@ static void *alloc_ring(struct pci_dev *pdev, size_t nelem, size_t elem_size,
+ }
+ 
+ /**
+- *	t3_reset_qset - reset a sge qset
+- *	@q: the queue set
+- *
+- *	Reset the qset structure.
+- *	the NAPI structure is preserved in the event of
+- *	the qset's reincarnation, for example during EEH recovery.
+- */
+-static void t3_reset_qset(struct sge_qset *q)
+-{
+-	if (q->adap &&
+-	    !(q->adap->flags & NAPI_INIT)) {
+-		memset(q, 0, sizeof(*q));
+-		return;
+-	}
+-
+-	q->adap = NULL;
+-	memset(&q->rspq, 0, sizeof(q->rspq));
+-	memset(q->fl, 0, sizeof(struct sge_fl) * SGE_RXQ_PER_SET);
+-	memset(q->txq, 0, sizeof(struct sge_txq) * SGE_TXQ_PER_SET);
+-	q->txq_stopped = 0;
+-	q->tx_reclaim_timer.function = NULL; /* for t3_stop_sge_timers() */
+-	q->rx_reclaim_timer.function = NULL;
+-	q->lro_frag_tbl.nr_frags = q->lro_frag_tbl.len = 0;
+-}
+-
+-
+-/**
+  *	free_qset - free the resources of an SGE queue set
+  *	@adapter: the adapter owning the queue set
+  *	@q: the queue set
+@@ -711,7 +684,7 @@ static void t3_free_qset(struct adapter *adapter, struct sge_qset *q)
+ 				  q->rspq.desc, q->rspq.phys_addr);
+ 	}
+ 
+-	t3_reset_qset(q);
++	memset(q, 0, sizeof(*q));
+ }
+ 
+ /**
+diff --git a/drivers/net/cxgb3/t3_hw.c b/drivers/net/cxgb3/t3_hw.c
+index 31ed31a..de00045 100644
+--- a/drivers/net/cxgb3/t3_hw.c
++++ b/drivers/net/cxgb3/t3_hw.c
+@@ -3489,7 +3489,6 @@ static void config_pcie(struct adapter *adap)
+ 
+ 	t3_write_reg(adap, A_PCIE_PEX_ERR, 0xffffffff);
+ 	t3_set_reg_field(adap, A_PCIE_CFG, 0,
+-			 F_ENABLELINKDWNDRST | F_ENABLELINKDOWNRST |
+ 			 F_PCIE_DMASTOPEN | F_PCIE_CLIDECEN);
+ }
+ 
+@@ -3908,31 +3907,3 @@ void t3_led_ready(struct adapter *adapter)
+ 			 F_GPIO0_OUT_VAL);
+ }
+ 
+-int t3_replay_prep_adapter(struct adapter *adapter)
+-{
+-	const struct adapter_info *ai = adapter->params.info;
+-	unsigned int i, j = -1;
+-	int ret;
+-
+-	early_hw_init(adapter, ai);
+-	ret = init_parity(adapter);
+-	if (ret)
+-		return ret;
+-
+-	for_each_port(adapter, i) {
+-		const struct port_type_info *pti;
+-		struct port_info *p = adap2pinfo(adapter, i);
+-
+-		while (!adapter->params.vpd.port_type[++j])
+-			;
+-
+-		pti = &port_types[adapter->params.vpd.port_type[j]];
+-		ret = pti->phy_prep(&p->phy, adapter, p->phy.addr, NULL);
+-		if (ret)
+-			return ret;
+-		p->phy.ops->power_down(&p->phy, 1);
+-	}
+-
+-return 0;
+-}
+-

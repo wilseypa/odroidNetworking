@@ -1,0 +1,64 @@
+From de92768a93f5c675ab27e40ef2469f7e7e8fbbf5 Mon Sep 17 00:00:00 2001
+From: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+Date: Thu, 4 Mar 2010 10:20:58 +0200
+Subject: [PATCH] mlx4_en: Multicast promisc capability
+
+Signed-off-by: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+---
+ drivers/net/mlx4/en_port.c  |    3 ++-
+ drivers/net/mlx4/fw.c       |    5 +++++
+ include/linux/mlx4/device.h |    1 +
+ 3 files changed, 8 insertions(+), 1 deletions(-)
+
+diff --git a/drivers/net/mlx4/en_port.c b/drivers/net/mlx4/en_port.c
+index 7f5a322..7223cfd 100644
+--- a/drivers/net/mlx4/en_port.c
++++ b/drivers/net/mlx4/en_port.c
+@@ -128,7 +128,8 @@ int mlx4_SET_PORT_qpn_calc(struct mlx4_dev *dev, u8 port, u32 base_qpn,
+ 
+ 	context->base_qpn = cpu_to_be32(base_qpn);
+ 	context->promisc = cpu_to_be32(promisc << SET_PORT_PROMISC_EN_SHIFT | base_qpn);
+-	context->mcast = cpu_to_be32(1 << SET_PORT_PROMISC_MODE_SHIFT | base_qpn);
++	context->mcast = cpu_to_be32((dev->caps.mc_promisc_mode <<
++				      SET_PORT_PROMISC_MODE_SHIFT) | base_qpn);
+ 	context->intra_no_vlan = 0;
+ 	context->no_vlan = MLX4_NO_VLAN_IDX;
+ 	context->intra_vlan_miss = 0;
+diff --git a/drivers/net/mlx4/fw.c b/drivers/net/mlx4/fw.c
+index 0cd27b9..be52383 100644
+--- a/drivers/net/mlx4/fw.c
++++ b/drivers/net/mlx4/fw.c
+@@ -606,6 +606,7 @@ int mlx4_QUERY_FW(struct mlx4_dev *dev)
+ 
+ #define QUERY_FW_OUT_SIZE             0x100
+ #define QUERY_FW_VER_OFFSET            0x00
++#define MC_PROMISC_VER		       0x2000702bcull
+ #define QUERY_FW_CMD_IF_REV_OFFSET     0x0a
+ #define QUERY_FW_MAX_CMD_OFFSET        0x0f
+ #define QUERY_FW_ERR_START_OFFSET      0x30
+@@ -634,6 +635,10 @@ int mlx4_QUERY_FW(struct mlx4_dev *dev)
+ 	dev->caps.fw_ver = (fw_ver & 0xffff00000000ull) |
+ 		((fw_ver & 0xffff0000ull) >> 16) |
+ 		((fw_ver & 0x0000ffffull) << 16);
++	if (dev->caps.fw_ver < MC_PROMISC_VER)
++		dev->caps.mc_promisc_mode = 2;
++	else
++		dev->caps.mc_promisc_mode = 1;
+ 
+ 	MLX4_GET(cmd_if_rev, outbox, QUERY_FW_CMD_IF_REV_OFFSET);
+ 	if (cmd_if_rev < MLX4_COMMAND_INTERFACE_MIN_REV ||
+diff --git a/include/linux/mlx4/device.h b/include/linux/mlx4/device.h
+index 98fc532..31f2854 100644
+--- a/include/linux/mlx4/device.h
++++ b/include/linux/mlx4/device.h
+@@ -259,6 +259,7 @@ struct mlx4_caps {
+ 	u8			counters_mode;
+ 	u32			max_basic_counters;
+ 	u32			max_ext_counters;
++	u32			mc_promisc_mode;
+ };
+ 
+ struct mlx4_buf_list {
+-- 
+1.5.3.7
+

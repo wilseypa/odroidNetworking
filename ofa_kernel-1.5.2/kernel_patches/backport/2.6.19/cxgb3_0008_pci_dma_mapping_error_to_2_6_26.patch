@@ -1,0 +1,17 @@
+---
+ drivers/net/cxgb3/sge.c |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+Index: ofed_kernel/drivers/net/cxgb3/sge.c
+===================================================================
+--- ofed_kernel.orig/drivers/net/cxgb3/sge.c
++++ ofed_kernel/drivers/net/cxgb3/sge.c
+@@ -386,7 +386,7 @@ static inline int add_one_rx_buf(void *v
+ 	dma_addr_t mapping;
+ 
+ 	mapping = pci_map_single(pdev, va, len, PCI_DMA_FROMDEVICE);
+-	if (unlikely(pci_dma_mapping_error(pdev, mapping)))
++	if (unlikely(pci_dma_mapping_error(mapping)))
+ 		return -ENOMEM;
+ 
+ 	pci_unmap_addr_set(sd, dma_addr, mapping);

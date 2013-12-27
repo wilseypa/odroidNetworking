@@ -1,0 +1,19 @@
+commit 7388bed5d1c72b777ef9ebe0f9bd5138cd33b5d6
+Author: root <root@almus.(none)>
+Date:   Fri Jul 3 08:26:22 2009 -0700
+
+    fixwarnings patch
+
+diff --git a/drivers/net/cxgb3/cxgb3_main.c b/drivers/net/cxgb3/cxgb3_main.c
+index a0931d5..1649b1d 100644
+--- a/drivers/net/cxgb3/cxgb3_main.c
++++ b/drivers/net/cxgb3/cxgb3_main.c
+@@ -286,7 +286,7 @@ void t3_os_phymod_changed(struct adapter *adap, int port_id)
+ 		NULL, "SR", "LR", "LRM", "TWINAX", "TWINAX", "unknown"
+ 	};
+ 
+-	const struct net_device *dev = adap->port[port_id];
++	struct net_device *dev = adap->port[port_id];
+ 	const struct port_info *pi = netdev_priv(dev);
+ 
+ 	if (pi->phy.modtype == phy_modtype_none)

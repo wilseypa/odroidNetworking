@@ -1,0 +1,46 @@
+diff --git a/drivers/net/mlx4/en_ethtool.c b/drivers/net/mlx4/en_ethtool.c
+index 107f9a0..ac2f076 100644
+--- a/drivers/net/mlx4/en_ethtool.c
++++ b/drivers/net/mlx4/en_ethtool.c
+@@ -152,19 +152,17 @@ static void mlx4_en_get_wol(struct net_device *netdev,
+ 	return;
+ }
+ 
+-static int mlx4_en_get_sset_count(struct net_device *dev, int sset)
++static int mlx4_en_get_sset_count(struct net_device *dev)
+ {
+ 	struct mlx4_en_priv *priv = netdev_priv(dev);
+ 
+-	switch (sset) {
+-	case ETH_SS_STATS:
+-		return NUM_ALL_STATS +
+-			(priv->tx_ring_num + priv->rx_ring_num) * 2;
+-	case ETH_SS_TEST:
+-		return MLX4_EN_NUM_SELF_TEST - !(priv->mdev->dev->caps.loopback_support) * 2;
+-	default:
+-		return -EOPNOTSUPP;
+-	}
++	return NUM_ALL_STATS + (priv->tx_ring_num + priv->rx_ring_num) * 2;
++}
++
++static int mlx4_en_self_test_count(struct net_device *dev)
++{
++	struct mlx4_en_priv *priv = netdev_priv(dev);
++	return MLX4_EN_NUM_SELF_TEST - !(priv->mdev->dev->caps.loopback_support) * 2;
+ }
+ 
+ static void mlx4_en_get_ethtool_stats(struct net_device *dev,
+@@ -432,10 +430,11 @@ const struct ethtool_ops mlx4_en_ethtool_ops = {
+ 	.get_rx_csum = mlx4_en_get_rx_csum,
+ 	.set_rx_csum = mlx4_en_set_rx_csum,
+ 	.get_tx_csum = ethtool_op_get_tx_csum,
+-	.set_tx_csum = ethtool_op_set_tx_ipv6_csum,
++	.set_tx_csum = ethtool_op_set_tx_csum,
+ 	.get_strings = mlx4_en_get_strings,
+-	.get_sset_count = mlx4_en_get_sset_count,
++	.get_stats_count = mlx4_en_get_sset_count,
+ 	.get_ethtool_stats = mlx4_en_get_ethtool_stats,
++	.self_test_count = mlx4_en_self_test_count,
+ 	.self_test = mlx4_en_self_test,
+ 	.get_wol = mlx4_en_get_wol,
+ 	.get_msglevel = mlx4_en_get_msglevel,

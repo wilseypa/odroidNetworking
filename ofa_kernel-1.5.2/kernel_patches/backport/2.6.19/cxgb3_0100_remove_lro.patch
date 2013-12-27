@@ -1,0 +1,391 @@
+commit 378b8944e2d9d41bbfb54b9afcb9e80fd6c72650
+Author: root <root@almus.(none)>
+Date:   Thu Nov 19 06:04:39 2009 -0800
+
+    cxgb3_0100_remove_lro.patch
+
+diff --git a/drivers/net/cxgb3/adapter.h b/drivers/net/cxgb3/adapter.h
+index fc8054c..5799c29 100644
+--- a/drivers/net/cxgb3/adapter.h
++++ b/drivers/net/cxgb3/adapter.h
+@@ -50,7 +50,6 @@ struct adapter;
+ 
+ enum {			/* rx_offload flags */
+ 	T3_RX_CSUM	= 1 << 0,
+-	T3_LRO		= 1 << 1,
+ };
+ 
+ struct port_info {
+@@ -190,9 +189,6 @@ struct sge_qset {		/* an SGE queue set */
+ 	struct sge_rspq rspq;
+ 	struct sge_fl fl[SGE_RXQ_PER_SET];
+ 	struct sge_txq txq[SGE_TXQ_PER_SET];
+-	struct napi_gro_fraginfo lro_frag_tbl;
+-	int lro_enabled;
+-	void *lro_va;
+ 	struct net_device *netdev;	/* associated net device */
+ 	unsigned long txq_stopped;	/* which Tx queues are stopped */
+ 	struct timer_list tx_reclaim_timer;	/* reclaims TX buffers */
+diff --git a/drivers/net/cxgb3/common.h b/drivers/net/cxgb3/common.h
+index 9d7410b..5229567 100644
+--- a/drivers/net/cxgb3/common.h
++++ b/drivers/net/cxgb3/common.h
+@@ -344,7 +344,6 @@ struct tp_params {
+ 
+ struct qset_params {		/* SGE queue set parameters */
+ 	unsigned int polling;	/* polling/interrupt service for rspq */
+-	unsigned int lro;	/* large receive offload */
+ 	unsigned int coalesce_usecs;	/* irq coalescing timer */
+ 	unsigned int rspq_size;	/* # of entries in response queue */
+ 	unsigned int fl_size;	/* # of entries in regular free list */
+diff --git a/drivers/net/cxgb3/cxgb3_ioctl.h b/drivers/net/cxgb3/cxgb3_ioctl.h
+index b19e437..f10ddb1 100644
+--- a/drivers/net/cxgb3/cxgb3_ioctl.h
++++ b/drivers/net/cxgb3/cxgb3_ioctl.h
+@@ -90,7 +90,6 @@ struct ch_qset_params {
+ 	int32_t fl_size[2];
+ 	int32_t intr_lat;
+ 	int32_t polling;
+-	int32_t lro;
+ 	int32_t cong_thres;
+ 	int32_t  vector;
+ 	int32_t  qnum;
+diff --git a/drivers/net/cxgb3/cxgb3_main.c b/drivers/net/cxgb3/cxgb3_main.c
+index dfe5e0a..99ae6e3 100644
+--- a/drivers/net/cxgb3/cxgb3_main.c
++++ b/drivers/net/cxgb3/cxgb3_main.c
+@@ -659,26 +659,6 @@ static void quiesce_rx(struct adapter *adap)
+ }
+ 
+ /**
+- *	set_qset_lro - Turn a queue set's LRO capability on and off
+- *	@dev: the device the qset is attached to
+- *	@qset_idx: the queue set index
+- *	@val: the LRO switch
+- *
+- *	Sets LRO on or off for a particular queue set.
+- *	the device's features flag is updated to reflect the LRO
+- *	capability when all queues belonging to the device are
+- *	in the same state.
+- */
+-static void set_qset_lro(struct net_device *dev, int qset_idx, int val)
+-{
+-	struct port_info *pi = netdev_priv(dev);
+-	struct adapter *adapter = pi->adapter;
+-
+-	adapter->params.sge.qset[qset_idx].lro = !!val;
+-	adapter->sge.qs[qset_idx].lro_enabled = !!val;
+-}
+-
+-/**
+  *	setup_sge_qsets - configure SGE Tx/Rx/response queues
+  *	@adap: the adapter
+  *
+@@ -699,7 +679,6 @@ static int setup_sge_qsets(struct adapter *adap)
+ 		const struct port_info *pi = netdev_priv(dev);
+ 
+ 		for (j = 0; j < pi->nqsets; ++j, ++qset_idx) {
+-			set_qset_lro(dev, qset_idx, pi->rx_offload & T3_LRO);
+ 			err = t3_sge_alloc_qset(adap, qset_idx, 1,
+ 				(adap->flags & USING_MSIX) ? qset_idx + 1 :
+ 							     irq_idx,
+@@ -1474,9 +1453,6 @@ static char stats_strings[][ETH_GSTRING_LEN] = {
+ 	"VLANinsertions     ",
+ 	"TxCsumOffload      ",
+ 	"RxCsumGood         ",
+-	"LroAggregated      ",
+-	"LroFlushed         ",
+-	"LroNoDesc          ",
+ 	"RxDrops            ",
+ 
+ 	"CheckTXEnToggled   ",
+@@ -1837,13 +1813,7 @@ static int set_rx_csum(struct net_device *dev, u32 data)
+ 
+ 	if (data) {
+ 		p->rx_offload |= T3_RX_CSUM;
+-	} else {
+-		int i;
+-
+-		p->rx_offload &= ~(T3_RX_CSUM | T3_LRO);
+-		for (i = p->first_qset; i < p->first_qset + p->nqsets; i++)
+-			set_qset_lro(dev, i, 0);
+-	}
++	} 
+ 	return 0;
+ }
+ 
+@@ -2073,14 +2043,6 @@ static int cxgb_extension_ioctl(struct net_device *dev, void __user *useraddr)
+ 					MAX_RSPQ_ENTRIES))
+ 			return -EINVAL;
+ 
+-		if ((adapter->flags & FULL_INIT_DONE) && t.lro > 0)
+-			for_each_port(adapter, i) {
+-				pi = adap2pinfo(adapter, i);
+-				if (t.qset_idx >= pi->first_qset &&
+-				    t.qset_idx < pi->first_qset + pi->nqsets &&
+-				    !(pi->rx_offload & T3_RX_CSUM))
+-					return -EINVAL;
+-			}
+ 
+ 		if ((adapter->flags & FULL_INIT_DONE) &&
+ 			(t.rspq_size >= 0 || t.fl_size[0] >= 0 ||
+@@ -2142,8 +2104,6 @@ static int cxgb_extension_ioctl(struct net_device *dev, void __user *useraddr)
+ 				}
+ 			}
+ 		}
+-		if (t.lro >= 0)
+-			set_qset_lro(dev, t.qset_idx, t.lro);
+ 
+ 		break;
+ 	}
+@@ -2177,7 +2137,6 @@ static int cxgb_extension_ioctl(struct net_device *dev, void __user *useraddr)
+ 		t.fl_size[0] = q->fl_size;
+ 		t.fl_size[1] = q->jumbo_size;
+ 		t.polling = q->polling;
+-		t.lro = q->lro;
+ 		t.intr_lat = q->coalesce_usecs;
+ 		t.cong_thres = q->cong_thres;
+ 		t.qnum = q1;
+@@ -3196,7 +3155,7 @@ static int __devinit init_one(struct pci_dev *pdev,
+ 		adapter->port[i] = netdev;
+ 		pi = netdev_priv(netdev);
+ 		pi->adapter = adapter;
+-		pi->rx_offload = T3_RX_CSUM | T3_LRO;
++		pi->rx_offload = T3_RX_CSUM;
+ 		pi->port_id = i;
+ 		netif_carrier_off(netdev);
+ 		netdev->irq = pdev->irq;
+@@ -3204,7 +3163,6 @@ static int __devinit init_one(struct pci_dev *pdev,
+ 		netdev->mem_end = mmio_start + mmio_len - 1;
+ 		netdev->features |= NETIF_F_SG | NETIF_F_IP_CSUM | NETIF_F_TSO;
+ 		netdev->features |= NETIF_F_LLTX;
+-		netdev->features |= NETIF_F_GRO;
+ 		if (pci_using_dac)
+ 			netdev->features |= NETIF_F_HIGHDMA;
+ 
+diff --git a/drivers/net/cxgb3/sge.c b/drivers/net/cxgb3/sge.c
+index b6cff80..9ca5fa3 100644
+--- a/drivers/net/cxgb3/sge.c
++++ b/drivers/net/cxgb3/sge.c
+@@ -1979,7 +1979,7 @@ static inline int is_arp(struct sk_buff *skb)
+  *	if it was immediate data in a response.
+  */
+ static void rx_eth(struct adapter *adap, struct sge_rspq *rq,
+-		   struct sk_buff *skb, int pad, int lro)
++		   struct sk_buff *skb, int pad)
+ {
+ 	struct cpl_rx_pkt *p = (struct cpl_rx_pkt *)(skb->data + pad);
+ 	struct sge_qset *qs = rspq_to_qset(rq);
+@@ -1990,7 +1990,7 @@ static void rx_eth(struct adapter *adap, struct sge_rspq *rq,
+ 	pi = netdev_priv(skb->dev);
+ 	if ((pi->rx_offload & T3_RX_CSUM) && p->csum_valid &&
+ 	    p->csum == htons(0xffff) && !p->fragment) {
+-		qs->port_stats[SGE_PSTAT_RX_CSUM_GOOD]++;
++		rspq_to_qset(rq)->port_stats[SGE_PSTAT_RX_CSUM_GOOD]++;
+ 		skb->ip_summed = CHECKSUM_UNNECESSARY;
+ 	} else
+ 		skb->ip_summed = CHECKSUM_NONE;
+@@ -1999,12 +1999,8 @@ static void rx_eth(struct adapter *adap, struct sge_rspq *rq,
+ 	if (unlikely(p->vlan_valid)) {
+ 		struct vlan_group *grp = pi->vlan_grp;
+ 
+-		qs->port_stats[SGE_PSTAT_VLANEX]++;
+-		if (likely(grp))
+-			if (lro)
+-				vlan_gro_receive(&qs->napi, grp,
+-						 ntohs(p->vlan), skb);
+-			else {
++		rspq_to_qset(rq)->port_stats[SGE_PSTAT_VLANEX]++;
++		if (likely(grp)) {
+ 				if (unlikely(pi->iscsi_ipv4addr &&
+ 				    is_arp(skb))) {
+ 					unsigned short vtag = ntohs(p->vlan) &
+@@ -2019,97 +2015,13 @@ static void rx_eth(struct adapter *adap, struct sge_rspq *rq,
+ 		else
+ 			dev_kfree_skb_any(skb);
+ 	} else if (rq->polling) {
+-		if (lro)
+-			napi_gro_receive(&qs->napi, skb);
+-		else {
+ 			if (unlikely(pi->iscsi_ipv4addr && is_arp(skb)))
+ 				cxgb3_arp_process(adap, skb);
+ 			netif_receive_skb(skb);
+-		}
+ 	} else
+ 		netif_rx(skb);
+ }
+ 
+-static inline int is_eth_tcp(u32 rss)
+-{
+-	return G_HASHTYPE(ntohl(rss)) == RSS_HASH_4_TUPLE;
+-}
+-
+-/**
+- *	lro_add_page - add a page chunk to an LRO session
+- *	@adap: the adapter
+- *	@qs: the associated queue set
+- *	@fl: the free list containing the page chunk to add
+- *	@len: packet length
+- *	@complete: Indicates the last fragment of a frame
+- *
+- *	Add a received packet contained in a page chunk to an existing LRO
+- *	session.
+- */
+-static void lro_add_page(struct adapter *adap, struct sge_qset *qs,
+-			 struct sge_fl *fl, int len, int complete)
+-{
+-	struct rx_sw_desc *sd = &fl->sdesc[fl->cidx];
+-	struct cpl_rx_pkt *cpl;
+-	struct skb_frag_struct *rx_frag = qs->lro_frag_tbl.frags;
+-	int nr_frags = qs->lro_frag_tbl.nr_frags;
+-	int frag_len = qs->lro_frag_tbl.len;
+-	int offset = 0;
+-
+-	if (!nr_frags) {
+-		offset = 2 + sizeof(struct cpl_rx_pkt);
+-		qs->lro_va = cpl = sd->pg_chunk.va + 2;
+-	}
+-
+-	fl->credits--;
+-
+-	len -= offset;
+-	pci_dma_sync_single_for_cpu(adap->pdev,
+-				    pci_unmap_addr(sd, dma_addr),
+-				    fl->buf_size - SGE_PG_RSVD,
+-				    PCI_DMA_FROMDEVICE);
+-
+-	(*sd->pg_chunk.p_cnt)--;
+-	if (!*sd->pg_chunk.p_cnt && sd->pg_chunk.page != fl->pg_chunk.page)
+-		pci_unmap_page(adap->pdev,
+-			       sd->pg_chunk.mapping,
+-			       fl->alloc_size,
+-			       PCI_DMA_FROMDEVICE);
+-
+-	prefetch(qs->lro_va);
+-
+-	rx_frag += nr_frags;
+-	rx_frag->page = sd->pg_chunk.page;
+-	rx_frag->page_offset = sd->pg_chunk.offset + offset;
+-	rx_frag->size = len;
+-	frag_len += len;
+-	qs->lro_frag_tbl.nr_frags++;
+-	qs->lro_frag_tbl.len = frag_len;
+-
+-
+-	if (!complete)
+-		return;
+-
+-	qs->lro_frag_tbl.ip_summed = CHECKSUM_UNNECESSARY;
+-	cpl = qs->lro_va;
+-
+-	if (unlikely(cpl->vlan_valid)) {
+-		struct net_device *dev = qs->netdev;
+-		struct port_info *pi = netdev_priv(dev);
+-		struct vlan_group *grp = pi->vlan_grp;
+-
+-		if (likely(grp != NULL)) {
+-			vlan_gro_frags(&qs->napi, grp, ntohs(cpl->vlan),
+-				       &qs->lro_frag_tbl);
+-			goto out;
+-		}
+-	}
+-	napi_gro_frags(&qs->napi, &qs->lro_frag_tbl);
+-
+-out:
+-	qs->lro_frag_tbl.nr_frags = qs->lro_frag_tbl.len = 0;
+-}
+-
+ /**
+  *	handle_rsp_cntrl_info - handles control information in a response
+  *	@qs: the queue set corresponding to the response
+@@ -2238,7 +2150,7 @@ static int process_responses(struct adapter *adap, struct sge_qset *qs,
+ 	q->next_holdoff = q->holdoff_tmr;
+ 
+ 	while (likely(budget_left && is_new_response(r, q))) {
+-		int packet_complete, eth, ethpad = 2, lro = qs->lro_enabled;
++		int packet_complete, eth, ethpad = 2;
+ 		struct sk_buff *skb = NULL;
+ 		u32 len, flags = ntohl(r->flags);
+ 		__be32 rss_hi = *(const __be32 *)r,
+@@ -2270,25 +2182,16 @@ no_mem:
+ 		} else if ((len = ntohl(r->len_cq)) != 0) {
+ 			struct sge_fl *fl;
+ 
+-			lro &= eth && is_eth_tcp(rss_hi);
+-
+ 			fl = (len & F_RSPD_FLQ) ? &qs->fl[1] : &qs->fl[0];
+ 			if (fl->use_pages) {
+ 				void *addr = fl->sdesc[fl->cidx].pg_chunk.va;
+ 
+-				prefetch(&qs->lro_frag_tbl);
+ 
+ 				prefetch(addr);
+ #if L1_CACHE_BYTES < 128
+ 				prefetch(addr + L1_CACHE_BYTES);
+ #endif
+ 				__refill_fl(adap, fl);
+-				if (lro > 0) {
+-					lro_add_page(adap, qs, fl,
+-						     G_RSPD_LEN(len),
+-						     flags & F_RSPD_EOP);
+-					 goto next_fl;
+-				}
+ 
+ 				skb = get_packet_pg(adap, fl, q,
+ 						    G_RSPD_LEN(len),
+@@ -2304,7 +2207,7 @@ no_mem:
+ 				q->rx_drops++;
+ 			} else if (unlikely(r->rss_hdr.opcode == CPL_TRACE_PKT))
+ 				__skb_pull(skb, 2);
+-next_fl:
++
+ 			if (++fl->cidx == fl->size)
+ 				fl->cidx = 0;
+ 		} else
+@@ -2334,7 +2237,7 @@ next_fl:
+ 
+ 		if (skb != NULL && packet_complete) {
+ 			if (eth)
+-				rx_eth(adap, q, skb, ethpad, lro);
++				rx_eth(adap, q, skb, ethpad);
+ 			else {
+ 				q->offload_pkts++;
+ 				/* Preserve the RSS info in csum & priority */
+@@ -2881,7 +2784,7 @@ static void sge_timer_rx(unsigned long data)
+ 	if (!spin_trylock_irq(lock))
+ 		goto out;
+ 
+-	if (napi_is_scheduled(&qs->napi))
++	if (napi_is_scheduled(qs->netdev))
+ 		goto unlock;
+ 
+ 	if (adap->params.rev < 4) {
+diff --git a/drivers/net/cxgb3/t3_cpl.h b/drivers/net/cxgb3/t3_cpl.h
+index 852c399..b07ab67 100644
+--- a/drivers/net/cxgb3/t3_cpl.h
++++ b/drivers/net/cxgb3/t3_cpl.h
+@@ -174,13 +174,6 @@ enum {				/* TCP congestion control algorithms */
+ 	CONG_ALG_HIGHSPEED
+ };
+ 
+-enum {			/* RSS hash type */
+-	RSS_HASH_NONE = 0,
+-	RSS_HASH_2_TUPLE = 1,
+-	RSS_HASH_4_TUPLE = 2,
+-	RSS_HASH_TCPV6 = 3
+-};
+-
+ union opcode_tid {
+ 	__be32 opcode_tid;
+ 	__u8 opcode;
+@@ -194,10 +187,6 @@ union opcode_tid {
+ #define S_QNUM 0
+ #define G_QNUM(x) (((x) >> S_QNUM) & 0xFFFF)
+ 
+-#define S_HASHTYPE 22
+-#define M_HASHTYPE 0x3
+-#define G_HASHTYPE(x) (((x) >> S_HASHTYPE) & M_HASHTYPE)
+-
+ /* tid is assumed to be 24-bits */
+ #define MK_OPCODE_TID(opcode, tid) (V_OPCODE(opcode) | (tid))
+ 

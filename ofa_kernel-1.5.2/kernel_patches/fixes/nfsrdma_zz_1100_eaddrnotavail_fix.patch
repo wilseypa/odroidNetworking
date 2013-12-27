@@ -1,0 +1,12 @@
+diff --git a/net/sunrpc/xprtsock.c b/net/sunrpc/xprtsock.c
+index 92a5c42..c90414f 100644
+--- a/net/sunrpc/xprtsock.c
++++ b/net/sunrpc/xprtsock.c
+@@ -1799,6 +1799,7 @@ static void xs_tcp_setup_socket(struct rpc_xprt *xprt,
+ 		 */
+ 		set_bit(XPRT_CONNECTION_CLOSE, &xprt->state);
+ 		xprt_force_disconnect(xprt);
++		break;
+ 	case -ECONNREFUSED:
+ 	case -ECONNRESET:
+ 	case -ENETUNREACH:

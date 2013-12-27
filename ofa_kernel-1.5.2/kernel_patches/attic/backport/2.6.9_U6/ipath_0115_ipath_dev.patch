@@ -1,0 +1,31 @@
+--- a/drivers/infiniband/hw/ipath/ipath_file_ops.c	2008-11-08 18:50:10.000000000 -0800
++++ b/drivers/infiniband/hw/ipath/ipath_file_ops.c	2008-11-08 18:36:08.000000000 -0800
+@@ -2452,6 +2452,17 @@
+ 
+ static struct class *ipath_class;
+ 
++static ssize_t show_dev(struct class_device *class_dev, char *buf)
++{
++	dev_t dev = (dev_t)class_get_devdata(class_dev);
++
++	if (!dev)
++		return -ENODEV;
++
++	return print_dev_t(buf, dev);
++}
++static CLASS_DEVICE_ATTR(dev, S_IRUGO, show_dev, NULL);
++
+ static int init_cdev(int minor, char *name, const struct file_operations *fops,
+ 		     struct cdev **cdevp, struct class_device **class_devp)
+ {
+@@ -2490,6 +2501,10 @@
+ 		       minor, name, -ret);
+ 		goto err_cdev;
+ 	}
++	if (class_device_create_file(class_dev, &class_device_attr_dev))
++		printk(KERN_ERR IPATH_DRV_NAME " Failed to add class dev file\n");
++	else
++		class_set_devdata(class_dev, dev);
+ 
+ 	goto done;
+ 

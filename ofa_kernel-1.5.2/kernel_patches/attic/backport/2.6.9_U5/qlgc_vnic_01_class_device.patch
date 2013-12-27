@@ -1,0 +1,1099 @@
+---
+ drivers/infiniband/ulp/qlgc_vnic/vnic_ib.c      |   75 ++++---
+ drivers/infiniband/ulp/qlgc_vnic/vnic_ib.h      |    2 +-
+ drivers/infiniband/ulp/qlgc_vnic/vnic_main.c    |   11 +-
+ drivers/infiniband/ulp/qlgc_vnic/vnic_main.h    |    5 +-
+ drivers/infiniband/ulp/qlgc_vnic/vnic_netpath.c |    6 +-
+ drivers/infiniband/ulp/qlgc_vnic/vnic_netpath.h |    2 +-
+ drivers/infiniband/ulp/qlgc_vnic/vnic_stats.c   |  126 ++++++------
+ drivers/infiniband/ulp/qlgc_vnic/vnic_stats.h   |   18 +-
+ drivers/infiniband/ulp/qlgc_vnic/vnic_sys.c     |  257 ++++++++++++-----------
+ drivers/infiniband/ulp/qlgc_vnic/vnic_sys.h     |   18 +-
+ 10 files changed, 266 insertions(+), 254 deletions(-)
+
+Index: ofed_kernel/drivers/infiniband/ulp/qlgc_vnic/vnic_ib.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/qlgc_vnic/vnic_ib.c
++++ ofed_kernel/drivers/infiniband/ulp/qlgc_vnic/vnic_ib.c
+@@ -89,33 +89,34 @@ int vnic_ib_init(void)
+ 		goto err_ib_reg;
+ 	}
+ 
+-	interface_dev.dev.class = &vnic_class;
+-	interface_dev.dev.release = vnic_release_dev;
+-	snprintf(interface_dev.dev.bus_id,
++ 	interface_cdev.class_dev.class = &vnic_class;
++ 	snprintf(interface_cdev.class_dev.class_id,
+ 		 BUS_ID_SIZE, "interfaces");
+-	init_completion(&interface_dev.released);
+-	ret = device_register(&interface_dev.dev);
++ 	init_completion(&interface_cdev.released);
++  	ret = class_device_register(&interface_cdev.class_dev);
+ 	if (ret) {
+ 		printk(KERN_ERR PFX "couldn't register class interfaces;"
+ 		       " error %d", ret);
+ 		goto err_class_dev;
+ 	}
+-	ret = device_create_file(&interface_dev.dev,
+-				       &dev_attr_delete_vnic);
++ 	ret = class_device_create_file(&interface_cdev.class_dev,
++ 				       &class_device_attr_delete_vnic);
+ 	if (ret) {
+ 		printk(KERN_ERR PFX "couldn't create class file"
+ 		       " 'delete_vnic'; error %d", ret);
+ 		goto err_class_file;
+ 	}
+ 
+-	ret = device_create_file(&interface_dev.dev, &dev_attr_force_failover);
++	ret = class_device_create_file(&interface_cdev.class_dev,
++					&class_device_attr_force_failover);
+ 	if (ret) {
+ 		printk(KERN_ERR PFX "couldn't create class file"
+ 		       " 'force_failover'; error %d", ret);
+ 		goto err_force_failover_file;
+ 	}
+ 
+-	ret = device_create_file(&interface_dev.dev, &dev_attr_unfailover);
++	ret = class_device_create_file(&interface_cdev.class_dev,
++					&class_device_attr_unfailover);
+ 	if (ret) {
+ 		printk(KERN_ERR PFX "couldn't create class file"
+ 		       " 'unfailover'; error %d", ret);
+@@ -125,11 +126,13 @@ int vnic_ib_init(void)
+ 
+ 	return ret;
+ err_unfailover_file:
+-	device_remove_file(&interface_dev.dev, &dev_attr_force_failover);
++	class_device_remove_file(&interface_cdev.class_dev,
++				 &class_device_attr_force_failover);
+ err_force_failover_file:
+-	device_remove_file(&interface_dev.dev, &dev_attr_delete_vnic);
++	class_device_remove_file(&interface_cdev.class_dev,
++				 &class_device_attr_delete_vnic);
+ err_class_file:
+-	device_unregister(&interface_dev.dev);
++	class_device_unregister(&interface_cdev.class_dev);
+ err_class_dev:
+ 	ib_unregister_client(&vnic_client);
+ err_ib_reg:
+@@ -148,29 +151,29 @@ static struct vnic_ib_port *vnic_add_port(struct vnic_ib_device *device,
+ 	if (!port)
+ 		return NULL;
+ 
+-	init_completion(&port->pdev_info.released);
++	init_completion(&port->cdev_info.released);
+ 	port->dev = device;
+ 	port->port_num = port_num;
+ 
+-	port->pdev_info.dev.class = &vnic_class;
+-	port->pdev_info.dev.parent = NULL;
+-	port->pdev_info.dev.release = vnic_release_dev;
+-	snprintf(port->pdev_info.dev.bus_id, BUS_ID_SIZE,
++	port->cdev_info.class_dev.class = &vnic_class;
++	port->cdev_info.class_dev.dev = device->dev->dma_device;
++	snprintf(port->cdev_info.class_dev.class_id, BUS_ID_SIZE,
+ 		 "vnic-%s-%d", device->dev->name, port_num);
+ 
+-	if (device_register(&port->pdev_info.dev))
++ 	if (class_device_register(&port->cdev_info.class_dev))
+ 		goto free_port;
+ 
+-	if (device_create_file(&port->pdev_info.dev,
+-				     &dev_attr_create_primary))
++ 	if (class_device_create_file(&port->cdev_info.class_dev,
++ 				     &class_device_attr_create_primary))
+ 		goto err_class;
+-	if (device_create_file(&port->pdev_info.dev,
+-				     &dev_attr_create_secondary))
++
++ 	if (class_device_create_file(&port->cdev_info.class_dev,
++ 				     &class_device_attr_create_secondary))
+ 		goto err_class;
+ 
+ 	return port;
+ err_class:
+-	device_unregister(&port->pdev_info.dev);
++	class_device_unregister(&port->cdev_info.class_dev);
+ free_port:
+ 	kfree(port);
+ 
+@@ -219,14 +222,16 @@ static void vnic_remove_one(struct ib_device *device)
+ 	list_for_each_entry_safe(port, tmp_port,
+ 				 &vnic_dev->port_list, list) {
+ 
+-		device_remove_file(&port->pdev_info.dev, &dev_attr_create_primary);
+-		device_remove_file(&port->pdev_info.dev, &dev_attr_create_secondary);
+-		device_unregister(&port->pdev_info.dev);
++		class_device_remove_file(&port->cdev_info.class_dev,
++				&class_device_attr_create_primary);
++		class_device_remove_file(&port->cdev_info.class_dev,
++				&class_device_attr_create_secondary);
++		class_device_unregister(&port->cdev_info.class_dev);
+ 		/*
+ 		 * wait for sysfs entries to go away, so that no new vnics
+ 		 * are created
+ 		 */
+-		wait_for_completion(&port->pdev_info.released);
++		wait_for_completion(&port->cdev_info.released);
+ 		kfree(port);
+ 
+ 	}
+@@ -254,13 +259,15 @@ void vnic_ib_cleanup(void)
+ 
+ 	if (!vnic_ib_inited)
+ 		return;
+-
+-	device_remove_file(&interface_dev.dev, &dev_attr_unfailover);
+-	device_remove_file(&interface_dev.dev, &dev_attr_force_failover);
+-	device_remove_file(&interface_dev.dev, &dev_attr_delete_vnic);
+-
+-	device_unregister(&interface_dev.dev);
+-	wait_for_completion(&interface_dev.released);
++	class_device_remove_file(&interface_cdev.class_dev,
++				&class_device_attr_unfailover);
++	class_device_remove_file(&interface_cdev.class_dev,
++				&class_device_attr_force_failover);
++	class_device_remove_file(&interface_cdev.class_dev,
++				&class_device_attr_delete_vnic);
++
++ 	class_device_unregister(&interface_cdev.class_dev);
++ 	wait_for_completion(&interface_cdev.released);
+ 
+ 	ib_unregister_client(&vnic_client);
+ 	ib_sa_unregister_client(&vnic_sa_client);
+Index: ofed_kernel/drivers/infiniband/ulp/qlgc_vnic/vnic_ib.h
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/qlgc_vnic/vnic_ib.h
++++ ofed_kernel/drivers/infiniband/ulp/qlgc_vnic/vnic_ib.h
+@@ -109,7 +109,7 @@ struct vnic_ib_device {
+ struct vnic_ib_port {
+ 	struct vnic_ib_device	*dev;
+ 	u8			port_num;
+-	struct dev_info		pdev_info;
++	struct class_dev_info	cdev_info;
+ 	struct list_head	list;
+ };
+ 
+Index: ofed_kernel/drivers/infiniband/ulp/qlgc_vnic/vnic_main.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/qlgc_vnic/vnic_main.c
++++ ofed_kernel/drivers/infiniband/ulp/qlgc_vnic/vnic_main.c
+@@ -770,11 +770,11 @@ static void vnic_handle_free_vnic_evt(struct vnic *vnic)
+ 		kfree(vnic->mc_list);
+ 	}
+ 
+-	sysfs_remove_group(&vnic->dev_info.dev.kobj,
+-			   &vnic_dev_attr_group);
+-	vnic_cleanup_stats_files(vnic);
+-	device_unregister(&vnic->dev_info.dev);
+-	wait_for_completion(&vnic->dev_info.released);
++ 	sysfs_remove_group(&vnic->class_dev_info.class_dev.kobj,
++  			   &vnic_dev_attr_group);
++  	vnic_cleanup_stats_files(vnic);
++  	class_device_unregister(&vnic->class_dev_info.class_dev);
++  	wait_for_completion(&vnic->class_dev_info.released);
+ 	free_netdev(vnic->netdevice);
+ }
+ 
+@@ -1092,6 +1092,7 @@ struct vnic *vnic_allocate(struct vnic_config *config)
+ 	vnic->state = VNIC_UNINITIALIZED;
+ 	vnic->config = config;
+ 
++
+ 	netpath_init(&vnic->primary_path, vnic, 0);
+ 	netpath_init(&vnic->secondary_path, vnic, 1);
+ 
+Index: ofed_kernel/drivers/infiniband/ulp/qlgc_vnic/vnic_main.h
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/qlgc_vnic/vnic_main.h
++++ ofed_kernel/drivers/infiniband/ulp/qlgc_vnic/vnic_main.h
+@@ -36,7 +36,6 @@
+ #include <linux/timex.h>
+ #include <linux/netdevice.h>
+ #include <linux/kthread.h>
+-#include <linux/fs.h>
+ 
+ #include "vnic_config.h"
+ #include "vnic_netpath.h"
+@@ -104,7 +103,7 @@ struct vnic {
+ 	int				failed_over;
+ 	int				mac_set;
+ 	struct net_device		*netdevice;
+-	struct dev_info			dev_info;
++	struct class_dev_info		class_dev_info;
+ 	struct dev_mc_list		*mc_list;
+ 	int				mc_list_len;
+ 	int				mc_count;
+@@ -130,7 +129,7 @@ struct vnic {
+ 		cycles_t	carrier_off_time;
+ 		u32		carrier_off_num;
+ 	} statistics;
+-	struct dev_info		stat_info;
++	struct class_dev_info	stat_info;
+ #endif	/* CONFIG_INFINIBAND_QLGC_VNIC_STATS */
+ };
+ 
+Index: ofed_kernel/drivers/infiniband/ulp/qlgc_vnic/vnic_netpath.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/qlgc_vnic/vnic_netpath.c
++++ ofed_kernel/drivers/infiniband/ulp/qlgc_vnic/vnic_netpath.c
+@@ -82,10 +82,10 @@ void netpath_free(struct netpath *netpath)
+ 		return;
+ 	viport_free(netpath->viport);
+ 	netpath->viport = NULL;
+-	sysfs_remove_group(&netpath->dev_info.dev.kobj,
++	sysfs_remove_group(&netpath->class_dev_info.class_dev.kobj,
+ 			   &vnic_path_attr_group);
+-	device_unregister(&netpath->dev_info.dev);
+-	wait_for_completion(&netpath->dev_info.released);
++	class_device_unregister(&netpath->class_dev_info.class_dev);
++	wait_for_completion(&netpath->class_dev_info.released);
+ }
+ 
+ void netpath_init(struct netpath *netpath, struct vnic *vnic,
+Index: ofed_kernel/drivers/infiniband/ulp/qlgc_vnic/vnic_netpath.h
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/qlgc_vnic/vnic_netpath.h
++++ ofed_kernel/drivers/infiniband/ulp/qlgc_vnic/vnic_netpath.h
+@@ -57,7 +57,7 @@ struct netpath {
+ 	u8 			delay_reconnect;
+ 	struct timer_list	timer;
+ 	enum netpath_ts		timer_state;
+-	struct dev_info		dev_info;
++	struct class_dev_info	class_dev_info;
+ };
+ 
+ void netpath_init(struct netpath *netpath, struct vnic *vnic,
+Index: ofed_kernel/drivers/infiniband/ulp/qlgc_vnic/vnic_stats.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/qlgc_vnic/vnic_stats.c
++++ ofed_kernel/drivers/infiniband/ulp/qlgc_vnic/vnic_stats.c
+@@ -43,22 +43,22 @@ cycles_t vnic_recv_ref;
+  *       RDMA times, IOs etc
+  *
+  */
+-static ssize_t show_lifetime(struct device *dev,
+-			     struct device_attribute *dev_attr, char *buf)
++static ssize_t show_lifetime(struct class_device *class_dev, char *buf)
+ {
+-	struct dev_info *info =	container_of(dev, struct dev_info, dev);
++	struct class_dev_info *info =
++		container_of(class_dev, struct class_dev_info, class_dev);
+ 	struct vnic *vnic = container_of(info, struct vnic, stat_info);
+ 	cycles_t time = get_cycles() - vnic->statistics.start_time;
+ 
+ 	return sprintf(buf, "%llu\n", (unsigned long long)time);
+ }
+ 
+-static DEVICE_ATTR(lifetime, S_IRUGO, show_lifetime, NULL);
++static CLASS_DEVICE_ATTR(lifetime, S_IRUGO, show_lifetime, NULL);
+ 
+-static ssize_t show_conntime(struct device *dev,
+-			     struct device_attribute *dev_attr, char *buf)
++static ssize_t show_conntime(struct class_device *class_dev, char *buf)
+ {
+-	struct dev_info *info =	container_of(dev, struct dev_info, dev);
++	struct class_dev_info *info =
++		container_of(class_dev, struct class_dev_info, class_dev);
+ 	struct vnic *vnic = container_of(info, struct vnic, stat_info);
+ 
+ 	if (vnic->statistics.conn_time)
+@@ -67,12 +67,12 @@ static ssize_t show_conntime(struct device *dev,
+ 	return 0;
+ }
+ 
+-static DEVICE_ATTR(connection_time, S_IRUGO, show_conntime, NULL);
++static CLASS_DEVICE_ATTR(connection_time, S_IRUGO, show_conntime, NULL);
+ 
+-static ssize_t show_disconnects(struct device *dev,
+-				struct device_attribute *dev_attr, char *buf)
++static ssize_t show_disconnects(struct class_device *class_dev, char *buf)
+ {
+-	struct dev_info *info =	container_of(dev, struct dev_info, dev);
++	struct class_dev_info *info =
++		container_of(class_dev, struct class_dev_info, class_dev);
+ 	struct vnic *vnic = container_of(info, struct vnic, stat_info);
+ 	u32 num;
+ 
+@@ -84,13 +84,13 @@ static ssize_t show_disconnects(struct device *dev,
+ 	return sprintf(buf, "%d\n", num);
+ }
+ 
+-static DEVICE_ATTR(disconnects, S_IRUGO, show_disconnects, NULL);
++static CLASS_DEVICE_ATTR(disconnects, S_IRUGO, show_disconnects, NULL);
+ 
+-static ssize_t show_total_disconn_time(struct device *dev,
+-				       struct device_attribute *dev_attr,
++static ssize_t show_total_disconn_time(struct class_device *class_dev,
+ 				       char *buf)
+ {
+-	struct dev_info *info = container_of(dev, struct dev_info, dev);
++	struct class_dev_info *info =
++		container_of(class_dev, struct class_dev_info, class_dev);
+ 	struct vnic *vnic = container_of(info, struct vnic, stat_info);
+ 	cycles_t time;
+ 
+@@ -103,12 +103,14 @@ static ssize_t show_total_disconn_time(struct device *dev,
+ 	return sprintf(buf, "%llu\n", (unsigned long long)time);
+ }
+ 
+-static DEVICE_ATTR(total_disconn_time, S_IRUGO, show_total_disconn_time, NULL);
++static CLASS_DEVICE_ATTR(total_disconn_time, S_IRUGO,
++			 show_total_disconn_time, NULL);
+ 
+-static ssize_t show_carrier_losses(struct device *dev,
+-				   struct device_attribute *dev_attr, char *buf)
++static ssize_t show_carrier_losses(struct class_device *class_dev,
++				   char *buf)
+ {
+-	struct dev_info *info =	container_of(dev, struct dev_info, dev);
++	struct class_dev_info *info =
++		container_of(class_dev, struct class_dev_info, class_dev);
+ 	struct vnic *vnic = container_of(info, struct vnic, stat_info);
+ 	u32 num;
+ 
+@@ -120,13 +122,14 @@ static ssize_t show_carrier_losses(struct device *dev,
+ 	return sprintf(buf, "%d\n", num);
+ }
+ 
+-static DEVICE_ATTR(carrier_losses, S_IRUGO, show_carrier_losses, NULL);
++static CLASS_DEVICE_ATTR(carrier_losses, S_IRUGO,
++			 show_carrier_losses, NULL);
+ 
+-static ssize_t show_total_carr_loss_time(struct device *dev,
+-					 struct device_attribute *dev_attr,
++static ssize_t show_total_carr_loss_time(struct class_device *class_dev,
+ 					 char *buf)
+ {
+-	struct dev_info *info =	container_of(dev, struct dev_info, dev);
++	struct class_dev_info *info =
++		container_of(class_dev, struct class_dev_info, class_dev);
+ 	struct vnic *vnic = container_of(info, struct vnic, stat_info);
+ 	cycles_t time;
+ 
+@@ -139,93 +142,94 @@ static ssize_t show_total_carr_loss_time(struct device *dev,
+ 	return sprintf(buf, "%llu\n", (unsigned long long)time);
+ }
+ 
+-static DEVICE_ATTR(total_carrier_loss_time, S_IRUGO,
++static CLASS_DEVICE_ATTR(total_carrier_loss_time, S_IRUGO,
+ 			 show_total_carr_loss_time, NULL);
+ 
+-static ssize_t show_total_recv_time(struct device *dev,
+-				    struct device_attribute *dev_attr,
++static ssize_t show_total_recv_time(struct class_device *class_dev,
+ 				    char *buf)
+ {
+-	struct dev_info *info =	container_of(dev, struct dev_info, dev);
++	struct class_dev_info *info =
++		container_of(class_dev, struct class_dev_info, class_dev);
+ 	struct vnic *vnic = container_of(info, struct vnic, stat_info);
+ 
+ 	return sprintf(buf, "%llu\n",
+ 		       (unsigned long long)vnic->statistics.recv_time);
+ }
+ 
+-static DEVICE_ATTR(total_recv_time, S_IRUGO, show_total_recv_time, NULL);
++static CLASS_DEVICE_ATTR(total_recv_time, S_IRUGO,
++			 show_total_recv_time, NULL);
+ 
+-static ssize_t show_recvs(struct device *dev,
+-			  struct device_attribute *dev_attr, char *buf)
++static ssize_t show_recvs(struct class_device *class_dev, char *buf)
+ {
+-	struct dev_info *info =	container_of(dev, struct dev_info, dev);
++	struct class_dev_info *info =
++		container_of(class_dev, struct class_dev_info, class_dev);
+ 	struct vnic *vnic = container_of(info, struct vnic, stat_info);
+ 
+ 	return sprintf(buf, "%d\n", vnic->statistics.recv_num);
+ }
+ 
+-static DEVICE_ATTR(recvs, S_IRUGO, show_recvs, NULL);
++static CLASS_DEVICE_ATTR(recvs, S_IRUGO, show_recvs, NULL);
+ 
+-static ssize_t show_multicast_recvs(struct device *dev,
+-				    struct device_attribute *dev_attr,
+-				    char *buf)
++static ssize_t show_multicast_recvs(struct class_device *class_dev, char *buf)
+ {
+-	struct dev_info *info =	container_of(dev, struct dev_info, dev);
++	struct class_dev_info *info =
++		container_of(class_dev, struct class_dev_info, class_dev);
+ 	struct vnic *vnic = container_of(info, struct vnic, stat_info);
+ 
+ 	return sprintf(buf, "%d\n", vnic->statistics.multicast_recv_num);
+ }
+ 
+-static DEVICE_ATTR(multicast_recvs, S_IRUGO, show_multicast_recvs, NULL);
++static CLASS_DEVICE_ATTR(multicast_recvs, S_IRUGO, show_multicast_recvs, NULL);
+ 
+-static ssize_t show_total_xmit_time(struct device *dev,
+-				    struct device_attribute *dev_attr,
++static ssize_t show_total_xmit_time(struct class_device *class_dev,
+ 				    char *buf)
+ {
+-	struct dev_info *info =	container_of(dev, struct dev_info, dev);
++	struct class_dev_info *info =
++		container_of(class_dev, struct class_dev_info, class_dev);
+ 	struct vnic *vnic = container_of(info, struct vnic, stat_info);
+ 
+ 	return sprintf(buf, "%llu\n",
+ 		       (unsigned long long)vnic->statistics.xmit_time);
+ }
+ 
+-static DEVICE_ATTR(total_xmit_time, S_IRUGO, show_total_xmit_time, NULL);
++static CLASS_DEVICE_ATTR(total_xmit_time, S_IRUGO,
++			 show_total_xmit_time, NULL);
+ 
+-static ssize_t show_xmits(struct device *dev,
+-			  struct device_attribute *dev_attr, char *buf)
++static ssize_t show_xmits(struct class_device *class_dev, char *buf)
+ {
+-	struct dev_info *info =	container_of(dev, struct dev_info, dev);
++	struct class_dev_info *info =
++		container_of(class_dev, struct class_dev_info, class_dev);
+ 	struct vnic *vnic = container_of(info, struct vnic, stat_info);
+ 
+ 	return sprintf(buf, "%d\n", vnic->statistics.xmit_num);
+ }
+ 
+-static DEVICE_ATTR(xmits, S_IRUGO, show_xmits, NULL);
++static CLASS_DEVICE_ATTR(xmits, S_IRUGO, show_xmits, NULL);
+ 
+-static ssize_t show_failed_xmits(struct device *dev,
+-				 struct device_attribute *dev_attr, char *buf)
++static ssize_t show_failed_xmits(struct class_device *class_dev, char *buf)
+ {
+-	struct dev_info *info =	container_of(dev, struct dev_info, dev);
++	struct class_dev_info *info =
++		container_of(class_dev, struct class_dev_info, class_dev);
+ 	struct vnic *vnic = container_of(info, struct vnic, stat_info);
+ 
+ 	return sprintf(buf, "%d\n", vnic->statistics.xmit_fail);
+ }
+ 
+-static DEVICE_ATTR(failed_xmits, S_IRUGO, show_failed_xmits, NULL);
++static CLASS_DEVICE_ATTR(failed_xmits, S_IRUGO, show_failed_xmits, NULL);
+ 
+ static struct attribute *vnic_stats_attrs[] = {
+-	&dev_attr_lifetime.attr,
+-	&dev_attr_xmits.attr,
+-	&dev_attr_total_xmit_time.attr,
+-	&dev_attr_failed_xmits.attr,
+-	&dev_attr_recvs.attr,
+-	&dev_attr_multicast_recvs.attr,
+-	&dev_attr_total_recv_time.attr,
+-	&dev_attr_connection_time.attr,
+-	&dev_attr_disconnects.attr,
+-	&dev_attr_total_disconn_time.attr,
+-	&dev_attr_carrier_losses.attr,
+-	&dev_attr_total_carrier_loss_time.attr,
++	&class_device_attr_lifetime.attr,
++	&class_device_attr_xmits.attr,
++	&class_device_attr_total_xmit_time.attr,
++	&class_device_attr_failed_xmits.attr,
++	&class_device_attr_recvs.attr,
++	&class_device_attr_multicast_recvs.attr,
++	&class_device_attr_total_recv_time.attr,
++	&class_device_attr_connection_time.attr,
++	&class_device_attr_disconnects.attr,
++	&class_device_attr_total_disconn_time.attr,
++	&class_device_attr_carrier_losses.attr,
++	&class_device_attr_total_carrier_loss_time.attr,
+ 	NULL
+ };
+ 
+Index: ofed_kernel/drivers/infiniband/ulp/qlgc_vnic/vnic_stats.h
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/qlgc_vnic/vnic_stats.h
++++ ofed_kernel/drivers/infiniband/ulp/qlgc_vnic/vnic_stats.h
+@@ -35,7 +35,6 @@
+ 
+ #include "vnic_main.h"
+ #include "vnic_ib.h"
+-#include "vnic_sys.h"
+ 
+ #ifdef CONFIG_INFINIBAND_QLGC_VNIC_STATS
+ 
+@@ -113,25 +112,24 @@ static inline void vnic_carrier_loss_stats(struct vnic *vnic)
+ static inline int vnic_setup_stats_files(struct vnic *vnic)
+ {
+ 	init_completion(&vnic->stat_info.released);
+-	vnic->stat_info.dev.class = NULL;
+-	vnic->stat_info.dev.parent = &vnic->dev_info.dev;
+-	vnic->stat_info.dev.release = vnic_release_dev;
+-	snprintf(vnic->stat_info.dev.bus_id, BUS_ID_SIZE,
++	vnic->stat_info.class_dev.class = &vnic_class;
++	vnic->stat_info.class_dev.parent = &vnic->class_dev_info.class_dev;
++	snprintf(vnic->stat_info.class_dev.class_id, BUS_ID_SIZE,
+ 		 "stats");
+ 
+-	if (device_register(&vnic->stat_info.dev)) {
++	if (class_device_register(&vnic->stat_info.class_dev)) {
+ 		SYS_ERROR("create_vnic: error in registering"
+ 			  " stat class dev\n");
+ 		goto stats_out;
+ 	}
+ 
+-	if (sysfs_create_group(&vnic->stat_info.dev.kobj,
++	if (sysfs_create_group(&vnic->stat_info.class_dev.kobj,
+ 			       &vnic_stats_attr_group))
+ 		goto err_stats_file;
+ 
+ 	return 0;
+ err_stats_file:
+-	device_unregister(&vnic->stat_info.dev);
++	class_device_unregister(&vnic->stat_info.class_dev);
+ 	wait_for_completion(&vnic->stat_info.released);
+ stats_out:
+ 	return -1;
+@@ -139,9 +137,9 @@ stats_out:
+ 
+ static inline void vnic_cleanup_stats_files(struct vnic *vnic)
+ {
+-	sysfs_remove_group(&vnic->dev_info.dev.kobj,
++	sysfs_remove_group(&vnic->class_dev_info.class_dev.kobj,
+ 			   &vnic_stats_attr_group);
+-	device_unregister(&vnic->stat_info.dev);
++	class_device_unregister(&vnic->stat_info.class_dev);
+ 	wait_for_completion(&vnic->stat_info.released);
+ }
+ 
+Index: ofed_kernel/drivers/infiniband/ulp/qlgc_vnic/vnic_sys.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/qlgc_vnic/vnic_sys.c
++++ ofed_kernel/drivers/infiniband/ulp/qlgc_vnic/vnic_sys.c
+@@ -77,21 +77,20 @@ static match_table_t vnic_opt_tokens = {
+ 	{VNIC_OPT_ERR, NULL}
+ };
+ 
+-void vnic_release_dev(struct device *dev)
++static void vnic_release_class_dev(struct class_device *class_dev)
+ {
+-	struct dev_info *dev_info =
+-	    container_of(dev, struct dev_info, dev);
+-
+-	complete(&dev_info->released);
++	struct class_dev_info *cdev_info =
++	    container_of(class_dev, struct class_dev_info, class_dev);
+ 
++	complete(&cdev_info->released);
+ }
+ 
+ struct class vnic_class = {
+ 	.name = "infiniband_qlgc_vnic",
+-	.dev_release = vnic_release_dev
++	.release = vnic_release_class_dev
+ };
+ 
+-struct dev_info interface_dev;
++struct class_dev_info interface_cdev;
+ 
+ static int vnic_parse_options(const char *buf, struct path_param *param)
+ {
+@@ -285,11 +284,11 @@ out:
+ 
+ }
+ 
+-static ssize_t show_vnic_state(struct device *dev,
+-			       struct device_attribute *dev_attr, char *buf)
++static ssize_t show_vnic_state(struct class_device *class_dev, char *buf)
+ {
+-	struct dev_info *info = container_of(dev, struct dev_info, dev);
+-	struct vnic *vnic = container_of(info, struct vnic, dev_info);
++	struct class_dev_info *info =
++	    container_of(class_dev, struct class_dev_info, class_dev);
++	struct vnic *vnic = container_of(info, struct vnic, class_dev_info);
+ 	switch (vnic->state) {
+ 	case VNIC_UNINITIALIZED:
+ 		return sprintf(buf, "VNIC_UNINITIALIZED\n");
+@@ -301,13 +300,13 @@ static ssize_t show_vnic_state(struct device *dev,
+ 
+ }
+ 
+-static DEVICE_ATTR(vnic_state, S_IRUGO, show_vnic_state, NULL);
++static CLASS_DEVICE_ATTR(vnic_state, S_IRUGO, show_vnic_state, NULL);
+ 
+-static ssize_t show_rx_csum(struct device *dev,
+-			    struct device_attribute *dev_attr, char *buf)
++static ssize_t show_rx_csum(struct class_device *class_dev, char *buf)
+ {
+-	struct dev_info *info = container_of(dev, struct dev_info, dev);
+-	struct vnic *vnic = container_of(info, struct vnic, dev_info);
++	struct class_dev_info *info =
++	    container_of(class_dev, struct class_dev_info, class_dev);
++	struct vnic *vnic = container_of(info, struct vnic, class_dev_info);
+ 
+ 	if (vnic->config->use_rx_csum)
+ 		return sprintf(buf, "true\n");
+@@ -315,13 +314,13 @@ static ssize_t show_rx_csum(struct device *dev,
+ 		return sprintf(buf, "false\n");
+ }
+ 
+-static DEVICE_ATTR(rx_csum, S_IRUGO, show_rx_csum, NULL);
++static CLASS_DEVICE_ATTR(rx_csum, S_IRUGO, show_rx_csum, NULL);
+ 
+-static ssize_t show_tx_csum(struct device *dev,
+-			    struct device_attribute *dev_attr, char *buf)
++static ssize_t show_tx_csum(struct class_device *class_dev, char *buf)
+ {
+-	struct dev_info *info = container_of(dev, struct dev_info, dev);
+-	struct vnic *vnic = container_of(info, struct vnic, dev_info);
++	struct class_dev_info *info =
++	    container_of(class_dev, struct class_dev_info, class_dev);
++	struct vnic *vnic = container_of(info, struct vnic, class_dev_info);
+ 
+ 	if (vnic->config->use_tx_csum)
+ 		return sprintf(buf, "true\n");
+@@ -329,13 +328,13 @@ static ssize_t show_tx_csum(struct device *dev,
+ 		return sprintf(buf, "false\n");
+ }
+ 
+-static DEVICE_ATTR(tx_csum, S_IRUGO, show_tx_csum, NULL);
++static CLASS_DEVICE_ATTR(tx_csum, S_IRUGO, show_tx_csum, NULL);
+ 
+-static ssize_t show_current_path(struct device *dev,
+-				 struct device_attribute *dev_attr, char *buf)
+-{
+-	struct dev_info *info = container_of(dev, struct dev_info, dev);
+-	struct vnic *vnic = container_of(info, struct vnic, dev_info);
++static ssize_t show_current_path(struct class_device *class_dev, char *buf)
++ {
++ 	struct class_dev_info *info =
++ 	    container_of(class_dev, struct class_dev_info, class_dev);
++ 	struct vnic *vnic = container_of(info, struct vnic, class_dev_info);
+ 	unsigned long flags;
+ 	size_t length;
+ 
+@@ -350,13 +349,13 @@ static ssize_t show_current_path(struct device *dev,
+ 	return length;
+ }
+ 
+-static DEVICE_ATTR(current_path, S_IRUGO, show_current_path, NULL);
++static CLASS_DEVICE_ATTR(current_path, S_IRUGO, show_current_path, NULL);
+ 
+ static struct attribute *vnic_dev_attrs[] = {
+-	&dev_attr_vnic_state.attr,
+-	&dev_attr_rx_csum.attr,
+-	&dev_attr_tx_csum.attr,
+-	&dev_attr_current_path.attr,
++	&class_device_attr_vnic_state.attr,
++	&class_device_attr_rx_csum.attr,
++	&class_device_attr_tx_csum.attr,
++	&class_device_attr_current_path.attr,
+ 	NULL
+ };
+ 
+@@ -513,21 +512,20 @@ static struct vnic *create_vnic(struct path_param *param)
+ 		goto free_vnic_config;
+ 	}
+ 
+-	init_completion(&vnic->dev_info.released);
++	init_completion(&vnic->class_dev_info.released);
+ 
+-	vnic->dev_info.dev.class = NULL;
+-	vnic->dev_info.dev.parent = &interface_dev.dev;
+-	vnic->dev_info.dev.release = vnic_release_dev;
+-	snprintf(vnic->dev_info.dev.bus_id, BUS_ID_SIZE,
++	vnic->class_dev_info.class_dev.class = &vnic_class;
++	vnic->class_dev_info.class_dev.parent = &interface_cdev.class_dev;
++	snprintf(vnic->class_dev_info.class_dev.class_id, BUS_ID_SIZE,
+ 		 vnic_config->name);
+ 
+-	if (device_register(&vnic->dev_info.dev)) {
++	if (class_device_register(&vnic->class_dev_info.class_dev)) {
+ 		SYS_ERROR("create_vnic: error in registering"
+ 			  " vnic class dev\n");
+ 		goto free_vnic;
+ 	}
+ 
+-	if (sysfs_create_group(&vnic->dev_info.dev.kobj,
++	if (sysfs_create_group(&vnic->class_dev_info.class_dev.kobj,
+ 			       &vnic_dev_attr_group)) {
+ 		SYS_ERROR("create_vnic: error in creating"
+ 			  "vnic attr group\n");
+@@ -540,11 +538,11 @@ static struct vnic *create_vnic(struct path_param *param)
+ 
+ 	return vnic;
+ err_stats:
+-	sysfs_remove_group(&vnic->dev_info.dev.kobj,
++	sysfs_remove_group(&vnic->class_dev_info.class_dev.kobj,
+ 			   &vnic_dev_attr_group);
+ err_attr:
+-	device_unregister(&vnic->dev_info.dev);
+-	wait_for_completion(&vnic->dev_info.released);
++	class_device_unregister(&vnic->class_dev_info.class_dev);
++	wait_for_completion(&vnic->class_dev_info.released);
+ free_vnic:
+ 	list_del(&vnic->list_ptrs);
+ 	kfree(vnic);
+@@ -553,9 +551,8 @@ free_vnic_config:
+ 	return NULL;
+ }
+ 
+-static ssize_t vnic_sysfs_force_failover(struct device *dev,
+-					struct device_attribute *dev_attr, const char *buf,
+-					size_t count)
++static ssize_t vnic_sysfs_force_failover(struct class_device *class_dev,
++				  const char *buf, size_t count)
+ {
+ 	struct vnic *vnic;
+ 	struct list_head *ptr;
+@@ -579,11 +576,10 @@ static ssize_t vnic_sysfs_force_failover(struct device *dev,
+ 	return ret;
+ }
+ 
+-DEVICE_ATTR(force_failover, S_IWUSR, NULL, vnic_sysfs_force_failover);
++CLASS_DEVICE_ATTR(force_failover, S_IWUSR, NULL, vnic_sysfs_force_failover);
+ 
+-static ssize_t vnic_sysfs_unfailover(struct device *dev,
+-					struct device_attribute *dev_attr, const char *buf,
+-					size_t count)
++static ssize_t vnic_sysfs_unfailover(struct class_device *class_dev,
++			      const char *buf, size_t count)
+ {
+ 	struct vnic *vnic;
+ 	struct list_head *ptr;
+@@ -607,9 +603,9 @@ static ssize_t vnic_sysfs_unfailover(struct device *dev,
+ 	return ret;
+ }
+ 
+-DEVICE_ATTR(unfailover, S_IWUSR, NULL, vnic_sysfs_unfailover);
++CLASS_DEVICE_ATTR(unfailover, S_IWUSR, NULL, vnic_sysfs_unfailover);
+ 
+-static ssize_t vnic_delete(struct device *dev, struct device_attribute *dev_attr,
++static ssize_t vnic_delete(struct class_device *class_dev,
+ 			   const char *buf, size_t count)
+ {
+ 	struct vnic *vnic;
+@@ -634,13 +630,14 @@ static ssize_t vnic_delete(struct device *dev, struct device_attribute *dev_attr
+ 	return ret;
+ }
+ 
+-DEVICE_ATTR(delete_vnic, S_IWUSR, NULL, vnic_delete);
++CLASS_DEVICE_ATTR(delete_vnic, S_IWUSR, NULL, vnic_delete);
+ 
+-static ssize_t show_viport_state(struct device *dev,
+-				 struct device_attribute *dev_attr, char *buf)
++static ssize_t show_viport_state(struct class_device *class_dev, char *buf)
+ {
+-	struct dev_info *info = container_of(dev, struct dev_info, dev);
+-	struct netpath *path = container_of(info, struct netpath, dev_info);
++	struct class_dev_info *info =
++	    container_of(class_dev, struct class_dev_info, class_dev);
++	struct netpath *path =
++	    container_of(info, struct netpath, class_dev_info);
+ 	switch (path->viport->state) {
+ 	case VIPORT_DISCONNECTED:
+ 		return sprintf(buf, "VIPORT_DISCONNECTED\n");
+@@ -652,13 +649,14 @@ static ssize_t show_viport_state(struct device *dev,
+ 
+ }
+ 
+-static DEVICE_ATTR(viport_state, S_IRUGO, show_viport_state, NULL);
++static CLASS_DEVICE_ATTR(viport_state, S_IRUGO, show_viport_state, NULL);
+ 
+-static ssize_t show_link_state(struct device *dev,
+-			       struct device_attribute *dev_attr, char *buf)
++static ssize_t show_link_state(struct class_device *class_dev, char *buf)
+ {
+-	struct dev_info *info = container_of(dev, struct dev_info, dev);
+-	struct netpath *path = container_of(info, struct netpath, dev_info);
++	struct class_dev_info *info =
++	    container_of(class_dev, struct class_dev_info, class_dev);
++	struct netpath *path =
++	    container_of(info, struct netpath, class_dev_info);
+ 
+ 	switch (path->viport->link_state) {
+ 	case LINK_UNINITIALIZED:
+@@ -739,14 +737,15 @@ static ssize_t show_link_state(struct device *dev,
+ 	}
+ 
+ }
+-static DEVICE_ATTR(link_state, S_IRUGO, show_link_state, NULL);
++static CLASS_DEVICE_ATTR(link_state, S_IRUGO, show_link_state, NULL);
+ 
+-static ssize_t show_heartbeat(struct device *dev,
+-			      struct device_attribute *dev_attr, char *buf)
++static ssize_t show_heartbeat(struct class_device *class_dev, char *buf)
+ {
+-	struct dev_info *info = container_of(dev, struct dev_info, dev);
++	struct class_dev_info *info =
++	    container_of(class_dev, struct class_dev_info, class_dev);
+ 
+-	struct netpath *path = container_of(info, struct netpath, dev_info);
++	struct netpath *path =
++	    container_of(info, struct netpath, class_dev_info);
+ 
+ 	/* hb_inteval is in jiffies, convert it back to
+ 	 * 1/100ths of a second
+@@ -755,20 +754,21 @@ static ssize_t show_heartbeat(struct device *dev,
+ 		(jiffies_to_msecs(path->viport->config->hb_interval)/10));
+ }
+ 
+-static DEVICE_ATTR(heartbeat, S_IRUGO, show_heartbeat, NULL);
++static CLASS_DEVICE_ATTR(heartbeat, S_IRUGO, show_heartbeat, NULL);
+ 
+-static ssize_t show_ioc_guid(struct device *dev,
+-			     struct device_attribute *dev_attr, char *buf)
++static ssize_t show_ioc_guid(struct class_device *class_dev, char *buf)
+ {
+-	struct dev_info *info = container_of(dev, struct dev_info, dev);
++	struct class_dev_info *info =
++		container_of(class_dev, struct class_dev_info, class_dev);
+ 
+-	struct netpath *path = container_of(info, struct netpath, dev_info);
++	struct netpath *path =
++		container_of(info, struct netpath, class_dev_info);
+ 
+ 	return sprintf(buf, "%llx\n",
+ 				__be64_to_cpu(path->viport->config->ioc_guid));
+ }
+ 
+-static DEVICE_ATTR(ioc_guid, S_IRUGO, show_ioc_guid, NULL);
++static CLASS_DEVICE_ATTR(ioc_guid, S_IRUGO, show_ioc_guid, NULL);
+ 
+ static inline void get_dgid_string(u8 *dgid, char *buf)
+ {
+@@ -783,64 +783,68 @@ static inline void get_dgid_string(u8 *dgid, char *buf)
+ 	strcat(buf, "\n");
+ }
+ 
+-static ssize_t show_dgid(struct device *dev,
+-			 struct device_attribute *dev_attr, char *buf)
++static ssize_t show_dgid(struct class_device *class_dev, char *buf)
+ {
+-	struct dev_info *info =	container_of(dev, struct dev_info, dev);
++	struct class_dev_info *info =
++		container_of(class_dev, struct class_dev_info, class_dev);
+ 
+-	struct netpath *path = container_of(info, struct netpath, dev_info);
++	struct netpath *path =
++		container_of(info, struct netpath, class_dev_info);
+ 
+ 	get_dgid_string(path->viport->config->path_info.path.dgid.raw, buf);
+ 
+ 	return strlen(buf);
+ }
+ 
+-static DEVICE_ATTR(dgid, S_IRUGO, show_dgid, NULL);
++static CLASS_DEVICE_ATTR(dgid, S_IRUGO, show_dgid, NULL);
+ 
+-static ssize_t show_pkey(struct device *dev,
+-			 struct device_attribute *dev_attr, char *buf)
++static ssize_t show_pkey(struct class_device *class_dev, char *buf)
+ {
+-	struct dev_info *info =	container_of(dev, struct dev_info, dev);
++	struct class_dev_info *info =
++		container_of(class_dev, struct class_dev_info, class_dev);
+ 
+-	struct netpath *path = container_of(info, struct netpath, dev_info);
++	struct netpath *path =
++		container_of(info, struct netpath, class_dev_info);
+ 
+ 	return sprintf(buf, "%x\n", path->viport->config->path_info.path.pkey);
+ }
+ 
+-static DEVICE_ATTR(pkey, S_IRUGO, show_pkey, NULL);
++static CLASS_DEVICE_ATTR(pkey, S_IRUGO, show_pkey, NULL);
+ 
+-static ssize_t show_hca_info(struct device *dev,
+-			     struct device_attribute *dev_attr, char *buf)
++static ssize_t show_hca_info(struct class_device *class_dev, char *buf)
+ {
+-	struct dev_info *info =	container_of(dev, struct dev_info, dev);
++	struct class_dev_info *info =
++		container_of(class_dev, struct class_dev_info, class_dev);
+ 
+-	struct netpath *path = container_of(info, struct netpath, dev_info);
++	struct netpath *path =
++		container_of(info, struct netpath, class_dev_info);
+ 
+ 	return sprintf(buf, "vnic-%s-%d\n", path->viport->config->ibdev->name,
+ 						path->viport->config->port);
+ }
+ 
+-static DEVICE_ATTR(hca_info, S_IRUGO, show_hca_info, NULL);
++static CLASS_DEVICE_ATTR(hca_info, S_IRUGO, show_hca_info, NULL);
+ 
+-static ssize_t show_ioc_string(struct device *dev,
+-			       struct device_attribute *dev_attr, char *buf)
++static ssize_t show_ioc_string(struct class_device *class_dev, char *buf)
+ {
+-	struct dev_info *info =	container_of(dev, struct dev_info, dev);
++	struct class_dev_info *info =
++		container_of(class_dev, struct class_dev_info, class_dev);
+ 
+-	struct netpath *path = container_of(info, struct netpath, dev_info);
++	struct netpath *path =
++		container_of(info, struct netpath, class_dev_info);
+ 
+ 	return sprintf(buf, "%s\n", path->viport->config->ioc_string);
+ }
+ 
+-static  DEVICE_ATTR(ioc_string, S_IRUGO, show_ioc_string, NULL);
++static  CLASS_DEVICE_ATTR(ioc_string, S_IRUGO, show_ioc_string, NULL);
+ 
+-static ssize_t show_multicast_state(struct device *dev,
+-				    struct device_attribute *dev_attr,
+-				    char *buf)
++static ssize_t show_multicast_state(struct class_device *class_dev, char *buf)
+ {
+-	struct dev_info *info =	container_of(dev, struct dev_info, dev);
++	struct class_dev_info *info =
++		container_of(class_dev, struct class_dev_info, class_dev);
+ 
+-	struct netpath *path = container_of(info, struct netpath, dev_info);
++	struct netpath *path =
++		container_of(info, struct netpath, class_dev_info);
+ 
+ 	if (!(path->viport->features_supported & VNIC_FEAT_INBOUND_IB_MC))
+ 		return sprintf(buf, "feature not enabled\n");
+@@ -871,18 +875,18 @@ static ssize_t show_multicast_state(struct device *dev,
+ 	return sprintf(buf, "invalid state\n");
+ }
+ 
+-static  DEVICE_ATTR(multicast_state, S_IRUGO, show_multicast_state, NULL);
++static  CLASS_DEVICE_ATTR(multicast_state, S_IRUGO, show_multicast_state, NULL);
+ 
+ static struct attribute *vnic_path_attrs[] = {
+-	&dev_attr_viport_state.attr,
+-	&dev_attr_link_state.attr,
+-	&dev_attr_heartbeat.attr,
+-	&dev_attr_ioc_guid.attr,
+-	&dev_attr_dgid.attr,
+-	&dev_attr_pkey.attr,
+-	&dev_attr_hca_info.attr,
+-	&dev_attr_ioc_string.attr,
+-	&dev_attr_multicast_state.attr,
++	&class_device_attr_viport_state.attr,
++	&class_device_attr_link_state.attr,
++	&class_device_attr_heartbeat.attr,
++	&class_device_attr_ioc_guid.attr,
++	&class_device_attr_dgid.attr,
++	&class_device_attr_pkey.attr,
++	&class_device_attr_hca_info.attr,
++	&class_device_attr_ioc_string.attr,
++	&class_device_attr_multicast_state.attr,
+ 	NULL
+ };
+ 
+@@ -893,19 +897,20 @@ struct attribute_group vnic_path_attr_group = {
+ 
+ static int setup_path_class_files(struct netpath *path, char *name)
+ {
+-	init_completion(&path->dev_info.released);
++	init_completion(&path->class_dev_info.released);
+ 
+-	path->dev_info.dev.class = NULL;
+-	path->dev_info.dev.parent = &path->parent->dev_info.dev;
+-	path->dev_info.dev.release = vnic_release_dev;
+-	snprintf(path->dev_info.dev.bus_id, BUS_ID_SIZE, name);
++	path->class_dev_info.class_dev.class = &vnic_class;
++	path->class_dev_info.class_dev.parent =
++	    &path->parent->class_dev_info.class_dev;
++	snprintf(path->class_dev_info.class_dev.class_id,
++		 BUS_ID_SIZE, name);
+ 
+-	if (device_register(&path->dev_info.dev)) {
++	if (class_device_register(&path->class_dev_info.class_dev)) {
+ 		SYS_ERROR("error in registering path class dev\n");
+ 		goto out;
+ 	}
+ 
+-	if (sysfs_create_group(&path->dev_info.dev.kobj,
++	if (sysfs_create_group(&path->class_dev_info.class_dev.kobj,
+ 			       &vnic_path_attr_group)) {
+ 		SYS_ERROR("error in creating vnic path group attrs");
+ 		goto err_path;
+@@ -914,8 +919,8 @@ static int setup_path_class_files(struct netpath *path, char *name)
+ 	return 0;
+ 
+ err_path:
+-	device_unregister(&path->dev_info.dev);
+-	wait_for_completion(&path->dev_info.released);
++	class_device_unregister(&path->class_dev_info.class_dev);
++	wait_for_completion(&path->class_dev_info.released);
+ out:
+ 	return -1;
+ 
+@@ -1046,13 +1051,13 @@ static ssize_t update_params_and_connect(struct path_param *params,
+ 	}
+ }
+ 
+-static ssize_t vnic_create_primary(struct device *dev,
+-				   struct device_attribute *dev_attr,
++static ssize_t vnic_create_primary(struct class_device *class_dev,
+ 				   const char *buf, size_t count)
+ {
+-	struct dev_info *info = container_of(dev, struct dev_info, dev);
++	struct class_dev_info *cdev =
++	    container_of(class_dev, struct class_dev_info, class_dev);
+ 	struct vnic_ib_port *target =
+-	    container_of(info, struct vnic_ib_port, pdev_info);
++	    container_of(cdev, struct vnic_ib_port, cdev_info);
+ 
+ 	struct path_param param;
+ 	int ret = -EINVAL;
+@@ -1114,15 +1119,15 @@ out:
+ 	return ret;
+ }
+ 
+-DEVICE_ATTR(create_primary, S_IWUSR, NULL, vnic_create_primary);
++CLASS_DEVICE_ATTR(create_primary, S_IWUSR, NULL, vnic_create_primary);
+ 
+-static ssize_t vnic_create_secondary(struct device *dev,
+-				     struct device_attribute *dev_attr,
++static ssize_t vnic_create_secondary(struct class_device *class_dev,
+ 				     const char *buf, size_t count)
+ {
+-	struct dev_info *info = container_of(dev, struct dev_info, dev);
++	struct class_dev_info *cdev =
++	    container_of(class_dev, struct class_dev_info, class_dev);
+ 	struct vnic_ib_port *target =
+-	    container_of(info, struct vnic_ib_port, pdev_info);
++	    container_of(cdev, struct vnic_ib_port, cdev_info);
+ 
+ 	struct path_param param;
+ 	struct vnic *vnic = NULL;
+@@ -1186,4 +1191,4 @@ out:
+ 	return ret;
+ }
+ 
+-DEVICE_ATTR(create_secondary, S_IWUSR, NULL, vnic_create_secondary);
++CLASS_DEVICE_ATTR(create_secondary, S_IWUSR, NULL, vnic_create_secondary);
+Index: ofed_kernel/drivers/infiniband/ulp/qlgc_vnic/vnic_sys.h
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/qlgc_vnic/vnic_sys.h
++++ ofed_kernel/drivers/infiniband/ulp/qlgc_vnic/vnic_sys.h
+@@ -33,21 +33,19 @@
+ #ifndef VNIC_SYS_H_INCLUDED
+ #define VNIC_SYS_H_INCLUDED
+ 
+-struct dev_info {
+-	struct device		dev;
++struct class_dev_info {
++	struct class_device	class_dev;
+ 	struct completion	released;
+ };
+ 
+ extern struct class vnic_class;
+-extern struct dev_info interface_dev;
++extern struct class_dev_info interface_cdev;
+ extern struct attribute_group vnic_dev_attr_group;
+ extern struct attribute_group vnic_path_attr_group;
+-extern struct device_attribute dev_attr_create_primary;
+-extern struct device_attribute dev_attr_create_secondary;
+-extern struct device_attribute dev_attr_delete_vnic;
+-extern struct device_attribute dev_attr_force_failover;
+-extern struct device_attribute dev_attr_unfailover;
+-
+-extern void vnic_release_dev(struct device *dev);
++extern struct class_device_attribute class_device_attr_create_primary;
++extern struct class_device_attribute class_device_attr_create_secondary;
++extern struct class_device_attribute class_device_attr_delete_vnic;
++extern struct class_device_attribute class_device_attr_force_failover;
++extern struct class_device_attribute class_device_attr_unfailover;
+ 
+ #endif	/*VNIC_SYS_H_INCLUDED*/

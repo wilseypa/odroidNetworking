@@ -1,0 +1,13 @@
+Index: ofed_kernel/drivers/infiniband/ulp/sdp/sdp_rx.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/sdp/sdp_rx.c
++++ ofed_kernel/drivers/infiniband/ulp/sdp/sdp_rx.c
+@@ -837,7 +837,7 @@ static void sdp_rx_irq(struct ib_cq *cq,
+ 		wake_up_interruptible(sk->sk_sleep);
+ 		SDPSTATS_COUNTER_INC(rx_int_wake_up);
+ 	} else {
+-		if (queue_work_on(ssk->cpu, rx_comp_wq, &ssk->rx_comp_work))
++		if (queue_work(rx_comp_wq, &ssk->rx_comp_work))
+ 			SDPSTATS_COUNTER_INC(rx_int_queue);
+ 		else
+ 			SDPSTATS_COUNTER_INC(rx_int_no_op);

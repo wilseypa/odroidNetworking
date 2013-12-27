@@ -1,0 +1,19 @@
+diff --git a/drivers/infiniband/hw/nes/nes.h b/drivers/infiniband/hw/nes/nes.h
+index e156451..2872e1b 100644
+--- a/drivers/infiniband/hw/nes/nes.h
++++ b/drivers/infiniband/hw/nes/nes.h
+@@ -56,10 +56,8 @@
+ 
+ #define QUEUE_DISCONNECTS
+ 
+-#define DRV_BUILD   "1"
+-
+ #define DRV_NAME    "iw_nes"
+-#define DRV_VERSION "1.0 OFED Build " DRV_BUILD
++#define DRV_VERSION "1.4.1.0 OFED"
+ #define PFX         DRV_NAME ": "
+ 
+ /*
+-- 
+1.5.3.3
+

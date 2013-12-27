@@ -1,0 +1,100 @@
+---
+ drivers/infiniband/ulp/sdp/sdp_main.c |   12 ++++--------
+ 1 file changed, 4 insertions(+), 8 deletions(-)
+
+Index: ofed_kernel/drivers/infiniband/ulp/sdp/sdp_main.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/sdp/sdp_main.c
++++ ofed_kernel/drivers/infiniband/ulp/sdp/sdp_main.c
+@@ -2218,16 +2218,13 @@ static struct proto_ops sdp_proto_ops = 
+ 	.sendpage   = sock_no_sendpage,
+ };
+ 
+-static int sdp_create_socket(struct net *net, struct socket *sock, int protocol)
++static int sdp_create_socket(struct socket *sock, int protocol)
+ {
+ 	struct sock *sk;
+ 	int rc;
+ 
+ 	sdp_dbg(NULL, "%s: type %d protocol %d\n", __func__, sock->type, protocol);
+ 
+-	if (net != &init_net)
+-		return -EAFNOSUPPORT;
+-
+ 	if (sock->type != SOCK_STREAM) {
+ 		sdp_warn(NULL, "SDP: unsupported type %d.\n", sock->type);
+ 		return -ESOCKTNOSUPPORT;
+@@ -2239,7 +2236,7 @@ static int sdp_create_socket(struct net 
+ 		return -EPROTONOSUPPORT;
+ 	}
+ 
+-	sk = sk_alloc(net, PF_INET_SDP, GFP_KERNEL, &sdp_proto);
++	sk = sk_alloc(PF_INET_SDP, GFP_KERNEL, &sdp_proto, 1);
+ 	if (!sk) {
+ 		sdp_warn(NULL, "SDP: failed to allocate socket.\n");
+ 		return -ENOMEM;
+Index: ofed_kernel/drivers/infiniband/ulp/sdp/sdp_proc.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/sdp/sdp_proc.c
++++ ofed_kernel/drivers/infiniband/ulp/sdp/sdp_proc.c
+@@ -421,7 +421,7 @@ int __init sdp_proc_init(void)
+ 	sdp_seq_afinfo.seq_fops->llseek        = seq_lseek;
+ 	sdp_seq_afinfo.seq_fops->release       = seq_release_private;
+ 
+-	p = proc_net_fops_create(&init_net, sdp_seq_afinfo.name, S_IRUGO,
++	p = proc_net_fops_create(sdp_seq_afinfo.name, S_IRUGO,
+ 				 sdp_seq_afinfo.seq_fops);
+ 	if (p)
+ 		p->data = &sdp_seq_afinfo;
+@@ -430,7 +430,7 @@ int __init sdp_proc_init(void)
+ 
+ #ifdef SDPSTATS_ON
+ 
+- 	sdpstats = proc_net_fops_create(&init_net, PROC_SDP_STATS,
++ 	sdpstats = proc_net_fops_create(PROC_SDP_STATS,
+ 			S_IRUGO | S_IWUGO, &sdpstats_fops); 
+ 	if (!sdpstats)
+ 		goto no_mem;
+@@ -438,7 +438,7 @@ int __init sdp_proc_init(void)
+ #endif
+ 
+ #ifdef SDP_PROFILING
+- 	sdpprf = proc_net_fops_create(&init_net, PROC_SDP_PERF,
++ 	sdpprf = proc_net_fops_create(PROC_SDP_PERF,
+ 			S_IRUGO | S_IWUGO, &sdpprf_fops); 
+ 	if (!sdpprf)
+ 		goto no_mem;
+@@ -447,27 +447,27 @@ int __init sdp_proc_init(void)
+ 	return 0;
+ no_mem:
+ 	if (sdpprf)
+-		proc_net_remove(&init_net, PROC_SDP_PERF);
++		proc_net_remove(PROC_SDP_PERF);
+ 
+ 	if (sdpstats)
+-		proc_net_remove(&init_net, PROC_SDP_STATS);
++		proc_net_remove(PROC_SDP_STATS);
+ 
+ 	if (p)
+-		proc_net_remove(&init_net, sdp_seq_afinfo.name);
++		proc_net_remove(sdp_seq_afinfo.name);
+ 
+ 	return -ENOMEM;
+ }
+ 
+ void sdp_proc_unregister(void)
+ {
+-	proc_net_remove(&init_net, sdp_seq_afinfo.name);
++	proc_net_remove(sdp_seq_afinfo.name);
+ 	memset(sdp_seq_afinfo.seq_fops, 0, sizeof(*sdp_seq_afinfo.seq_fops));
+ 
+ #ifdef SDPSTATS_ON
+-	proc_net_remove(&init_net, PROC_SDP_STATS);
++	proc_net_remove(PROC_SDP_STATS);
+ #endif
+ #ifdef SDP_PROFILING
+-	proc_net_remove(&init_net, PROC_SDP_PERF);
++	proc_net_remove(PROC_SDP_PERF);
+ #endif
+ }
+ 

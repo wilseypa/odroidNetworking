@@ -1,0 +1,11 @@
+diff -Nurp linux-2.6/drivers/infiniband/hw/nes/nes_nic.c nes.2_6_13_patch/drivers/infiniband/hw/nes/nes_nic.c
+--- linux-2.6/drivers/infiniband/hw/nes/nes_nic.c	2010-05-10 16:43:23.315012000 +0200
++++ nes.2_6_13_patch/drivers/infiniband/hw/nes/nes_nic.c	2010-05-10 11:21:30.325442000 +0200
+@@ -1667,7 +1667,6 @@ struct net_device *nes_netdev_init(struc
+ 	netdev->dev_addr[3] = (u8)(u64temp>>16);
+ 	netdev->dev_addr[4] = (u8)(u64temp>>8);
+ 	netdev->dev_addr[5] = (u8)u64temp;
+-	memcpy(netdev->perm_addr, netdev->dev_addr, 6);
+ 
+ 	if ((nesvnic->logical_port < 2) || (nesdev->nesadapter->hw_rev != NE020_REV)) {
+ 		netdev->features |= NETIF_F_TSO | NETIF_F_SG | NETIF_F_IP_CSUM;

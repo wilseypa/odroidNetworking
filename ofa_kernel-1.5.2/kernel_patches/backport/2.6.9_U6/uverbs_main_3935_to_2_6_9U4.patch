@@ -1,0 +1,62 @@
+---
+ drivers/infiniband/core/uverbs_main.c |   19 ++++++++++++++++---
+ 1 file changed, 16 insertions(+), 3 deletions(-)
+
+Index: ofed_kernel/drivers/infiniband/core/uverbs_main.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/core/uverbs_main.c
++++ ofed_kernel/drivers/infiniband/core/uverbs_main.c
+@@ -721,6 +721,17 @@ static int ib_uverbs_close(struct inode 
+ 	return 0;
+ }
+ 
++static ssize_t show_dev(struct class_device *class_dev, char *buf)
++{
++	struct ib_uverbs_device *dev = class_get_devdata(class_dev);
++
++	if (!dev)
++		return -ENODEV;
++
++	return print_dev_t(buf, dev->dev->dev);
++}
++static CLASS_DEVICE_ATTR(dev, S_IRUGO, show_dev, NULL);
++
+ static const struct file_operations uverbs_fops = {
+ 	.owner 	 = THIS_MODULE,
+ 	.write 	 = ib_uverbs_write,
+@@ -805,7 +816,7 @@ static void ib_uverbs_add_one(struct ib_
+ 	if (cdev_add(uverbs_dev->dev, IB_UVERBS_BASE_DEV + uverbs_dev->devnum, 1))
+ 		goto err_cdev;
+ 
+-	uverbs_dev->class_dev = class_device_create(uverbs_class, NULL,
++	uverbs_dev->class_dev = class_device_create(uverbs_class,
+ 						    uverbs_dev->dev->dev,
+ 						    device->dma_device,
+ 						    "uverbs%d", uverbs_dev->devnum);
+@@ -814,6 +825,8 @@ static void ib_uverbs_add_one(struct ib_
+ 
+ 	class_set_devdata(uverbs_dev->class_dev, uverbs_dev);
+ 
++	if (class_device_create_file(uverbs_dev->class_dev, &class_device_attr_dev))
++		goto err_class;
+ 	if (class_device_create_file(uverbs_dev->class_dev, &class_device_attr_ibdev))
+ 		goto err_class;
+ 	if (class_device_create_file(uverbs_dev->class_dev, &class_device_attr_abi_version))
+@@ -828,7 +841,7 @@ static void ib_uverbs_add_one(struct ib_
+ 	return;
+ 
+ err_class:
+-	class_device_destroy(uverbs_class, uverbs_dev->dev->dev);
++	class_device_unregister(uverbs_dev->class_dev);
+ 
+ err_cdev:
+ 	cdev_del(uverbs_dev->dev);
+@@ -849,7 +862,7 @@ static void ib_uverbs_remove_one(struct 
+ 		return;
+ 
+ 	class_set_devdata(uverbs_dev->class_dev, NULL);
+-	class_device_destroy(uverbs_class, uverbs_dev->dev->dev);
++	class_device_unregister(uverbs_dev->class_dev);
+ 	cdev_del(uverbs_dev->dev);
+ 
+ 	spin_lock(&map_lock);

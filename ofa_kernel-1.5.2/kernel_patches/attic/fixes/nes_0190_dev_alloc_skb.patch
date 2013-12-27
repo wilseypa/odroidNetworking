@@ -1,0 +1,67 @@
+diff --git a/drivers/infiniband/hw/nes/nes_cm.c b/drivers/infiniband/hw/nes/nes_cm.c
+index 3d94c07..3a51539 100644
+--- a/drivers/infiniband/hw/nes/nes_cm.c
++++ b/drivers/infiniband/hw/nes/nes_cm.c
+@@ -94,7 +94,6 @@ static int mini_cm_set(struct nes_cm_core *, u32, u32);
+ 
+ static void form_cm_frame(struct sk_buff *, struct nes_cm_node *,
+ 	void *, u32, void *, u32, u8);
+-static struct sk_buff *get_free_pkt(u32);
+ static int add_ref_cm_node(struct nes_cm_node *);
+ static int rem_ref_cm_node(struct nes_cm_core *, struct nes_cm_node *);
+ 
+@@ -687,7 +686,7 @@ static int send_syn(struct nes_cm_node *cm_node, u32 sendack,
+ 	optionssize += 1;
+ 
+ 	if (!skb)
+-		skb = get_free_pkt(MAX_CM_BUFFER);
++		skb = dev_alloc_skb(MAX_CM_BUFFER);
+ 	if (!skb) {
+ 		nes_debug(NES_DBG_CM, "Failed to get a Free pkt\n");
+ 		return -1;
+@@ -712,7 +711,7 @@ static int send_reset(struct nes_cm_node *cm_node, struct sk_buff *skb)
+ 	int flags = SET_RST | SET_ACK;
+ 
+ 	if (!skb)
+-		skb = get_free_pkt(MAX_CM_BUFFER);
++		skb = dev_alloc_skb(MAX_CM_BUFFER);
+ 	if (!skb) {
+ 		nes_debug(NES_DBG_CM, "Failed to get a Free pkt\n");
+ 		return -1;
+@@ -733,7 +732,7 @@ static int send_ack(struct nes_cm_node *cm_node, struct sk_buff *skb)
+ 	int ret;
+ 
+ 	if (!skb)
+-		skb = get_free_pkt(MAX_CM_BUFFER);
++		skb = dev_alloc_skb(MAX_CM_BUFFER);
+ 
+ 	if (!skb) {
+ 		nes_debug(NES_DBG_CM, "Failed to get a Free pkt\n");
+@@ -756,7 +755,7 @@ static int send_fin(struct nes_cm_node *cm_node, struct sk_buff *skb)
+ 
+ 	/* if we didn't get a frame get one */
+ 	if (!skb)
+-		skb = get_free_pkt(MAX_CM_BUFFER);
++		skb = dev_alloc_skb(MAX_CM_BUFFER);
+ 
+ 	if (!skb) {
+ 		nes_debug(NES_DBG_CM, "Failed to get a Free pkt\n");
+@@ -771,15 +770,6 @@ static int send_fin(struct nes_cm_node *cm_node, struct sk_buff *skb)
+ 
+ 
+ /**
+- * get_free_pkt
+- */
+-static struct sk_buff *get_free_pkt(u32 pktsize)
+-{
+-		return dev_alloc_skb(pktsize);
+-}
+-
+-
+-/**
+  * find_node - find a cm node that matches the reference cm node
+  */
+ static struct nes_cm_node *find_node(struct nes_cm_core *cm_core,
+-- 
+1.5.3.3
+

@@ -1,0 +1,73 @@
+From 41756c3411dd17beaffc114b52cc3af240d2fb62 Mon Sep 17 00:00:00 2001
+From: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+Date: Wed, 2 Sep 2009 11:43:06 +0300
+Subject: [PATCH 2/7] mlx4: Query for loopback support
+
+Signed-off-by: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+---
+ drivers/net/mlx4/fw.c       |    3 +++
+ drivers/net/mlx4/fw.h       |    1 +
+ drivers/net/mlx4/main.c     |    1 +
+ include/linux/mlx4/device.h |    1 +
+ 4 files changed, 6 insertions(+), 0 deletions(-)
+
+diff --git a/drivers/net/mlx4/fw.c b/drivers/net/mlx4/fw.c
+index 603e439..37a41ff 100644
+--- a/drivers/net/mlx4/fw.c
++++ b/drivers/net/mlx4/fw.c
+@@ -176,6 +176,7 @@ int mlx4_QUERY_DEV_CAP(struct mlx4_dev *dev, struct mlx4_dev_cap *dev_cap)
+ #define QUERY_DEV_CAP_MAX_GID_OFFSET		0x3b
+ #define QUERY_DEV_CAP_RATE_SUPPORT_OFFSET	0x3c
+ #define QUERY_DEV_CAP_MAX_PKEY_OFFSET		0x3f
++#define QUERY_DEV_CAP_ETH_UC_LOOPBACK_OFFSET	0x43
+ #define QUERY_DEV_CAP_FLAGS_OFFSET		0x44
+ #define QUERY_DEV_CAP_RSVD_UAR_OFFSET		0x48
+ #define QUERY_DEV_CAP_UAR_SZ_OFFSET		0x49
+@@ -268,6 +269,8 @@ int mlx4_QUERY_DEV_CAP(struct mlx4_dev *dev, struct mlx4_dev_cap *dev_cap)
+ 	dev_cap->max_msg_sz = 1 << (field & 0x1f);
+ 	MLX4_GET(stat_rate, outbox, QUERY_DEV_CAP_RATE_SUPPORT_OFFSET);
+ 	dev_cap->stat_rate_support = stat_rate;
++	MLX4_GET(field, outbox, QUERY_DEV_CAP_ETH_UC_LOOPBACK_OFFSET);
++	dev_cap->loopback_support = field & 0x1;
+ 	MLX4_GET(dev_cap->flags, outbox, QUERY_DEV_CAP_FLAGS_OFFSET);
+ 	MLX4_GET(field, outbox, QUERY_DEV_CAP_RSVD_UAR_OFFSET);
+ 	dev_cap->reserved_uars = field >> 4;
+diff --git a/drivers/net/mlx4/fw.h b/drivers/net/mlx4/fw.h
+index 277e967..038f8aa 100644
+--- a/drivers/net/mlx4/fw.h
++++ b/drivers/net/mlx4/fw.h
+@@ -74,6 +74,7 @@ struct mlx4_dev_cap {
+ 	u64 def_mac[MLX4_MAX_PORTS + 1];
+ 	u16 eth_mtu[MLX4_MAX_PORTS + 1];
+ 	u16 stat_rate_support;
++	int loopback_support;
+ 	u32 flags;
+ 	int reserved_uars;
+ 	int uar_size;
+diff --git a/drivers/net/mlx4/main.c b/drivers/net/mlx4/main.c
+index 9636576..d38d8f2 100644
+--- a/drivers/net/mlx4/main.c
++++ b/drivers/net/mlx4/main.c
+@@ -277,6 +277,7 @@ static int mlx4_dev_cap(struct mlx4_dev *dev, struct mlx4_dev_cap *dev_cap)
+ 	dev->caps.bmme_flags	     = dev_cap->bmme_flags;
+ 	dev->caps.reserved_lkey	     = dev_cap->reserved_lkey;
+ 	dev->caps.stat_rate_support  = dev_cap->stat_rate_support;
++	dev->caps.loopback_support   = dev_cap->loopback_support;
+ 	dev->caps.max_gso_sz	     = dev_cap->max_gso_sz;
+ 	dev->caps.reserved_xrcds     = (dev->caps.flags & MLX4_DEV_CAP_FLAG_XRC) ?
+ 		dev_cap->reserved_xrcds : 0;
+diff --git a/include/linux/mlx4/device.h b/include/linux/mlx4/device.h
+index 8bb1a18..7c5983f 100644
+--- a/include/linux/mlx4/device.h
++++ b/include/linux/mlx4/device.h
+@@ -233,6 +233,7 @@ struct mlx4_caps {
+ 	u32			bmme_flags;
+ 	u32			reserved_lkey;
+ 	u16			stat_rate_support;
++	int			loopback_support;
+ 	u8			port_width_cap[MLX4_MAX_PORTS + 1];
+ 	int			max_gso_sz;
+ 	int                     reserved_qps_cnt[MLX4_NUM_QP_REGION];
+-- 
+1.6.3
+

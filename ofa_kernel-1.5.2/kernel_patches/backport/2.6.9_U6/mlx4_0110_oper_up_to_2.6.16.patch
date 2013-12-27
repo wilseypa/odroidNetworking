@@ -1,0 +1,13 @@
+Index: ofa_1_5_dev_kernel-20100822-1825_linux-2.6.16.60-0.54.5-smp_check/drivers/infiniband/hw/mlx4/main.c
+===================================================================
+--- ofa_1_5_dev_kernel-20100822-1825_linux-2.6.16.60-0.54.5-smp_check.orig/drivers/infiniband/hw/mlx4/main.c	2010-08-22 18:40:00.000000000 +0300
++++ ofa_1_5_dev_kernel-20100822-1825_linux-2.6.16.60-0.54.5-smp_check/drivers/infiniband/hw/mlx4/main.c	2010-08-22 18:50:00.000000000 +0300
+@@ -291,7 +291,7 @@ static int eth_link_query_port(struct ib
+ 
+ 	tmp = iboe_get_mtu(ndev->mtu);
+ 	props->active_mtu = tmp ? min(props->max_mtu, tmp) : IB_MTU_256;
+-	props->state		= netif_running(ndev) &&  netif_oper_up(ndev) ?
++	props->state		= netif_running(ndev) ?
+ 					IB_PORT_ACTIVE : IB_PORT_DOWN;
+ 	props->phys_state	= state_to_phys_state(props->state);
+ 

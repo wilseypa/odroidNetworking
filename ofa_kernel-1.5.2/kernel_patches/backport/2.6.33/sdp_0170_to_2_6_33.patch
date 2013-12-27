@@ -1,0 +1,140 @@
+Index: ofed_kernel/drivers/infiniband/ulp/sdp/sdp_main.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/sdp/sdp_main.c	2010-08-09 18:57:31.000000000 +0300
++++ ofed_kernel/drivers/infiniband/ulp/sdp/sdp_main.c	2010-08-09 18:58:46.000000000 +0300
+@@ -150,7 +150,7 @@
+ 	struct sockaddr_in addr = {
+ 		.sin_family = AF_INET,
+ 		.sin_port = htons(snum),
+-		.sin_addr.s_addr = inet_sk(sk)->rcv_saddr,
++		.sin_addr.s_addr = inet_sk(sk)->inet_rcv_saddr,
+ 	};
+ 
+ 	sdp_dbg(sk, "%s: %u.%u.%u.%u:%hu\n", __func__,
+@@ -176,7 +176,7 @@
+ 	}
+ 
+ 	src_addr = (struct sockaddr_in *)&(ssk->id->route.addr.src_addr);
+-	inet_sk(sk)->num = ntohs(src_addr->sin_port);
++	inet_sk(sk)->inet_num = ntohs(src_addr->sin_port);
+ 	return 0;
+ }
+ 
+@@ -746,8 +746,8 @@
+ 	struct sdp_sock *ssk = sdp_sk(sk);
+ 	struct sockaddr_in src_addr = {
+ 		.sin_family = AF_INET,
+-		.sin_port = htons(inet_sk(sk)->sport),
+-		.sin_addr.s_addr = inet_sk(sk)->saddr,
++		.sin_port = htons(inet_sk(sk)->inet_sport),
++		.sin_addr.s_addr = inet_sk(sk)->inet_saddr,
+ 	};
+ 	int rc;
+ 	release_sock(sk);
+@@ -769,7 +769,7 @@
+ 		rc = sdp_get_port(sk, 0);
+ 		if (rc)
+ 			return rc;
+-		inet_sk(sk)->sport = htons(inet_sk(sk)->num);
++		inet_sk(sk)->inet_sport = htons(inet_sk(sk)->inet_num);
+ 	}
+ 
+ 	sdp_dbg(sk, "%s %u.%u.%u.%u:%hu -> %u.%u.%u.%u:%hu\n", __func__,
+@@ -2518,7 +2518,7 @@
+ 		rc = sdp_get_port(sk, 0);
+ 		if (rc)
+ 			return rc;
+-		inet_sk(sk)->sport = htons(inet_sk(sk)->num);
++		inet_sk(sk)->inet_sport = htons(inet_sk(sk)->inet_num);
+ 	}
+ 
+ 	rc = rdma_listen(ssk->id, backlog);
+Index: ofed_kernel/drivers/infiniband/ulp/sdp/sdp_cma.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/sdp/sdp_cma.c	2010-08-09 14:24:39.000000000 +0300
++++ ofed_kernel/drivers/infiniband/ulp/sdp/sdp_cma.c	2010-08-09 19:06:28.000000000 +0300
+@@ -169,8 +169,8 @@
+ 	sdp_init_sock(child);
+ 
+ 	dst_addr = (struct sockaddr_in *)&id->route.addr.dst_addr;
+-	inet_sk(child)->dport = dst_addr->sin_port;
+-	inet_sk(child)->daddr = dst_addr->sin_addr.s_addr;
++	inet_sk(child)->inet_dport = dst_addr->sin_port;
++	inet_sk(child)->inet_daddr = dst_addr->sin_addr.s_addr;
+ 
+ 	__sock_put(child, SOCK_REF_CLONE);
+ 
+@@ -248,8 +248,8 @@
+ 	sk_wake_async(sk, 0, POLL_OUT);
+ 
+ 	dst_addr = (struct sockaddr_in *)&id->route.addr.dst_addr;
+-	inet_sk(sk)->dport = dst_addr->sin_port;
+-	inet_sk(sk)->daddr = dst_addr->sin_addr.s_addr;
++	inet_sk(sk)->inet_dport = dst_addr->sin_port;
++	inet_sk(sk)->inet_daddr = dst_addr->sin_addr.s_addr;
+ 
+ 	return 0;
+ }
+@@ -376,7 +376,7 @@
+ 		hh.localrcvsz = hh.desremrcvsz = htonl(sdp_sk(sk)->recv_frags *
+ 				PAGE_SIZE + sizeof(struct sdp_bsdh));
+ 		hh.max_adverts = 0x1;
+-		inet_sk(sk)->saddr = inet_sk(sk)->rcv_saddr =
++		inet_sk(sk)->inet_saddr = inet_sk(sk)->inet_rcv_saddr =
+ 			((struct sockaddr_in *)&id->route.addr.src_addr)->sin_addr.s_addr;
+ 		memset(&conn_param, 0, sizeof conn_param);
+ 		conn_param.private_data_len = sizeof hh;
+@@ -442,7 +442,7 @@
+ 		rc = -ECONNREFUSED;
+ 		break;
+ 	case RDMA_CM_EVENT_ESTABLISHED:
+-		inet_sk(sk)->saddr = inet_sk(sk)->rcv_saddr =
++		inet_sk(sk)->inet_saddr = inet_sk(sk)->inet_rcv_saddr =
+ 			((struct sockaddr_in *)&id->route.addr.src_addr)->sin_addr.s_addr;
+ 		rc = sdp_connected_handler(sk);
+ 		break;
+Index: ofed_kernel/drivers/infiniband/ulp/sdp/sdp_dbg.h
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/sdp/sdp_dbg.h	2010-08-09 14:24:39.000000000 +0300
++++ ofed_kernel/drivers/infiniband/ulp/sdp/sdp_dbg.h	2010-08-09 19:04:15.000000000 +0300
+@@ -15,8 +15,8 @@
+ 	printk(level "%s:%d sdp_sock(%5d:%d %d:%d): " format,             \
+ 	       func, line, \
+ 	       current->pid, smp_processor_id(), \
+-	       (sk) ? inet_sk(sk)->num : -1,                 \
+-	       (sk) ? ntohs(inet_sk(sk)->dport) : -1, ## arg); \
++	       (sk) ? inet_sk(sk)->inet_num : -1,                 \
++	       (sk) ? ntohs(inet_sk(sk)->inet_dport) : -1, ## arg); \
+ 	preempt_enable(); \
+ } while (0)
+ #define sdp_printk(level, sk, format, arg...)                \
+@@ -73,8 +73,8 @@
+ 	preempt_disable(); \
+ 	l->idx = sdpprf_log_count - 1; \
+ 	l->pid = current->pid; \
+-	l->sk_num = (sk) ? inet_sk(sk)->num : -1;                 \
+-	l->sk_dport = (sk) ? ntohs(inet_sk(sk)->dport) : -1; \
++	l->sk_num = (sk) ? inet_sk(sk)->inet_num : -1;                 \
++	l->sk_dport = (sk) ? ntohs(inet_sk(sk)->inet_dport) : -1; \
+ 	l->cpu = smp_processor_id(); \
+ 	l->skb = s; \
+ 	snprintf(l->msg, sizeof(l->msg) - 1, format, ## arg); \
+Index: ofed_kernel/drivers/infiniband/ulp/sdp/sdp_proc.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/sdp/sdp_proc.c	2010-08-09 14:24:39.000000000 +0300
++++ ofed_kernel/drivers/infiniband/ulp/sdp/sdp_proc.c	2010-08-09 19:03:46.000000000 +0300
+@@ -136,10 +136,10 @@
+ 
+ 	st = seq->private;
+ 
+-	dest = inet_sk(sk)->daddr;
+-	src = inet_sk(sk)->rcv_saddr;
+-	destp = ntohs(inet_sk(sk)->dport);
+-	srcp = ntohs(inet_sk(sk)->sport);
++	dest = inet_sk(sk)->inet_daddr;
++	src = inet_sk(sk)->inet_rcv_saddr;
++	destp = ntohs(inet_sk(sk)->inet_dport);
++	srcp = ntohs(inet_sk(sk)->inet_sport);
+ 	uid = sock_i_uid(sk);
+ 	inode = sock_i_ino(sk);
+ 	rx_queue = rcv_nxt(sdp_sk(sk)) - sdp_sk(sk)->copied_seq;

@@ -1,0 +1,26 @@
+Author: Ella Podvalny <ella@mellanox.co.il>
+Date:   Wed Nov 25 11:28:48 2009 +0200
+
+used by mlx4_fc driver.
+
+Signed-off-by: Ella Podvalny <ella@mellanox.co.il>
+
+Index: linux-2.6/include/linux/mlx4/device.h
+===================================================================
+--- linux-2.6.orig/include/linux/mlx4/device.h
++++ linux-2.6/include/linux/mlx4/device.h
+@@ -403,6 +403,14 @@ struct mlx4_init_port_param {
+ 	u64			si_guid;
+ };
+ 
++static inline void mlx4_query_steer_cap(struct mlx4_dev *dev, int *log_mac,
++					int *log_vlan, int *log_prio)
++{
++	*log_mac = dev->caps.log_num_macs;
++	*log_vlan = dev->caps.log_num_vlans;
++	*log_prio = dev->caps.log_num_prios;
++}
++
+ #define mlx4_foreach_port(port, dev, type)				\
+ 	for ((port) = 1; (port) <= (dev)->caps.num_ports; (port)++)	\
+ 		if ((type) == (dev)->caps.port_mask[(port)])

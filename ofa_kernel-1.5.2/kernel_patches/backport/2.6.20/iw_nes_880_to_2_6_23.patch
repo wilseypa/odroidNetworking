@@ -1,0 +1,275 @@
+diff -Nurp linux-2.6/drivers/infiniband/hw/nes/Kconfig nes.2_6_23_patch/drivers/infiniband/hw/nes/Kconfig
+--- linux-2.6/drivers/infiniband/hw/nes/Kconfig	2010-05-10 11:20:10.882363000 +0200
++++ nes.2_6_23_patch/drivers/infiniband/hw/nes/Kconfig	2010-05-10 11:21:29.731487000 +0200
+@@ -2,7 +2,6 @@ config INFINIBAND_NES
+ 	tristate "NetEffect RNIC Driver"
+ 	depends on PCI && INET && INFINIBAND
+ 	select LIBCRC32C
+-	select INET_LRO
+ 	---help---
+ 	  This is the RDMA Network Interface Card (RNIC) driver for
+ 	  NetEffect Ethernet Cluster Server Adapters.
+diff -Nurp linux-2.6/drivers/infiniband/hw/nes/nes_hw.c nes.2_6_23_patch/drivers/infiniband/hw/nes/nes_hw.c
+--- linux-2.6/drivers/infiniband/hw/nes/nes_hw.c	2010-05-10 16:43:23.149014000 +0200
++++ nes.2_6_23_patch/drivers/infiniband/hw/nes/nes_hw.c	2010-05-10 11:21:29.739491000 +0200
+@@ -38,14 +38,9 @@
+ #include <linux/ip.h>
+ #include <linux/tcp.h>
+ #include <linux/if_vlan.h>
+-#include <linux/inet_lro.h>
+ 
+ #include "nes.h"
+ 
+-static unsigned int nes_lro_max_aggr = NES_LRO_MAX_AGGR;
+-module_param(nes_lro_max_aggr, uint, 0444);
+-MODULE_PARM_DESC(nes_lro_max_aggr, "NIC LRO max packet aggregation");
+-
+ static int wide_ppm_offset;
+ module_param(wide_ppm_offset, int, 0644);
+ MODULE_PARM_DESC(wide_ppm_offset, "Increase CX4 interface clock ppm offset, 0=100ppm (default), 1=300ppm");
+@@ -1630,25 +1625,6 @@ static void nes_rq_wqes_timeout(unsigned
+ }
+ 
+ 
+-static int nes_lro_get_skb_hdr(struct sk_buff *skb, void **iphdr,
+-			       void **tcph, u64 *hdr_flags, void *priv)
+-{
+-	unsigned int ip_len;
+-	struct iphdr *iph;
+-	skb_reset_network_header(skb);
+-	iph = ip_hdr(skb);
+-	if (iph->protocol != IPPROTO_TCP)
+-		return -1;
+-	ip_len = ip_hdrlen(skb);
+-	skb_set_transport_header(skb, ip_len);
+-	*tcph = tcp_hdr(skb);
+-
+-	*hdr_flags = LRO_IPV4 | LRO_TCP;
+-	*iphdr = iph;
+-	return 0;
+-}
+-
+-
+ /**
+  * nes_init_nic_qp
+  */
+@@ -1872,14 +1848,6 @@ int nes_init_nic_qp(struct nes_device *n
+ 			jumbomode = 1;
+ 		nes_nic_init_timer_defaults(nesdev, jumbomode);
+ 	}
+-	nesvnic->lro_mgr.max_aggr       = nes_lro_max_aggr;
+-	nesvnic->lro_mgr.max_desc       = NES_MAX_LRO_DESCRIPTORS;
+-	nesvnic->lro_mgr.lro_arr        = nesvnic->lro_desc;
+-	nesvnic->lro_mgr.get_skb_header = nes_lro_get_skb_hdr;
+-	nesvnic->lro_mgr.features       = LRO_F_NAPI | LRO_F_EXTRACT_VLAN_ID;
+-	nesvnic->lro_mgr.dev            = netdev;
+-	nesvnic->lro_mgr.ip_summed      = CHECKSUM_UNNECESSARY;
+-	nesvnic->lro_mgr.ip_summed_aggr = CHECKSUM_UNNECESSARY;
+ 	return 0;
+ }
+ 
+@@ -2647,7 +2615,7 @@ static void nes_nic_napi_ce_handler(stru
+ {
+ 	struct nes_vnic *nesvnic = container_of(cq, struct nes_vnic, nic_cq);
+ 
+-	netif_rx_schedule(nesdev->netdev[nesvnic->netdev_index], &nesvnic->napi);
++	netif_rx_schedule(nesdev->netdev[nesvnic->netdev_index]);
+ }
+ 
+ 
+@@ -2682,13 +2650,10 @@ void nes_nic_ce_handler(struct nes_devic
+ 	u16 pkt_type;
+ 	u16 rqes_processed = 0;
+ 	u8 sq_cqes = 0;
+-	u8 nes_use_lro = 0;
+ 
+ 	head = cq->cq_head;
+ 	cq_size = cq->cq_size;
+ 	cq->cqes_pending = 1;
+-	if (nesvnic->netdev->features & NETIF_F_LRO)
+-		nes_use_lro = 1;
+ 	do {
+ 		if (le32_to_cpu(cq->cq_vbase[head].cqe_words[NES_NIC_CQE_MISC_IDX]) &
+ 				NES_NIC_CQE_VALID) {
+@@ -2820,17 +2785,9 @@ void nes_nic_ce_handler(struct nes_devic
+ 							>> 16);
+ 					nes_debug(NES_DBG_CQ, "%s: Reporting stripped VLAN packet. Tag = 0x%04X\n",
+ 							nesvnic->netdev->name, vlan_tag);
+-					if (nes_use_lro)
+-						lro_vlan_hwaccel_receive_skb(&nesvnic->lro_mgr, rx_skb,
+-								nesvnic->vlan_grp, vlan_tag, NULL);
+-					else
+-						nes_vlan_rx(rx_skb, nesvnic->vlan_grp, vlan_tag);
+-				} else {
+-					if (nes_use_lro)
+-						lro_receive_skb(&nesvnic->lro_mgr, rx_skb, NULL);
+-					else
+-						nes_netif_rx(rx_skb);
+-				}
++					nes_vlan_rx(rx_skb, nesvnic->vlan_grp, vlan_tag);
++				} else
++					nes_netif_rx(rx_skb);
+ 
+ skip_rx_indicate0:
+ 				;
+@@ -2861,8 +2818,6 @@ skip_rx_indicate0:
+ 
+ 	} while (1);
+ 
+-	if (nes_use_lro)
+-		lro_flush_all(&nesvnic->lro_mgr);
+ 	if (sq_cqes) {
+ 		barrier();
+ 		/* restart the queue if it had been stopped */
+diff -Nurp linux-2.6/drivers/infiniband/hw/nes/nes_hw.h nes.2_6_23_patch/drivers/infiniband/hw/nes/nes_hw.h
+--- linux-2.6/drivers/infiniband/hw/nes/nes_hw.h	2010-05-10 11:20:11.037369000 +0200
++++ nes.2_6_23_patch/drivers/infiniband/hw/nes/nes_hw.h	2010-05-10 11:21:29.744492000 +0200
+@@ -33,8 +33,6 @@
+ #ifndef __NES_HW_H
+ #define __NES_HW_H
+ 
+-#include <linux/inet_lro.h>
+-
+ #define NES_PHY_TYPE_CX4       1
+ #define NES_PHY_TYPE_1G        2
+ #define NES_PHY_TYPE_ARGUS     4
+@@ -1024,8 +1022,6 @@ struct nes_hw_tune_timer {
+ #define NES_TIMER_ENABLE_LIMIT      4
+ #define NES_MAX_LINK_INTERRUPTS     128
+ #define NES_MAX_LINK_CHECK          200
+-#define NES_MAX_LRO_DESCRIPTORS     32
+-#define NES_LRO_MAX_AGGR            64
+ 
+ struct nes_adapter {
+ 	u64              fw_ver;
+@@ -1201,7 +1197,6 @@ struct nes_vnic {
+ 	u32               msg_enable;
+ 	/* u32 tx_avail; */
+ 	__be32            local_ipaddr;
+-	struct napi_struct   napi;
+ 	spinlock_t           tx_lock;	/* could use netdev tx lock? */
+ 	struct timer_list    rq_wqes_timer;
+ 	u32                  nic_mem_size;
+@@ -1229,9 +1224,6 @@ struct nes_vnic {
+ 	u8  of_device_registered;
+ 	u8  rdma_enabled;
+ 	u8  rx_checksum_disabled;
+-	u32 lro_max_aggr;
+-	struct net_lro_mgr lro_mgr;
+-	struct net_lro_desc lro_desc[NES_MAX_LRO_DESCRIPTORS];
+ };
+ 
+ struct nes_ib_device {
+diff -Nurp linux-2.6/drivers/infiniband/hw/nes/nes_nic.c nes.2_6_23_patch/drivers/infiniband/hw/nes/nes_nic.c
+--- linux-2.6/drivers/infiniband/hw/nes/nes_nic.c	2010-05-10 16:43:23.155011000 +0200
++++ nes.2_6_23_patch/drivers/infiniband/hw/nes/nes_nic.c	2010-05-10 11:21:29.752485000 +0200
+@@ -96,35 +96,38 @@ static int nics_per_function = 1;
+ /**
+  * nes_netdev_poll
+  */
+-static int nes_netdev_poll(struct napi_struct *napi, int budget)
++static int nes_netdev_poll(struct net_device *netdev, int *budget_ptr)
+ {
+-	struct nes_vnic *nesvnic = container_of(napi, struct nes_vnic, napi);
+-	struct net_device *netdev = nesvnic->netdev;
++	struct nes_vnic *nesvnic = netdev_priv(netdev);
+ 	struct nes_device *nesdev = nesvnic->nesdev;
+ 	struct nes_hw_nic_cq *nescq = &nesvnic->nic_cq;
+-
+-	nesvnic->budget = budget;
++	nesvnic->budget = min(netdev->quota, *budget_ptr);
+ 	nescq->cqes_pending = 0;
+ 	nescq->rx_cqes_completed = 0;
+ 	nescq->cqe_allocs_pending = 0;
+ 	nescq->rx_pkts_indicated = 0;
+ 
+ 	nes_nic_ce_handler(nesdev, nescq);
++	netdev->quota -= nescq->rx_pkts_indicated;
++	*budget_ptr -= nescq->rx_pkts_indicated;
+ 
+-	if (nescq->cqes_pending == 0) {
+-		netif_rx_complete(netdev, napi);
++	if ((nescq->cqes_pending == 0) && (netdev->quota != 0)) {
++		netif_rx_complete(netdev);
+ 		/* clear out completed cqes and arm */
+ 		nes_write32(nesdev->regs+NES_CQE_ALLOC, NES_CQE_ALLOC_NOTIFY_NEXT |
+ 				nescq->cq_number | (nescq->cqe_allocs_pending << 16));
+ 		nes_read32(nesdev->regs+NES_CQE_ALLOC);
++
++		return 0;
+ 	} else {
+ 		/* clear out completed cqes but don't arm */
+ 		nes_write32(nesdev->regs+NES_CQE_ALLOC,
+ 				nescq->cq_number | (nescq->cqe_allocs_pending << 16));
+ 		nes_debug(NES_DBG_NETDEV, "%s: exiting with work pending\n",
+ 				nesvnic->netdev->name);
++
++		return 1;
+ 	}
+-	return nescq->rx_pkts_indicated;
+ }
+ 
+ 
+@@ -238,7 +241,6 @@ static int nes_netdev_open(struct net_de
+ 		netif_start_queue(netdev);
+ 		netif_carrier_on(netdev);
+ 	}
+-	napi_enable(&nesvnic->napi);
+ 	nesvnic->netdev_open = 1;
+ 
+ 	return 0;
+@@ -266,7 +268,6 @@ static int nes_netdev_stop(struct net_de
+ 		printk(KERN_INFO PFX "%s: disabling interface\n", netdev->name);
+ 
+ 	/* Disable network packets */
+-	napi_disable(&nesvnic->napi);
+ 	netif_stop_queue(netdev);
+ 	list_for_each_safe(list_pos, list_temp, &nesdev->nesadapter->nesvnic_list[nesdev->mac_index]) {
+ 		first_nesvnic = container_of(list_pos, struct nes_vnic, list);
+@@ -1038,9 +1039,6 @@ static const char nes_ethtool_stringset[
+ 	"Free 4Kpbls",
+ 	"Free 256pbls",
+ 	"Timer Inits",
+-	"LRO aggregated",
+-	"LRO flushed",
+-	"LRO no_desc",
+ };
+ #define NES_ETHTOOL_STAT_COUNT  ARRAY_SIZE(nes_ethtool_stringset)
+ 
+@@ -1278,9 +1276,6 @@ static void nes_netdev_get_ethtool_stats
+ 	target_stat_values[++index] = nesadapter->free_4kpbl;
+ 	target_stat_values[++index] = nesadapter->free_256pbl;
+ 	target_stat_values[++index] = int_mod_timer_init;
+-	target_stat_values[++index] = nesvnic->lro_mgr.stats.aggregated;
+-	target_stat_values[++index] = nesvnic->lro_mgr.stats.flushed;
+-	target_stat_values[++index] = nesvnic->lro_mgr.stats.no_desc;
+ }
+ 
+ /**
+@@ -1567,8 +1562,6 @@ static struct ethtool_ops nes_ethtool_op
+ 	.set_sg = ethtool_op_set_sg,
+ 	.get_tso = ethtool_op_get_tso,
+ 	.set_tso = ethtool_op_set_tso,
+-	.get_flags = ethtool_op_get_flags,
+-	.set_flags = ethtool_op_set_flags,
+ };
+ 
+ 
+@@ -1639,7 +1632,8 @@ struct net_device *nes_netdev_init(struc
+ 	netdev->type = ARPHRD_ETHER;
+ 	netdev->features = NETIF_F_HIGHDMA;
+ 	netdev->ethtool_ops = &nes_ethtool_ops;
+-	netif_napi_add(netdev, &nesvnic->napi, nes_netdev_poll, 128);
++	netdev->poll = nes_netdev_poll;
++	netdev->weight = 128;
+ 	nes_debug(NES_DBG_INIT, "Enabling VLAN Insert/Delete.\n");
+ 	netdev->features |= NETIF_F_HW_VLAN_TX | NETIF_F_HW_VLAN_RX;
+ 	netdev->vlan_rx_register = nes_netdev_vlan_rx_register;
+@@ -1671,7 +1665,6 @@ struct net_device *nes_netdev_init(struc
+ 
+ 	if ((nesvnic->logical_port < 2) || (nesdev->nesadapter->hw_rev != NE020_REV)) {
+ 		netdev->features |= NETIF_F_TSO | NETIF_F_SG | NETIF_F_IP_CSUM;
+-		netdev->features |= NETIF_F_GSO | NETIF_F_TSO | NETIF_F_SG | NETIF_F_IP_CSUM;
+ 	} else {
+ 		netdev->features |= NETIF_F_SG | NETIF_F_IP_CSUM;
+ 	}

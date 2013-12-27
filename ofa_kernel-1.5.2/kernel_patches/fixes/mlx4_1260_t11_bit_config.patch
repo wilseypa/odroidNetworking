@@ -1,0 +1,59 @@
+Subject: [PATCH] mlx4: turn on fcoe t11 bit
+ 
+Signed-off-by: Ella Podvalny <ella@mellanox.co.il>
+Index: ofed_kernel/drivers/net/mlx4/fw.c
+===================================================================
+--- ofed_kernel.orig/drivers/net/mlx4/fw.c	2010-01-25 17:36:15.000000000 +0200
++++ ofed_kernel/drivers/net/mlx4/fw.c	2010-01-25 17:52:11.972123000 +0200
+@@ -50,6 +50,10 @@ static int enable_qos;
+ module_param(enable_qos, bool, 0444);
+ MODULE_PARM_DESC(enable_qos, "Enable Quality of Service support in the HCA (default: off)");
+ 
++static int mlx4_pre_t11_mode = 0;
++module_param_named(enable_pre_t11_mode, mlx4_pre_t11_mode, int, 0644);
++MODULE_PARM_DESC(enable_pre_t11_mode, "For FCoXX, enable pre-t11 mode if non-zero (default: 0)");
++
+ #define MLX4_GET(dest, source, offset)				      \
+ 	do {							      \
+ 		void *__p = (char *) (source) + (offset);	      \
+@@ -810,6 +814,9 @@ int mlx4_INIT_HCA(struct mlx4_dev *dev, 
+ 
+ 	MLX4_PUT(inbox, (u8) (PAGE_SHIFT - 12), INIT_HCA_UAR_PAGE_SZ_OFFSET);
+ 	MLX4_PUT(inbox, param->log_uar_sz,      INIT_HCA_LOG_UAR_SZ_OFFSET);
++	if (!mlx4_pre_t11_mode && dev->caps.flags & (u32) MLX4_DEV_CAP_FLAG_FC_T11)
++		*(inbox + INIT_HCA_FLAGS_OFFSET / 4) |= cpu_to_be32(1 << 10);
++
+ 
+ 	err = mlx4_cmd(dev, mailbox->dma, 0, 0, MLX4_CMD_INIT_HCA, 10000);
+ 
+@@ -942,3 +949,9 @@ out:
+ }
+ EXPORT_SYMBOL_GPL(mlx4_query_diag_counters);
+ 
++void mlx4_get_fc_t11_settings(struct mlx4_dev *dev, int *enable_pre_t11, int *t11_supported)
++{
++	*enable_pre_t11 = !!mlx4_pre_t11_mode;
++	*t11_supported = !!(dev->caps.flags & MLX4_DEV_CAP_FLAG_FC_T11);
++}
++EXPORT_SYMBOL_GPL(mlx4_get_fc_t11_settings);
+Index: ofed_kernel/include/linux/mlx4/device.h
+===================================================================
+--- ofed_kernel.orig/include/linux/mlx4/device.h	2010-01-25 17:35:26.000000000 +0200
++++ ofed_kernel/include/linux/mlx4/device.h	2010-01-25 17:52:11.983131000 +0200
+@@ -69,7 +69,8 @@ enum {
+ 	MLX4_DEV_CAP_FLAG_ATOMIC	= 1 << 18,
+ 	MLX4_DEV_CAP_FLAG_RAW_MCAST	= 1 << 19,
+ 	MLX4_DEV_CAP_FLAG_UD_AV_PORT	= 1 << 20,
+-	MLX4_DEV_CAP_FLAG_UD_MCAST	= 1 << 21
++	MLX4_DEV_CAP_FLAG_UD_MCAST	= 1 << 21,
++	MLX4_DEV_CAP_FLAG_FC_T11	= 1 << 31
+ };
+ 
+ enum {
+@@ -514,4 +515,6 @@ int mlx4_query_diag_counters(struct mlx4
+ 			     u8 op_modifier, u32 in_offset[], u32 counter_out[]);
+ int mlx4_test_interrupts(struct mlx4_dev *dev);
+ 
++void mlx4_get_fc_t11_settings(struct mlx4_dev *dev, int *enable_pre_t11, int *t11_supported);
++
+ #endif /* MLX4_DEVICE_H */

@@ -1,0 +1,364 @@
+Index: ofed_kernel-fixes/drivers/infiniband/hw/mlx4/ah.c
+===================================================================
+--- ofed_kernel-fixes.orig/drivers/infiniband/hw/mlx4/ah.c	2010-08-22 17:07:58.000000000 +0300
++++ ofed_kernel-fixes/drivers/infiniband/hw/mlx4/ah.c	2010-08-22 17:11:23.980038583 +0300
+@@ -39,16 +39,16 @@
+ int mlx4_ib_resolve_grh(struct mlx4_ib_dev *dev, const struct ib_ah_attr *ah_attr,
+ 			u8 *mac, int *is_mcast, u8 port)
+ {
+-	struct mlx4_ib_rocee *rocee = &dev->rocee;
++	struct mlx4_ib_iboe *iboe = &dev->iboe;
+ 	struct in6_addr in6;
+ 
+ 	*is_mcast = 0;
+-	spin_lock(&rocee->lock);
+-	if (!rocee->netdevs[port - 1]) {
+-		spin_unlock(&rocee->lock);
++	spin_lock(&iboe->lock);
++	if (!iboe->netdevs[port - 1]) {
++		spin_unlock(&iboe->lock);
+ 		return -EINVAL;
+ 	}
+-	spin_unlock(&rocee->lock);
++	spin_unlock(&iboe->lock);
+ 
+ 	memcpy(&in6, ah_attr->grh.dgid.raw, sizeof in6);
+ 	if (rdma_link_local_addr(&in6))
+@@ -91,7 +91,7 @@ static struct ib_ah *create_ib_ah(struct
+ 	return &ah->ibah;
+ }
+ 
+-static struct ib_ah *create_rocee_ah(struct ib_pd *pd, struct ib_ah_attr *ah_attr,
++static struct ib_ah *create_iboe_ah(struct ib_pd *pd, struct ib_ah_attr *ah_attr,
+ 				   struct mlx4_ib_ah *ah)
+ {
+ 	struct mlx4_ib_dev *ibdev = to_mdev(pd->device);
+@@ -154,7 +154,7 @@ struct ib_ah *mlx4_ib_create_ah(struct i
+ 			don't expect this currently since we're working with
+ 			link local addresses which we can translate without
+ 			going to sleep */
+-			ret = create_rocee_ah(pd, ah_attr, ah);
++			ret = create_iboe_ah(pd, ah_attr, ah);
+ 			if (IS_ERR(ret))
+ 				goto out;
+ 			else
+Index: ofed_kernel-fixes/drivers/infiniband/hw/mlx4/main.c
+===================================================================
+--- ofed_kernel-fixes.orig/drivers/infiniband/hw/mlx4/main.c	2010-08-22 17:08:44.000000000 +0300
++++ ofed_kernel-fixes/drivers/infiniband/hw/mlx4/main.c	2010-08-22 17:12:44.259537006 +0300
+@@ -261,7 +261,7 @@ static int eth_link_query_port(struct ib
+ 			       struct ib_port_attr *props,
+ 			       struct ib_smp *out_mad)
+ {
+-	struct mlx4_ib_rocee *rocee = &to_mdev(ibdev)->rocee;
++	struct mlx4_ib_iboe *iboe = &to_mdev(ibdev)->iboe;
+ 	struct net_device *ndev;
+ 	int err = 0;
+ 	enum ib_mtu tmp;
+@@ -282,21 +282,21 @@ static int eth_link_query_port(struct ib
+ 	props->state		= IB_PORT_DOWN;
+ 	props->phys_state	= state_to_phys_state(props->state);
+ 	props->active_mtu	= IB_MTU_256;
+-	spin_lock(&rocee->lock);
+-	ndev = rocee->netdevs[port - 1];
++	spin_lock(&iboe->lock);
++	ndev = iboe->netdevs[port - 1];
+ 	if (!ndev) {
+ 		err = -ENOMEM;
+ 		goto out;
+ 	}
+ 
+-	tmp = rocee_get_mtu(ndev->mtu);
++	tmp = iboe_get_mtu(ndev->mtu);
+ 	props->active_mtu = tmp ? min(props->max_mtu, tmp) : IB_MTU_256;
+ 	props->state		= netif_running(ndev) &&  netif_oper_up(ndev) ?
+ 					IB_PORT_ACTIVE : IB_PORT_DOWN;
+ 	props->phys_state	= state_to_phys_state(props->state);
+ 
+ out:
+-	spin_unlock(&rocee->lock);
++	spin_unlock(&iboe->lock);
+ 	return err;
+ }
+ 
+@@ -371,12 +371,12 @@ out:
+ 	return err;
+ }
+ 
+-static int rocee_query_gid(struct ib_device *ibdev, u8 port, int index,
++static int iboe_query_gid(struct ib_device *ibdev, u8 port, int index,
+ 			    union ib_gid *gid)
+ {
+ 	struct mlx4_ib_dev *dev = to_mdev(ibdev);
+ 
+-	*gid = dev->rocee.gid_table[port - 1][index];
++	*gid = dev->iboe.gid_table[port - 1][index];
+ 
+ 	return 0;
+ }
+@@ -387,7 +387,7 @@ static int mlx4_ib_query_gid(struct ib_d
+ 	if (rdma_port_get_link_layer(ibdev, port) == IB_LINK_LAYER_INFINIBAND)
+ 		return __mlx4_ib_query_gid(ibdev, port, index, gid);
+ 	else
+-		return rocee_query_gid(ibdev, port, index, gid);
++		return iboe_query_gid(ibdev, port, index, gid);
+ }
+ 
+ static int mlx4_ib_query_pkey(struct ib_device *ibdev, u8 port, u16 index,
+@@ -636,15 +636,15 @@ int mlx4_ib_add_mc(struct mlx4_ib_dev *m
+ 	if (!mqp->port)
+ 		return 0;
+ 
+-	spin_lock(&mdev->rocee.lock);
+-	ndev = mdev->rocee.netdevs[mqp->port - 1];
++	spin_lock(&mdev->iboe.lock);
++	ndev = mdev->iboe.netdevs[mqp->port - 1];
+ 	if (ndev)
+ 		dev_hold(ndev);
+-	spin_unlock(&mdev->rocee.lock);
++	spin_unlock(&mdev->iboe.lock);
+ 	if (ndev) {
+ 		rdma_get_mcast_mac((struct in6_addr *)gid, mac);
+ 		rtnl_lock();
+-		dev_mc_add(mdev->rocee.netdevs[mqp->port - 1], mac, 6, 0);
++		dev_mc_add(mdev->iboe.netdevs[mqp->port - 1], mac, 6, 0);
+ 		ret = 1;
+ 		rtnl_unlock();
+ 		dev_put(ndev);
+@@ -708,15 +708,15 @@ static int mlx4_ib_mcg_detach(struct ib_
+ 	mutex_lock(&mqp->mutex);
+ 	ge = find_gid_entry(mqp, gid->raw);
+ 	if (ge) {
+-		spin_lock(&mdev->rocee.lock);
+-		ndev = ge->added ? mdev->rocee.netdevs[ge->port - 1] : NULL;
++		spin_lock(&mdev->iboe.lock);
++		ndev = ge->added ? mdev->iboe.netdevs[ge->port - 1] : NULL;
+ 		if (ndev)
+ 			dev_hold(ndev);
+-		spin_unlock(&mdev->rocee.lock);
++		spin_unlock(&mdev->iboe.lock);
+ 		rdma_get_mcast_mac((struct in6_addr *)gid, mac);
+ 		if (ndev) {
+ 			rtnl_lock();
+-			dev_mc_delete(mdev->rocee.netdevs[ge->port - 1], mac, 6, 0);
++			dev_mc_delete(mdev->iboe.netdevs[ge->port - 1], mac, 6, 0);
+ 			rtnl_unlock();
+ 			dev_put(ndev);
+ 		}
+@@ -1053,7 +1053,7 @@ static void update_gids_task(struct work
+ 	if (err)
+ 		printk(KERN_WARNING "set port command failed\n");
+ 	else {
+-		memcpy(gw->dev->rocee.gid_table[gw->port - 1], gw->gids, sizeof gw->gids);
++		memcpy(gw->dev->iboe.gid_table[gw->port - 1], gw->gids, sizeof gw->gids);
+ 		event.device = &gw->dev->ib_dev;
+ 		event.element.port_num = gw->port;
+ 		event.event    = IB_EVENT_LID_CHANGE;
+@@ -1066,7 +1066,7 @@ static void update_gids_task(struct work
+ 
+ static int update_ipv6_gids(struct mlx4_ib_dev *dev, int port, int clear)
+ {
+-	struct net_device *ndev = dev->rocee.netdevs[port - 1];
++	struct net_device *ndev = dev->iboe.netdevs[port - 1];
+ 	struct update_gid_work *work;
+ 	struct net_device *tmp;
+ 	int i;
+@@ -1157,7 +1157,7 @@ static void handle_en_event(struct mlx4_
+ 
+ 	case NETDEV_DOWN:
+ 		update_ipv6_gids(dev, port, 1);
+-		dev->rocee.netdevs[port - 1] = NULL;
++		dev->iboe.netdevs[port - 1] = NULL;
+ 	}
+ }
+ 
+@@ -1177,21 +1177,21 @@ static int mlx4_ib_netdev_event(struct n
+ 	struct net_device *dev = ptr;
+ 	struct mlx4_ib_dev *ibdev;
+ 	struct net_device *oldnd;
+-	struct mlx4_ib_rocee *rocee;
++	struct mlx4_ib_iboe *iboe;
+ 	int port;
+ 
+ 	if (!net_eq(dev_net(dev), &init_net))
+ 		return NOTIFY_DONE;
+ 
+-	ibdev = container_of(this, struct mlx4_ib_dev, rocee.nb);
+-	rocee = &ibdev->rocee;
++	ibdev = container_of(this, struct mlx4_ib_dev, iboe.nb);
++	iboe = &ibdev->iboe;
+ 
+-	spin_lock(&rocee->lock);
++	spin_lock(&iboe->lock);
+ 	mlx4_foreach_ib_transport_port(port, ibdev->dev) {
+-		oldnd = rocee->netdevs[port - 1];
+-		rocee->netdevs[port - 1] = mlx4_get_prot_dev(ibdev->dev, MLX4_PROT_EN, port);
+-		if (oldnd != rocee->netdevs[port - 1]) {
+-			if (rocee->netdevs[port - 1])
++		oldnd = iboe->netdevs[port - 1];
++		iboe->netdevs[port - 1] = mlx4_get_prot_dev(ibdev->dev, MLX4_PROT_EN, port);
++		if (oldnd != iboe->netdevs[port - 1]) {
++			if (iboe->netdevs[port - 1])
+ 				netdev_added(ibdev, port);
+ 			else
+ 				netdev_removed(ibdev, port);
+@@ -1205,7 +1205,7 @@ static int mlx4_ib_netdev_event(struct n
+ 		 || (iboe->netdevs[1] && rdma_vlan_dev_real_dev(dev) == iboe->netdevs[1]))
+ 		handle_en_event(ibdev, 2, event);
+ 
+-	spin_unlock(&rocee->lock);
++	spin_unlock(&iboe->lock);
+ 
+ 	return NOTIFY_DONE;
+ }
+@@ -1217,7 +1217,7 @@ static void *mlx4_ib_add(struct mlx4_dev
+ 	int num_ports = 0;
+ 	int i;
+ 	int err;
+-	struct mlx4_ib_rocee *rocee;
++	struct mlx4_ib_iboe *iboe;
+ 	int k;
+ 
+ 	if (!mlx4_ib_version_printed) {
+@@ -1238,7 +1238,7 @@ static void *mlx4_ib_add(struct mlx4_dev
+ 		return NULL;
+ 	}
+ 
+-	rocee = &ibdev->rocee;
++	iboe = &ibdev->iboe;
+ 
+ 	if (mlx4_pd_alloc(dev, &ibdev->priv_pdn))
+ 		goto err_dealloc;
+@@ -1353,7 +1353,7 @@ static void *mlx4_ib_add(struct mlx4_dev
+ 	}
+ 
+ 
+-	spin_lock_init(&rocee->lock);
++	spin_lock_init(&iboe->lock);
+ 	if (init_node_data(ibdev))
+ 		goto err_map;
+ 
+@@ -1373,9 +1373,9 @@ static void *mlx4_ib_add(struct mlx4_dev
+ 	if (mlx4_ib_mad_init(ibdev))
+ 		goto err_reg;
+ 
+-	if (dev->caps.flags & MLX4_DEV_CAP_FLAG_ROCEE && !rocee->nb.notifier_call) {
+-		rocee->nb.notifier_call = mlx4_ib_netdev_event;
+-		err = register_netdevice_notifier(&rocee->nb);
++	if (dev->caps.flags & MLX4_DEV_CAP_FLAG_IBOE && !iboe->nb.notifier_call) {
++		iboe->nb.notifier_call = mlx4_ib_netdev_event;
++		err = register_netdevice_notifier(&iboe->nb);
+ 		if (err)
+ 			goto err_reg;
+ 	}
+@@ -1393,7 +1393,7 @@ static void *mlx4_ib_add(struct mlx4_dev
+ 	return ibdev;
+ 
+ err_notif:
+-	if (unregister_netdevice_notifier(&ibdev->rocee.nb))
++	if (unregister_netdevice_notifier(&ibdev->iboe.nb))
+ 		printk(KERN_WARNING "failure unregistering notifier\n");
+ 	flush_workqueue(wq);
+ 
+@@ -1432,10 +1432,10 @@ static void mlx4_ib_remove(struct mlx4_d
+ 	for (k = 0; k < ibdev->num_ports; ++k)
+ 		mlx4_counter_free(ibdev->dev, ibdev->counters[k]);
+ 
+-	if (ibdev->rocee.nb.notifier_call) {
+-		unregister_netdevice_notifier(&ibdev->rocee.nb);
++	if (ibdev->iboe.nb.notifier_call) {
++		unregister_netdevice_notifier(&ibdev->iboe.nb);
+ 		flush_workqueue(wq);
+-		ibdev->rocee.nb.notifier_call = NULL;
++		ibdev->iboe.nb.notifier_call = NULL;
+ 	}
+ 	iounmap(ibdev->uar_map);
+ 
+Index: ofed_kernel-fixes/drivers/infiniband/hw/mlx4/mlx4_ib.h
+===================================================================
+--- ofed_kernel-fixes.orig/drivers/infiniband/hw/mlx4/mlx4_ib.h	2010-08-22 17:07:58.000000000 +0300
++++ ofed_kernel-fixes/drivers/infiniband/hw/mlx4/mlx4_ib.h	2010-08-22 17:11:23.980038583 +0300
+@@ -206,7 +206,7 @@ struct mlx4_ib_ah {
+ 	union mlx4_ext_av       av;
+ };
+ 
+-struct mlx4_ib_rocee {
++struct mlx4_ib_iboe {
+ 	spinlock_t		lock;
+ 	struct net_device      *netdevs[MLX4_MAX_PORTS];
+ 	struct notifier_block 	nb;
+@@ -230,7 +230,7 @@ struct mlx4_ib_dev {
+ 	struct mutex		cap_mask_mutex;
+ 	struct mutex		xrc_reg_mutex;
+ 	int			ib_active;
+-	struct mlx4_ib_rocee	rocee;
++	struct mlx4_ib_iboe	iboe;
+ 	int			counters[MLX4_MAX_PORTS];
+ };
+ 
+Index: ofed_kernel-fixes/drivers/infiniband/hw/mlx4/qp.c
+===================================================================
+--- ofed_kernel-fixes.orig/drivers/infiniband/hw/mlx4/qp.c	2010-08-22 17:07:58.000000000 +0300
++++ ofed_kernel-fixes/drivers/infiniband/hw/mlx4/qp.c	2010-08-22 17:11:23.984037513 +0300
+@@ -64,7 +64,7 @@ enum {
+ };
+ 
+ enum {
+-	MLX4_ROCEE_ETHERTYPE = 0x8915
++	MLX4_IBOE_ETHERTYPE = 0x8915
+ };
+ 
+ struct mlx4_ib_xrc_reg_entry {
+@@ -1006,7 +1006,7 @@ static int mlx4_set_path(struct mlx4_ib_
+ 
+ 		memcpy(path->dmac, mac, 6);
+ 		path->ackto = MLX4_IB_LINK_TYPE_ETH;
+-		/* use index 0 into MAC table for RoCEE */
++		/* use index 0 into MAC table for IBoE */
+ 		path->grh_mylmc &= 0x80;
+ 
+ 		vlan_tag = rdma_get_vlan_id(&dev->iboe.gid_table[port - 1][ah->grh.sgid_index]);
+@@ -1537,7 +1537,7 @@ static int build_mlx_header(struct mlx4_
+ 		u8 *smac;
+ 
+ 		memcpy(sqp->ud_header.eth.dmac_h, ah->av.eth.mac, 6);
+-		smac = to_mdev(sqp->qp.ibqp.device)->rocee.netdevs[sqp->qp.port - 1]->dev_addr; /* fixme: cache this value */
++		smac = to_mdev(sqp->qp.ibqp.device)->iboe.netdevs[sqp->qp.port - 1]->dev_addr; /* fixme: cache this value */
+ 		memcpy(sqp->ud_header.eth.smac_h, smac, 6);
+ 		if (!memcmp(sqp->ud_header.eth.smac_h, sqp->ud_header.eth.dmac_h, 6))
+ 			mlx->flags |= cpu_to_be32(MLX4_WQE_CTRL_FORCE_LOOPBACK);
+Index: ofed_kernel-fixes/drivers/net/mlx4/fw.c
+===================================================================
+--- ofed_kernel-fixes.orig/drivers/net/mlx4/fw.c	2010-08-22 17:10:32.000000000 +0300
++++ ofed_kernel-fixes/drivers/net/mlx4/fw.c	2010-08-22 17:11:23.984037513 +0300
+@@ -101,7 +101,7 @@ static void dump_dev_cap_flags(struct ml
+ 		[21] = "UD multicast support",
+ 		[24] = "Demand paging support",
+ 		[25] = "Router support",
+-		[30] = "RoCEE support",
++		[30] = "IBoE support",
+ 		[48] = "Basic counters support",
+ 		[49] = "Extended counters support",
+ 	};
+Index: ofed_kernel-fixes/include/linux/mlx4/device.h
+===================================================================
+--- ofed_kernel-fixes.orig/include/linux/mlx4/device.h	2010-08-22 17:10:32.000000000 +0300
++++ ofed_kernel-fixes/include/linux/mlx4/device.h	2010-08-22 17:11:23.984037513 +0300
+@@ -70,7 +70,7 @@ enum {
+ 	MLX4_DEV_CAP_FLAG_RAW_MCAST	= 1 << 19,
+ 	MLX4_DEV_CAP_FLAG_UD_AV_PORT	= 1 << 20,
+ 	MLX4_DEV_CAP_FLAG_UD_MCAST	= 1 << 21,
+-	MLX4_DEV_CAP_FLAG_ROCEE		= 1 << 30,
++	MLX4_DEV_CAP_FLAG_IBOE		= 1 << 30,
+ 	MLX4_DEV_CAP_FLAG_FC_T11	= 1 << 31
+ };
+ 
+@@ -489,7 +489,7 @@ static inline void mlx4_query_steer_cap(
+ #define mlx4_foreach_ib_transport_port(port, dev)                         \
+ 	for ((port) = 1; (port) <= (dev)->caps.num_ports; (port)++)       \
+ 		if (((dev)->caps.port_mask[port] == MLX4_PORT_TYPE_IB) || \
+-			((dev)->caps.flags & MLX4_DEV_CAP_FLAG_ROCEE))
++			((dev)->caps.flags & MLX4_DEV_CAP_FLAG_IBOE))
+ 
+ int mlx4_buf_alloc(struct mlx4_dev *dev, int size, int max_direct,
+ 		   struct mlx4_buf *buf);

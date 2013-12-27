@@ -1,0 +1,117 @@
+mlx4_ib: Add spinlock to xrc_reg_list changes and scanning in interrupt context.
+
+mlx4_ib_qp_event traverses the xrc_reg_list to distribute XRC_RCV_QP events to
+all processes registered to that QP.  When changing the list (list_add/del) in
+process context, need to have a spinlock so that the event traversal will find
+a stable list.
+
+Fixes FM 85289
+
+Signed-off-by: Jack Morgenstein <jackm@dev.mellanox.co.il>
+
+Index: ofed_kernel/drivers/infiniband/hw/mlx4/mlx4_ib.h
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/hw/mlx4/mlx4_ib.h	2010-06-10 15:22:53.100270000 +0300
++++ ofed_kernel/drivers/infiniband/hw/mlx4/mlx4_ib.h	2010-06-10 15:25:33.771236000 +0300
+@@ -174,6 +174,7 @@ struct mlx4_ib_qp {
+ 	struct mutex		mutex;
+ 	u32			flags;
+ 	struct list_head	xrc_reg_list;
++	spinlock_t		xrc_reg_list_lock;
+ 	u16			xrcdn;
+ 	u8			port;
+ 	u8			alt_port;
+Index: ofed_kernel/drivers/infiniband/hw/mlx4/qp.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/hw/mlx4/qp.c	2010-06-10 15:24:37.444498000 +0300
++++ ofed_kernel/drivers/infiniband/hw/mlx4/qp.c	2010-06-10 15:25:33.785232000 +0300
+@@ -226,6 +226,7 @@ static void mlx4_ib_qp_event(struct mlx4
+ 	struct mlx4_ib_qp *mqp = to_mibqp(qp);
+ 	struct ib_qp *ibqp = &mqp->ibqp;
+ 	struct mlx4_ib_xrc_reg_entry *ctx_entry;
++	unsigned long flags;
+ 
+ 	if (type == MLX4_EVENT_TYPE_PATH_MIG)
+ 		to_mibqp(qp)->port = to_mibqp(qp)->alt_port;
+@@ -267,8 +268,10 @@ static void mlx4_ib_qp_event(struct mlx4
+ 			     mqp->flags & MLX4_IB_XRC_RCV)) {
+ 			event.event |= IB_XRC_QP_EVENT_FLAG;
+ 			event.element.xrc_qp_num = ibqp->qp_num;
++			spin_lock_irqsave(&mqp->xrc_reg_list_lock, flags);
+ 			list_for_each_entry(ctx_entry, &mqp->xrc_reg_list, list)
+ 				ibqp->event_handler(&event, ctx_entry->context);
++			spin_unlock_irqrestore(&mqp->xrc_reg_list_lock, flags);
+ 			return;
+ 		}
+ 		event.element.qp = ibqp;
+@@ -524,6 +527,7 @@ static int create_qp_common(struct mlx4_
+ 	mutex_init(&qp->mutex);
+ 	spin_lock_init(&qp->sq.lock);
+ 	spin_lock_init(&qp->rq.lock);
++	spin_lock_init(&qp->xrc_reg_list_lock);
+ 	INIT_LIST_HEAD(&qp->gid_list);
+ 
+ 	qp->state	 = IB_QPS_RESET;
+@@ -2310,6 +2314,7 @@ int mlx4_ib_create_xrc_rcv_qp(struct ib_
+ 	struct mlx4_ib_qp *qp;
+ 	struct ib_qp *ibqp;
+ 	struct mlx4_ib_xrc_reg_entry *ctx_entry;
++	unsigned long flags;
+ 	int err;
+ 
+ 	if (!(dev->dev->caps.flags & MLX4_DEV_CAP_FLAG_XRC))
+@@ -2352,7 +2357,9 @@ int mlx4_ib_create_xrc_rcv_qp(struct ib_
+ 
+ 	mutex_lock(&qp->mutex);
+ 	ctx_entry->context = init_attr->qp_context;
++	spin_lock_irqsave(&qp->xrc_reg_list_lock, flags);
+ 	list_add_tail(&ctx_entry->list, &qp->xrc_reg_list);
++	spin_unlock_irqrestore(&qp->xrc_reg_list_lock, flags);
+ 	mutex_unlock(&qp->mutex);
+ 	mutex_unlock(&dev->xrc_reg_mutex);
+ 	*qp_num = qp->mqp.qpn;
+@@ -2499,6 +2506,7 @@ int mlx4_ib_reg_xrc_rcv_qp(struct ib_xrc
+ 	struct mlx4_qp *mqp;
+ 	struct mlx4_ib_qp *mibqp;
+ 	struct mlx4_ib_xrc_reg_entry *ctx_entry, *tmp;
++	unsigned long flags;
+ 	int err = -EINVAL;
+ 
+ 	mutex_lock(&to_mdev(xrcd->device)->xrc_reg_mutex);
+@@ -2531,7 +2539,9 @@ int mlx4_ib_reg_xrc_rcv_qp(struct ib_xrc
+ 		}
+ 
+ 	ctx_entry->context = context;
++	spin_lock_irqsave(&mibqp->xrc_reg_list_lock, flags);
+ 	list_add_tail(&ctx_entry->list, &mibqp->xrc_reg_list);
++	spin_unlock_irqrestore(&mibqp->xrc_reg_list_lock, flags);
+ 	mutex_unlock(&mibqp->mutex);
+ 	mutex_unlock(&to_mdev(xrcd->device)->xrc_reg_mutex);
+ 	return 0;
+@@ -2549,6 +2559,7 @@ int mlx4_ib_unreg_xrc_rcv_qp(struct ib_x
+ 	struct mlx4_qp *mqp;
+ 	struct mlx4_ib_qp *mibqp;
+ 	struct mlx4_ib_xrc_reg_entry *ctx_entry, *tmp;
++	unsigned long flags;
+ 	int found = 0;
+ 	int err = -EINVAL;
+ 
+@@ -2567,14 +2578,18 @@ int mlx4_ib_unreg_xrc_rcv_qp(struct ib_x
+ 		goto err_out;
+ 
+ 	mutex_lock(&mibqp->mutex);
++	spin_lock_irqsave(&mibqp->xrc_reg_list_lock, flags);
+ 	list_for_each_entry_safe(ctx_entry, tmp, &mibqp->xrc_reg_list, list)
+ 		if (ctx_entry->context == context) {
+ 			found = 1;
+ 			list_del(&ctx_entry->list);
++			spin_unlock_irqrestore(&mibqp->xrc_reg_list_lock, flags);
+ 			kfree(ctx_entry);
+ 			break;
+ 		}
+ 
++	if (!found)
++		spin_unlock_irqrestore(&mibqp->xrc_reg_list_lock, flags);
+ 	mutex_unlock(&mibqp->mutex);
+ 	if (!found)
+ 		goto err_out;

@@ -1,0 +1,33 @@
+RDMA/cxgb3: wait at least one schedule cycle during device removal.
+
+During a hot-plug LLD removal event or an EEH error event, iw_cxgb3
+must ensure that any/all threads that might be in a cxgb3 exported function
+concurrently must return from the function before iw_cxgb3 returns from
+its event processing. Do this by calling synchronize_net().
+
+Signed-off-by: Steve Wise <swise@opengridcomputing.com>
+---
+
+ drivers/infiniband/hw/cxgb3/iwch.c |    2 ++
+ 1 files changed, 2 insertions(+), 0 deletions(-)
+
+diff --git a/drivers/infiniband/hw/cxgb3/iwch.c b/drivers/infiniband/hw/cxgb3/iwch.c
+index ee1d8b4..63f975f 100644
+--- a/drivers/infiniband/hw/cxgb3/iwch.c
++++ b/drivers/infiniband/hw/cxgb3/iwch.c
+@@ -189,6 +189,7 @@ static void close_rnic_dev(struct t3cdev *tdev)
+ 	list_for_each_entry_safe(dev, tmp, &dev_list, entry) {
+ 		if (dev->rdev.t3cdev_p == tdev) {
+ 			dev->rdev.flags = CXIO_ERROR_FATAL;
++			synchronize_net();
+ 			cancel_delayed_work_sync(&dev->db_drop_task);
+ 			list_del(&dev->entry);
+ 			iwch_unregister_device(dev);
+@@ -217,6 +218,7 @@ static void iwch_event_handler(struct t3cdev *tdev, u32 evt, u32 port_id)
+ 	switch (evt) {
+ 	case OFFLOAD_STATUS_DOWN: {
+ 		rdev->flags = CXIO_ERROR_FATAL;
++		synchronize_net();
+ 		event.event  = IB_EVENT_DEVICE_FATAL;
+ 		dispatch = 1;
+ 		break;

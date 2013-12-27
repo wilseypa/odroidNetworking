@@ -1,0 +1,32 @@
+--- a/drivers/infiniband/hw/ipath/ipath_qp.c	2009-02-23 11:47:54.000000000 -0800
++++ b/drivers/infiniband/hw/ipath/ipath_qp.c	2009-02-23 12:01:28.000000000 -0800
+@@ -378,9 +378,6 @@ static void clear_mr_refs(struct ipath_q
+ 	}
+ 
+ 	if (clr_sends) {
+-		n = qp->s_last <= qp->s_head ? qp->s_head - qp->s_last :
+-			qp->s_size - qp->s_last + qp->s_head;
+-
+ 		while (qp->s_last != qp->s_head) {
+ 			struct ipath_swqe *wqe = get_swqe_ptr(qp, qp->s_last);
+ 			unsigned i;
+@@ -411,6 +408,8 @@ static void clear_mr_refs(struct ipath_q
+ 
+ 			atomic_dec(&sge->mr->refcount);
+ 		}
++		e->opcode = 0;
++		e->rdma_sge.num_sge = 0;
+ 	}
+ }
+ 
+@@ -576,8 +575,9 @@ int ipath_modify_qp(struct ib_qp *ibqp, 
+ 			tasklet_kill(&qp->s_task);
+ 			wait_event(qp->wait_dma, !atomic_read(&qp->s_dma_busy));
+ 			spin_lock_irq(&qp->s_lock);
++			clear_mr_refs(qp, 1);
++			ipath_reset_qp(qp, ibqp->qp_type);
+ 		}
+-		ipath_reset_qp(qp, ibqp->qp_type);
+ 		break;
+ 
+ 	case IB_QPS_SQD:

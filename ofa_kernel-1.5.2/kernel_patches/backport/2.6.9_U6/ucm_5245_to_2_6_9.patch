@@ -1,0 +1,17 @@
+---
+ drivers/infiniband/core/ucm.c |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+Index: ofed_kernel/drivers/infiniband/core/ucm.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/core/ucm.c
++++ ofed_kernel/drivers/infiniband/core/ucm.c
+@@ -1263,7 +1263,7 @@ static void ib_ucm_add_one(struct ib_dev
+ 
+ 	ucm_dev->class_dev.class = &cm_class;
+ 	ucm_dev->class_dev.dev = device->dma_device;
+-	ucm_dev->class_dev.devt = ucm_dev->dev.dev;
++	/* ucm_dev->class_dev.devt = ucm_dev->dev.dev; */
+ 	ucm_dev->class_dev.release = ucm_release_class_dev;
+ 	snprintf(ucm_dev->class_dev.class_id, BUS_ID_SIZE, "ucm%d",
+ 		 ucm_dev->devnum);

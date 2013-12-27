@@ -1,0 +1,19 @@
+---
+ drivers/infiniband/ulp/iser/iscsi_iser.c |    3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+Index: ofed_kernel/drivers/infiniband/ulp/iser/iscsi_iser.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/iser/iscsi_iser.c
++++ ofed_kernel/drivers/infiniband/ulp/iser/iscsi_iser.c
+@@ -70,9 +70,8 @@
+ #include <scsi/scsi_tcq.h>
+ #include <scsi/scsi_host.h>
+ #include <scsi/scsi.h>
+-#include <scsi/scsi_transport_iscsi.h>
+-
+ #include "iscsi_iser.h"
++#include <scsi/scsi_transport_iscsi.h>
+ 
+ static unsigned int iscsi_max_lun = 512;
+ module_param_named(max_lun, iscsi_max_lun, uint, S_IRUGO);

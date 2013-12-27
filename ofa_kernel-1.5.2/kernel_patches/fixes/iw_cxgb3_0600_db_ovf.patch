@@ -1,0 +1,485 @@
+cxgb3/iw_cxgb3: doorbell overflow avoidance and recovery.
+
+From: Steve Wise <swise@opengridcomputing.com>
+
+T3 hardware doorbell fifo overflows can cause application stalls due to
+lost doorbell ring events.  This has been seen when running large NP IMB
+alltoall MPI jobs.  The T3 hardware supports an xon/xoff type control
+mechanism to help avoid overflowing the hw db fifo.
+
+This patch utilizes these interrupts to disable rdma qp db rings when
+we near an overflow condition, and then turn them back on (and ring all
+the active qp dbs) when when the db fifo emptys out.  In addition if an
+db ring is dropped by the hardware, the code will now recover.
+
+Design:
+
+cxgb3:
+
+- enable these DB interrupts
+
+- in the intr handler, schedule work tasks to call the ULPs event handlers
+with the new events.
+
+- ring all the qset txqs when an overflow is detected.
+
+iw_cxgb3:
+
+- disable db ringing on all active qps when we get the DB_FULL event
+
+- enable db ringing on all active qps and ring all active dbs when we get
+  the DB_EMPTY event
+
+- On DB_DROP event:
+       - disable db rings in the event handler
+
+       - delay-schedule a work task which rings and enables the dbs on
+         all active qps.
+
+- in post_send and post_recv logic, don't ring the db if its disabled.
+
+Signed-off-by: Steve Wise <swise@opengridcomputing.com>
+---
+
+ drivers/infiniband/hw/cxgb3/cxio_wr.h |   17 +++++++
+ drivers/infiniband/hw/cxgb3/iwch.c    |   79 +++++++++++++++++++++++++++++++--
+ drivers/infiniband/hw/cxgb3/iwch.h    |    2 +
+ drivers/infiniband/hw/cxgb3/iwch_qp.c |    9 +++-
+ drivers/net/cxgb3/adapter.h           |    5 ++
+ drivers/net/cxgb3/cxgb3_main.c        |   57 +++++++++++++++++++++++-
+ drivers/net/cxgb3/cxgb3_offload.h     |    5 ++
+ drivers/net/cxgb3/regs.h              |   16 +++++++
+ drivers/net/cxgb3/sge.c               |   15 +++++-
+ drivers/net/cxgb3/t3_hw.c             |    6 ++-
+ 10 files changed, 196 insertions(+), 15 deletions(-)
+
+
+diff --git a/drivers/infiniband/hw/cxgb3/cxio_wr.h b/drivers/infiniband/hw/cxgb3/cxio_wr.h
+index a197a5b..15073b2 100644
+--- a/drivers/infiniband/hw/cxgb3/cxio_wr.h
++++ b/drivers/infiniband/hw/cxgb3/cxio_wr.h
+@@ -730,7 +730,22 @@ struct t3_cq {
+ 
+ static inline void cxio_set_wq_in_error(struct t3_wq *wq)
+ {
+-	wq->queue->wq_in_err.err = 1;
++	wq->queue->wq_in_err.err |= 1;
++}
++
++static inline void cxio_disable_wq_db(struct t3_wq *wq)
++{
++	wq->queue->wq_in_err.err |= 2;
++}
++
++static inline void cxio_enable_wq_db(struct t3_wq *wq)
++{
++	wq->queue->wq_in_err.err &= ~2;
++}
++
++static inline int cxio_wq_db_enabled(struct t3_wq *wq)
++{
++	return !(wq->queue->wq_in_err.err & 2);
+ }
+ 
+ static inline struct t3_cqe *cxio_next_hw_cqe(struct t3_cq *cq)
+diff --git a/drivers/infiniband/hw/cxgb3/iwch.c b/drivers/infiniband/hw/cxgb3/iwch.c
+index b0ea010..6a3214a 100644
+--- a/drivers/infiniband/hw/cxgb3/iwch.c
++++ b/drivers/infiniband/hw/cxgb3/iwch.c
+@@ -65,6 +65,46 @@ struct cxgb3_client t3c_client = {
+ static LIST_HEAD(dev_list);
+ static DEFINE_MUTEX(dev_mutex);
+ 
++static int disable_qp_db(int id, void *p, void *data)
++{
++	struct iwch_qp *qhp = p;
++	
++	cxio_disable_wq_db(&qhp->wq);
++	return 0;
++}
++
++static int enable_qp_db(int id, void *p, void *data)
++{
++	struct iwch_qp *qhp = p;
++	
++	if (data)
++		ring_doorbell(qhp->rhp->rdev.ctrl_qp.doorbell, qhp->wq.qpid);
++	cxio_enable_wq_db(&qhp->wq);
++	return 0;
++}
++
++static void disable_dbs(struct iwch_dev *rnicp)
++{
++	spin_lock_irq(&rnicp->lock);
++	idr_for_each(&rnicp->qpidr, disable_qp_db, NULL);
++	spin_unlock_irq(&rnicp->lock);
++}
++
++static void enable_dbs(struct iwch_dev *rnicp, int ring_db)
++{
++	spin_lock_irq(&rnicp->lock);
++	idr_for_each(&rnicp->qpidr, enable_qp_db, 
++		     (void *)(unsigned long)ring_db);
++	spin_unlock_irq(&rnicp->lock);
++}
++
++static void iwch_db_drop_task(struct work_struct *work)
++{
++	struct iwch_dev *rnicp = container_of(work, struct iwch_dev,
++					      db_drop_task.work);
++	enable_dbs(rnicp, 1);
++}
++
+ static void rnic_init(struct iwch_dev *rnicp)
+ {
+ 	PDBG("%s iwch_dev %p\n", __func__,  rnicp);
+@@ -72,6 +112,7 @@ static void rnic_init(struct iwch_dev *rnicp)
+ 	idr_init(&rnicp->qpidr);
+ 	idr_init(&rnicp->mmidr);
+ 	spin_lock_init(&rnicp->lock);
++	INIT_DELAYED_WORK(&rnicp->db_drop_task, iwch_db_drop_task);
+ 
+ 	rnicp->attr.max_qps = T3_MAX_NUM_QP - 32;
+ 	rnicp->attr.max_wrs = T3_MAX_QP_DEPTH;
+@@ -147,6 +188,7 @@ static void close_rnic_dev(struct t3cdev *tdev)
+ 	mutex_lock(&dev_mutex);
+ 	list_for_each_entry_safe(dev, tmp, &dev_list, entry) {
+ 		if (dev->rdev.t3cdev_p == tdev) {
++			cancel_delayed_work_sync(&dev->db_drop_task);
+ 			list_del(&dev->entry);
+ 			iwch_unregister_device(dev);
+ 			cxio_rdev_close(&dev->rdev);
+@@ -165,7 +207,8 @@ static void iwch_event_handler(struct t3cdev *tdev, u32 evt, u32 port_id)
+ 	struct cxio_rdev *rdev = tdev->ulp;
+ 	struct iwch_dev *rnicp;
+ 	struct ib_event event;
+-	u32    portnum = port_id + 1;
++	u32 portnum = port_id + 1;
++	int dispatch = 0;
+ 
+ 	if (!rdev)
+ 		return;
+@@ -174,21 +217,49 @@ static void iwch_event_handler(struct t3cdev *tdev, u32 evt, u32 port_id)
+ 	case OFFLOAD_STATUS_DOWN: {
+ 		rdev->flags = CXIO_ERROR_FATAL;
+ 		event.event  = IB_EVENT_DEVICE_FATAL;
++		dispatch = 1;
+ 		break;
+ 		}
+ 	case OFFLOAD_PORT_DOWN: {
+ 		event.event  = IB_EVENT_PORT_ERR;
++		dispatch = 1;
+ 		break;
+ 		}
+ 	case OFFLOAD_PORT_UP: {
+ 		event.event  = IB_EVENT_PORT_ACTIVE;
++		dispatch = 1;
++		break;
++		}
++	case OFFLOAD_DB_FULL: {
++		disable_dbs(rnicp);
++		break;
++		}
++	case OFFLOAD_DB_EMPTY: {
++		enable_dbs(rnicp, 1);
++		break;
++		}
++	case OFFLOAD_DB_DROP: {
++		unsigned long delay = 1000;
++		unsigned short r;
++
++		disable_dbs(rnicp);
++		get_random_bytes(&r, 2);
++		delay += r & 1023;
++
++		/*
++		 * delay is between 1000-2023 usecs.
++		 */
++		schedule_delayed_work(&rnicp->db_drop_task, 
++			usecs_to_jiffies(delay));
+ 		break;
+ 		}
+ 	}
+ 
+-	event.device = &rnicp->ibdev;
+-	event.element.port_num = portnum;
+-	ib_dispatch_event(&event);
++	if (dispatch) {
++		event.device = &rnicp->ibdev;
++		event.element.port_num = portnum;
++		ib_dispatch_event(&event);
++	}
+ 
+ 	return;
+ }
+diff --git a/drivers/infiniband/hw/cxgb3/iwch.h b/drivers/infiniband/hw/cxgb3/iwch.h
+index 8473550..a1c4457 100644
+--- a/drivers/infiniband/hw/cxgb3/iwch.h
++++ b/drivers/infiniband/hw/cxgb3/iwch.h
+@@ -36,6 +36,7 @@
+ #include <linux/list.h>
+ #include <linux/spinlock.h>
+ #include <linux/idr.h>
++#include <linux/workqueue.h>
+ 
+ #include <rdma/ib_verbs.h>
+ 
+@@ -110,6 +111,7 @@ struct iwch_dev {
+ 	struct idr mmidr;
+ 	spinlock_t lock;
+ 	struct list_head entry;
++	struct delayed_work db_drop_task;
+ };
+ 
+ static inline struct iwch_dev *to_iwch_dev(struct ib_device *ibdev)
+diff --git a/drivers/infiniband/hw/cxgb3/iwch_qp.c b/drivers/infiniband/hw/cxgb3/iwch_qp.c
+index 3eb8cec..b4d893d 100644
+--- a/drivers/infiniband/hw/cxgb3/iwch_qp.c
++++ b/drivers/infiniband/hw/cxgb3/iwch_qp.c
+@@ -452,7 +452,8 @@ int iwch_post_send(struct ib_qp *ibqp, struct ib_send_wr *wr,
+ 		++(qhp->wq.sq_wptr);
+ 	}
+ 	spin_unlock_irqrestore(&qhp->lock, flag);
+-	ring_doorbell(qhp->wq.doorbell, qhp->wq.qpid);
++	if (cxio_wq_db_enabled(&qhp->wq))
++		ring_doorbell(qhp->wq.doorbell, qhp->wq.qpid);
+ 	return err;
+ }
+ 
+@@ -514,7 +515,8 @@ int iwch_post_receive(struct ib_qp *ibqp, struct ib_recv_wr *wr,
+ 		num_wrs--;
+ 	}
+ 	spin_unlock_irqrestore(&qhp->lock, flag);
+-	ring_doorbell(qhp->wq.doorbell, qhp->wq.qpid);
++	if (cxio_wq_db_enabled(&qhp->wq))
++		ring_doorbell(qhp->wq.doorbell, qhp->wq.qpid);
+ 	return err;
+ }
+ 
+@@ -597,7 +599,8 @@ int iwch_bind_mw(struct ib_qp *qp,
+ 	++(qhp->wq.sq_wptr);
+ 	spin_unlock_irqrestore(&qhp->lock, flag);
+ 
+-	ring_doorbell(qhp->wq.doorbell, qhp->wq.qpid);
++	if (cxio_wq_db_enabled(&qhp->wq))
++		ring_doorbell(qhp->wq.doorbell, qhp->wq.qpid);
+ 
+ 	return err;
+ }
+diff --git a/drivers/net/cxgb3/adapter.h b/drivers/net/cxgb3/adapter.h
+index 3e8618b..11d148c 100644
+--- a/drivers/net/cxgb3/adapter.h
++++ b/drivers/net/cxgb3/adapter.h
+@@ -263,6 +263,10 @@ struct adapter {
+ 	struct work_struct ext_intr_handler_task;
+ 	struct work_struct fatal_error_handler_task;
+ 	struct work_struct link_fault_handler_task;
++	
++	struct work_struct db_full_task;
++	struct work_struct db_empty_task;
++	struct work_struct db_drop_task;
+ 
+ 	struct dentry *debugfs_root;
+ 
+@@ -335,6 +339,7 @@ int t3_sge_alloc_qset(struct adapter *adapter, unsigned int id, int nports,
+ int t3_get_desc(const struct sge_qset *qs, unsigned int qnum, unsigned int idx,
+ 		unsigned char *data);
+ irqreturn_t t3_sge_intr_msix(int irq, void *cookie);
++extern struct workqueue_struct *cxgb3_wq;
+ 
+ int t3_get_edc_fw(struct cphy *phy, int edc_idx, int size);
+ 
+diff --git a/drivers/net/cxgb3/cxgb3_main.c b/drivers/net/cxgb3/cxgb3_main.c
+index 2aaa747..f47dc76 100644
+--- a/drivers/net/cxgb3/cxgb3_main.c
++++ b/drivers/net/cxgb3/cxgb3_main.c
+@@ -45,5 +45,6 @@
+ #include <linux/firmware.h>
+ #include <linux/log2.h>
++#include <linux/sched.h>
+ #include <asm/uaccess.h>
+ 
+ #include "common.h"
+@@ -140,7 +141,7 @@ MODULE_PARM_DESC(ofld_disable, "whether to enable offload at init time or not");
+  * will block keventd as it needs the rtnl lock, and we'll deadlock waiting
+  * for our work to complete.  Get our own work queue to solve this.
+  */
+-static struct workqueue_struct *cxgb3_wq;
++struct workqueue_struct *cxgb3_wq;
+ 
+ /**
+  *	link_report - show link status and link speed/duplex
+@@ -590,6 +591,18 @@ static void setup_rss(struct adapter *adap)
+ 		      V_RRCPLCPUSIZE(6) | F_HASHTOEPLITZ, cpus, rspq_map);
+ }
+ 
++static void ring_dbs(struct adapter *adap)
++{
++	int i, j;
++
++	for (i = 0; i < SGE_QSETS; i++) {
++		struct sge_qset *qs = &adap->sge.qs[i];
++
++		for (j=0; j < SGE_TXQ_PER_SET; j++)
++			t3_write_reg(adap, A_SG_KDOORBELL, F_SELEGRCNTX | V_EGRCNTX(qs->txq[j].cntxt_id));
++	}
++}
++
+ static void init_napi(struct adapter *adap)
+ {
+ 	int i;
+@@ -2778,6 +2792,42 @@ static void t3_adap_check_task(struct work_struct *work)
+ 	spin_unlock_irq(&adapter->work_lock);
+ }
+ 
++static void db_full_task(struct work_struct *work)
++{
++	struct adapter *adapter = container_of(work, struct adapter,
++					       db_full_task);
++
++	cxgb3_event_notify(&adapter->tdev, OFFLOAD_DB_FULL, 0);
++}
++
++static void db_empty_task(struct work_struct *work)
++{
++	struct adapter *adapter = container_of(work, struct adapter,
++					       db_empty_task);
++
++	cxgb3_event_notify(&adapter->tdev, OFFLOAD_DB_EMPTY, 0);
++}
++
++static void db_drop_task(struct work_struct *work)
++{
++	struct adapter *adapter = container_of(work, struct adapter,
++					       db_drop_task);
++	unsigned long delay = 1000;
++	unsigned short r;
++
++	cxgb3_event_notify(&adapter->tdev, OFFLOAD_DB_DROP, 0);
++
++	/* 
++	 * Sleep a while before ringing the driver qset dbs.
++	 * The delay is between 1000-2023 usecs.
++	 */
++	get_random_bytes(&r, 2);
++	delay += r & 1023;
++	set_current_state(TASK_UNINTERRUPTIBLE);
++	schedule_timeout(usecs_to_jiffies(delay));
++	ring_dbs(adapter);
++}
++
+ /*
+  * Processes external (PHY) interrupts in process context.
+  */
+@@ -3246,6 +3296,11 @@ static int __devinit init_one(struct pci_dev *pdev,
+ 	INIT_LIST_HEAD(&adapter->adapter_list);
+ 	INIT_WORK(&adapter->ext_intr_handler_task, ext_intr_task);
+ 	INIT_WORK(&adapter->fatal_error_handler_task, fatal_error_task);
++
++	INIT_WORK(&adapter->db_full_task, db_full_task);
++	INIT_WORK(&adapter->db_empty_task, db_empty_task);
++	INIT_WORK(&adapter->db_drop_task, db_drop_task);
++
+ 	INIT_DELAYED_WORK(&adapter->adap_check_task, t3_adap_check_task);
+ 
+ 	for (i = 0; i < ai->nports0 + ai->nports1; ++i) {
+diff --git a/drivers/net/cxgb3/cxgb3_offload.h b/drivers/net/cxgb3/cxgb3_offload.h
+index 670aa62..929c298 100644
+--- a/drivers/net/cxgb3/cxgb3_offload.h
++++ b/drivers/net/cxgb3/cxgb3_offload.h
+@@ -73,7 +73,10 @@ enum {
+ 	OFFLOAD_STATUS_UP,
+ 	OFFLOAD_STATUS_DOWN,
+ 	OFFLOAD_PORT_DOWN,
+-	OFFLOAD_PORT_UP
++	OFFLOAD_PORT_UP,
++	OFFLOAD_DB_FULL,
++	OFFLOAD_DB_EMPTY,
++	OFFLOAD_DB_DROP
+ };
+ 
+ struct cxgb3_client {
+diff --git a/drivers/net/cxgb3/regs.h b/drivers/net/cxgb3/regs.h
+index 1b5327b..cb42353 100644
+--- a/drivers/net/cxgb3/regs.h
++++ b/drivers/net/cxgb3/regs.h
+@@ -254,6 +254,22 @@
+ #define V_LOPIODRBDROPERR(x) ((x) << S_LOPIODRBDROPERR)
+ #define F_LOPIODRBDROPERR    V_LOPIODRBDROPERR(1U)
+ 
++#define S_HIPRIORITYDBFULL    7
++#define V_HIPRIORITYDBFULL(x) ((x) << S_HIPRIORITYDBFULL)
++#define F_HIPRIORITYDBFULL    V_HIPRIORITYDBFULL(1U)
++
++#define S_HIPRIORITYDBEMPTY   6
++#define V_HIPRIORITYDBEMPTY(x) ((x) << S_HIPRIORITYDBEMPTY)
++#define F_HIPRIORITYDBEMPTY    V_HIPRIORITYDBEMPTY(1U)
++
++#define S_LOPRIORITYDBFULL    5
++#define V_LOPRIORITYDBFULL(x) ((x) << S_LOPRIORITYDBFULL)
++#define F_LOPRIORITYDBFULL    V_LOPRIORITYDBFULL(1U)
++
++#define S_LOPRIORITYDBEMPTY   4
++#define V_LOPRIORITYDBEMPTY(x) ((x) << S_LOPRIORITYDBEMPTY)
++#define F_LOPRIORITYDBEMPTY    V_LOPRIORITYDBEMPTY(1U)
++
+ #define S_RSPQDISABLED    3
+ #define V_RSPQDISABLED(x) ((x) << S_RSPQDISABLED)
+ #define F_RSPQDISABLED    V_RSPQDISABLED(1U)
+diff --git a/drivers/net/cxgb3/sge.c b/drivers/net/cxgb3/sge.c
+index bdbd147..08978ad 100644
+--- a/drivers/net/cxgb3/sge.c
++++ b/drivers/net/cxgb3/sge.c
+@@ -42,6 +42,7 @@
+ #include "sge_defs.h"
+ #include "t3_cpl.h"
+ #include "firmware_exports.h"
++#include "cxgb3_offload.h"
+ 
+ #define USE_GTS 0
+ 
+@@ -2828,9 +2829,17 @@ void t3_sge_err_intr_handler(struct adapter *adapter)
+ 			 "(0x%x)\n", (v >> S_RSPQ0DISABLED) & 0xff);
+ 	}
+ 
+-	if (status & (F_HIPIODRBDROPERR | F_LOPIODRBDROPERR))
+-		CH_ALERT(adapter, "SGE dropped %s priority doorbell\n",
+-			 status & F_HIPIODRBDROPERR ? "high" : "lo");
++	if (status & (F_HIPIODRBDROPERR | F_LOPIODRBDROPERR)) {
++		queue_work(cxgb3_wq, &adapter->db_drop_task);
++	}
++
++	if (status & (F_HIPRIORITYDBFULL | F_LOPRIORITYDBFULL)) {
++		queue_work(cxgb3_wq, &adapter->db_full_task);
++	}
++
++	if (status & (F_HIPRIORITYDBEMPTY | F_LOPRIORITYDBEMPTY)) {
++		queue_work(cxgb3_wq, &adapter->db_empty_task);
++	}
+ 
+ 	t3_write_reg(adapter, A_SG_INT_CAUSE, status);
+ 	if (status &  SGE_FATALERR)
+diff --git a/drivers/net/cxgb3/t3_hw.c b/drivers/net/cxgb3/t3_hw.c
+index 032cfe0..13fb567 100644
+--- a/drivers/net/cxgb3/t3_hw.c
++++ b/drivers/net/cxgb3/t3_hw.c
+@@ -1432,7 +1432,10 @@ static int t3_handle_intr_status(struct adapter *adapter, unsigned int reg,
+ 		       F_IRPARITYERROR | V_ITPARITYERROR(M_ITPARITYERROR) | \
+ 		       V_FLPARITYERROR(M_FLPARITYERROR) | F_LODRBPARITYERROR | \
+ 		       F_HIDRBPARITYERROR | F_LORCQPARITYERROR | \
+-		       F_HIRCQPARITYERROR)
++		       F_HIRCQPARITYERROR | F_LOPRIORITYDBFULL | \
++		       F_HIPRIORITYDBFULL | F_LOPRIORITYDBEMPTY | \
++		       F_HIPRIORITYDBEMPTY | F_HIPIODRBDROPERR | \
++		       F_LOPIODRBDROPERR)
+ #define MC5_INTR_MASK (F_PARITYERR | F_ACTRGNFULL | F_UNKNOWNCMD | \
+ 		       F_REQQPARERR | F_DISPQPARERR | F_DELACTEMPTY | \
+ 		       F_NFASRCHFAIL)
+@@ -2475,7 +2478,6 @@ int t3_sge_cqcntxt_op(struct adapter *adapter, unsigned int id, unsigned int op,
+ 	if (op >= 2 && op < 7) {
+ 		if (adapter->params.rev > 0)
+ 			return G_CQ_INDEX(val);
+-
+ 		t3_write_reg(adapter, A_SG_CONTEXT_CMD,
+ 			     V_CONTEXT_CMD_OPCODE(0) | F_CQ | V_CONTEXT(id));
+ 		if (t3_wait_op_done(adapter, A_SG_CONTEXT_CMD,

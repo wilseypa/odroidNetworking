@@ -1,0 +1,28 @@
+Backports: SDP fix rx_comp_work and dreq_wait_timeout cleaning on socket close
+
+Kernels 2.6.21 and earlier do not have cancel_work_sync().
+    
+Signed-off-by: Amir Vadai <amirv@mellanox.co.il>
+
+Index: ofed_kernel-2.6.21/drivers/infiniband/ulp/sdp/sdp_main.c
+===================================================================
+--- ofed_kernel-2.6.21.orig/drivers/infiniband/ulp/sdp/sdp_main.c
++++ ofed_kernel-2.6.21/drivers/infiniband/ulp/sdp/sdp_main.c
+@@ -958,7 +958,7 @@ void sdp_cancel_dreq_wait_timeout(struct
+ 	sdp_dbg(&ssk->isk.sk, "cancelling dreq wait timeout\n");
+ 
+ 	ssk->dreq_wait_timeout = 0;
+-	if (cancel_delayed_work_sync(&ssk->dreq_wait_work)) {
++	if (cancel_delayed_work(&ssk->dreq_wait_work)) {
+ 		/* The timeout hasn't reached - need to clean ref count */
+ 		sock_put(&ssk->isk.sk, SOCK_REF_DREQ_TO);
+ 	}
+@@ -978,7 +978,7 @@ static void sdp_destroy_work(struct work
+ 	/* Can be sure that rx_comp_work won't be queued from here cause
+ 	 * ssk->rx_ring.cq is NULL from here
+ 	 */
+-	cancel_work_sync(&ssk->rx_comp_work);
++ 	flush_workqueue(rx_comp_wq);
+ 
+ 	memset((void *)&ssk->id, 0, sizeof(*ssk) - offsetof(typeof(*ssk), id));
+ 

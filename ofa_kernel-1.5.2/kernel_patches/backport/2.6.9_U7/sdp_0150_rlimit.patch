@@ -1,0 +1,24 @@
+Index: ofed_1_5/drivers/infiniband/ulp/sdp/sdp_zcopy.c
+===================================================================
+--- ofed_1_5.orig/drivers/infiniband/ulp/sdp/sdp_zcopy.c
++++ ofed_1_5/drivers/infiniband/ulp/sdp/sdp_zcopy.c
+@@ -408,7 +408,7 @@ static unsigned long sdp_get_max_memlock
+ 	if (capable(CAP_IPC_LOCK))
+ 		return ULONG_MAX;
+ 
+-	lock_limit = current->signal->rlim[RLIMIT_MEMLOCK].rlim_cur;
++	lock_limit = current->rlim[RLIMIT_MEMLOCK].rlim_cur;
+ 	avail = lock_limit - (current->mm->locked_vm << PAGE_SHIFT);
+ 
+ 	return avail - offset;
+@@ -449,8 +449,8 @@ static int sdp_alloc_fmr(struct sock *sk
+ 		rc = PTR_ERR(umem);
+ 		sdp_warn(sk, "Error doing umem_get 0x%lx bytes: %d\n", len, rc);
+ 		sdp_warn(sk, "RLIMIT_MEMLOCK: 0x%lx[cur] 0x%lx[max] CAP_IPC_LOCK: %d\n",
+-				current->signal->rlim[RLIMIT_MEMLOCK].rlim_cur,
+-				current->signal->rlim[RLIMIT_MEMLOCK].rlim_max,
++				current->rlim[RLIMIT_MEMLOCK].rlim_cur,
++				current->rlim[RLIMIT_MEMLOCK].rlim_max,
+ 				capable(CAP_IPC_LOCK));
+ 		goto err_umem_get;
+ 	}

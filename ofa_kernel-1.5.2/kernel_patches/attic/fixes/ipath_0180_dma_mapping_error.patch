@@ -1,0 +1,13 @@
+Index: ofa_kernel-1.4/drivers/infiniband/hw/ipath/ipath_sdma.c
+===================================================================
+--- ofa_kernel-1.4.orig/drivers/infiniband/hw/ipath/ipath_sdma.c	2009-01-25 20:28:14.000000000 -0800
++++ ofa_kernel-1.4/drivers/infiniband/hw/ipath/ipath_sdma.c	2009-01-25 20:38:20.000000000 -0800
+@@ -739,7 +739,7 @@ retry:
+ 		dw = (len + 3) >> 2;
+ 		addr = dma_map_single(&dd->pcidev->dev, sge->vaddr, dw << 2,
+ 				      DMA_TO_DEVICE);
+-		if (dma_mapping_error(addr))
++		if (dma_mapping_error(&dd->pcidev->dev, addr))
+ 			goto unmap;
+ 		make_sdma_desc(dd, sdmadesc, (u64) addr, dw, dwoffset);
+ 		/* SDmaUseLargeBuf has to be set in every descriptor */

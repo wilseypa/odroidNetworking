@@ -1,0 +1,202 @@
+Only in a/drivers/infiniband/hw/ipath: .ipath_ruc.c.swp
+diff -up a/drivers/infiniband/hw/ipath/ipath_kernel.h b/drivers/infiniband/hw/ipath/ipath_kernel.h
+--- a/drivers/infiniband/hw/ipath/ipath_kernel.h	2009-02-27 11:48:31.000000000 -0800
++++ b/drivers/infiniband/hw/ipath/ipath_kernel.h	2009-03-02 18:15:57.000000000 -0800
+@@ -210,7 +210,6 @@ struct ipath_sdma_txreq {
+ 	};
+ 	void              (*callback)(void *, int);
+ 	void               *callback_cookie;
+-	int                 callback_status;
+ 	u16                 start_idx;  /* sdma private */
+ 	u16                 next_descq_idx;  /* sdma private */
+ 	struct list_head    list;       /* sdma private */
+@@ -522,9 +521,7 @@ struct ipath_devdata {
+ 	u16                   ipath_sdma_reset_wait;
+ 	u8                    ipath_sdma_generation;
+ 	struct tasklet_struct ipath_sdma_abort_task;
+-	struct tasklet_struct ipath_sdma_notify_task;
+ 	struct list_head      ipath_sdma_activelist;
+-	struct list_head      ipath_sdma_notifylist;
+ 	atomic_t              ipath_sdma_vl15_count;
+ 	struct timer_list     ipath_sdma_vl15_timer;
+ 
+diff -up a/drivers/infiniband/hw/ipath/ipath_sdma.c b/drivers/infiniband/hw/ipath/ipath_sdma.c
+--- a/drivers/infiniband/hw/ipath/ipath_sdma.c	2009-03-03 11:24:26.000000000 -0800
++++ b/drivers/infiniband/hw/ipath/ipath_sdma.c	2009-03-03 17:43:02.000000000 -0800
+@@ -131,76 +131,28 @@ int ipath_sdma_make_progress(struct ipat
+ 			dd->ipath_sdma_descq_head = 0;
+ 
+ 		if (txp && txp->next_descq_idx == dd->ipath_sdma_descq_head) {
+-			/* move to notify list */
++			/* remove from active list */
++			list_del_init(&txp->list);
++			if (txp->callback)
++				(*txp->callback)(txp->callback_cookie,
++						 IPATH_SDMA_TXREQ_S_OK);
+ 			if (txp->flags & IPATH_SDMA_TXREQ_F_VL15)
+ 				vl15_watchdog_deq(dd);
+-			list_move_tail(lp, &dd->ipath_sdma_notifylist);
+ 			if (!list_empty(&dd->ipath_sdma_activelist)) {
+ 				lp = dd->ipath_sdma_activelist.next;
+ 				txp = list_entry(lp, struct ipath_sdma_txreq,
+ 						 list);
+ 				start_idx = txp->start_idx;
+-			} else {
+-				lp = NULL;
++			} else
+ 				txp = NULL;
+-			}
+ 		}
+ 		progress = 1;
+ 	}
+ 
+-	if (progress)
+-		tasklet_hi_schedule(&dd->ipath_sdma_notify_task);
+-
+ done:
+ 	return progress;
+ }
+ 
+-static void ipath_sdma_notify(struct ipath_devdata *dd, struct list_head *list)
+-{
+-	struct ipath_sdma_txreq *txp, *txp_next;
+-
+-	list_for_each_entry_safe(txp, txp_next, list, list) {
+-		list_del_init(&txp->list);
+-
+-		if (txp->callback)
+-			(*txp->callback)(txp->callback_cookie,
+-					 txp->callback_status);
+-	}
+-}
+-
+-static void sdma_notify_taskbody(struct ipath_devdata *dd)
+-{
+-	unsigned long flags;
+-	struct list_head list;
+-
+-	INIT_LIST_HEAD(&list);
+-
+-	spin_lock_irqsave(&dd->ipath_sdma_lock, flags);
+-
+-	list_splice_init(&dd->ipath_sdma_notifylist, &list);
+-
+-	spin_unlock_irqrestore(&dd->ipath_sdma_lock, flags);
+-
+-	ipath_sdma_notify(dd, &list);
+-
+-	/*
+-	 * The IB verbs layer needs to see the callback before getting
+-	 * the call to ipath_ib_piobufavail() because the callback
+-	 * handles releasing resources the next send will need.
+-	 * Otherwise, we could do these calls in
+-	 * ipath_sdma_make_progress().
+-	 */
+-	ipath_ib_piobufavail(dd->verbs_dev);
+-}
+-
+-static void sdma_notify_task(unsigned long opaque)
+-{
+-	struct ipath_devdata *dd = (struct ipath_devdata *)opaque;
+-
+-	if (!test_bit(IPATH_SDMA_SHUTDOWN, &dd->ipath_sdma_status))
+-		sdma_notify_taskbody(dd);
+-}
+-
+ static void dump_sdma_state(struct ipath_devdata *dd)
+ {
+ 	unsigned long reg;
+@@ -258,7 +210,6 @@ static void sdma_abort_task(unsigned lon
+ 	if (status == IPATH_SDMA_ABORT_ABORTED) {
+ 		struct ipath_sdma_txreq *txp, *txpnext;
+ 		u64 hwstatus;
+-		int notify = 0;
+ 
+ 		hwstatus = ipath_read_kreg64(dd,
+ 				dd->ipath_kregs->kr_senddmastatus);
+@@ -280,14 +231,13 @@ static void sdma_abort_task(unsigned lon
+ 		/* dequeue all "sent" requests */
+ 		list_for_each_entry_safe(txp, txpnext,
+ 					 &dd->ipath_sdma_activelist, list) {
+-			txp->callback_status = IPATH_SDMA_TXREQ_S_ABORTED;
++			list_del_init(&txp->list);
++			if (txp->callback)
++				(*txp->callback)(txp->callback_cookie,
++						 IPATH_SDMA_TXREQ_S_ABORTED);
+ 			if (txp->flags & IPATH_SDMA_TXREQ_F_VL15)
+ 				vl15_watchdog_deq(dd);
+-			list_move_tail(&txp->list, &dd->ipath_sdma_notifylist);
+-			notify = 1;
+ 		}
+-		if (notify)
+-			tasklet_hi_schedule(&dd->ipath_sdma_notify_task);
+ 
+ 		/* reset our notion of head and tail */
+ 		dd->ipath_sdma_descq_tail = 0;
+@@ -480,10 +430,7 @@ int setup_sdma(struct ipath_devdata *dd)
+ 			 senddmabufmask[2]);
+ 
+ 	INIT_LIST_HEAD(&dd->ipath_sdma_activelist);
+-	INIT_LIST_HEAD(&dd->ipath_sdma_notifylist);
+ 
+-	tasklet_init(&dd->ipath_sdma_notify_task, sdma_notify_task,
+-		     (unsigned long) dd);
+ 	tasklet_init(&dd->ipath_sdma_abort_task, sdma_abort_task,
+ 		     (unsigned long) dd);
+ 
+@@ -520,7 +467,6 @@ void teardown_sdma(struct ipath_devdata 
+ 	spin_unlock_irqrestore(&dd->ipath_sdma_lock, flags);
+ 
+ 	tasklet_kill(&dd->ipath_sdma_abort_task);
+-	tasklet_kill(&dd->ipath_sdma_notify_task);
+ 
+ 	/* turn off sdma */
+ 	spin_lock_irqsave(&dd->ipath_sendctrl_lock, flags);
+@@ -534,15 +480,15 @@ void teardown_sdma(struct ipath_devdata 
+ 	/* dequeue all "sent" requests */
+ 	list_for_each_entry_safe(txp, txpnext, &dd->ipath_sdma_activelist,
+ 				 list) {
+-		txp->callback_status = IPATH_SDMA_TXREQ_S_SHUTDOWN;
++		list_del_init(&txp->list);
++		if (txp->callback)
++			(*txp->callback)(txp->callback_cookie,
++					 IPATH_SDMA_TXREQ_S_SHUTDOWN);
+ 		if (txp->flags & IPATH_SDMA_TXREQ_F_VL15)
+ 			vl15_watchdog_deq(dd);
+-		list_move_tail(&txp->list, &dd->ipath_sdma_notifylist);
+ 	}
+ 	spin_unlock_irqrestore(&dd->ipath_sdma_lock, flags);
+ 
+-	sdma_notify_taskbody(dd);
+-
+ 	del_timer_sync(&dd->ipath_sdma_vl15_timer);
+ 
+ 	spin_lock_irqsave(&dd->ipath_sdma_lock, flags);
+@@ -787,13 +733,12 @@ retry:
+ 		descqp[0] |= __constant_cpu_to_le64(1ULL << 15);
+ 	}
+ 
++	tx->txreq.next_descq_idx = tail;
++	dd->ipath_sdma_descq_tail = tail;
+ 	/* Commit writes to memory and advance the tail on the chip */
+ 	wmb();
+ 	ipath_write_kreg(dd, dd->ipath_kregs->kr_senddmatail, tail);
+ 
+-	tx->txreq.next_descq_idx = tail;
+-	tx->txreq.callback_status = IPATH_SDMA_TXREQ_S_OK;
+-	dd->ipath_sdma_descq_tail = tail;
+ 	dd->ipath_sdma_descq_added += tx->txreq.sg_count;
+ 	list_add_tail(&tx->txreq.list, &dd->ipath_sdma_activelist);
+ 	if (tx->txreq.flags & IPATH_SDMA_TXREQ_F_VL15)
+diff -up a/drivers/infiniband/hw/ipath/ipath_verbs.c b/drivers/infiniband/hw/ipath/ipath_verbs.c
+--- a/drivers/infiniband/hw/ipath/ipath_verbs.c	2009-02-27 11:48:31.000000000 -0800
++++ b/drivers/infiniband/hw/ipath/ipath_verbs.c	2009-03-03 14:49:29.000000000 -0800
+@@ -1083,6 +1083,8 @@ static void sdma_complete(void *cookie, 
+ 
+ 	if (atomic_dec_and_test(&qp->refcount))
+ 		wake_up(&qp->wait);
++
++	ipath_ib_piobufavail(dev);
+ }
+ 
+ static void decrement_dma_busy(struct ipath_qp *qp)

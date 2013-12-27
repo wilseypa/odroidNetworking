@@ -1,0 +1,52 @@
+commit 033a666ccb842ab4134fcd0c861d5ba9f5d6bf3a
+
+From: David Howells <dhowells@redhat.com>
+
+NFSD: Don't hold unrefcounted creds over call to nfsd_setuser()
+
+    nfsd_open() gets an unrefcounted pointer to the current process's effective
+    credentials at the top of the function, then calls nfsd_setuser() via
+    fh_verify() - which may replace and destroy the current process's effective
+    credentials - and then passes the unrefcounted pointer to dentry_open() - but
+    the credentials may have been destroyed by this point.
+
+    Instead, the value from current_cred() should be passed directly to
+    dentry_open() as one of its arguments, rather than being cached in a variable.
+
+    Possibly fh_verify() should return the creds to use.
+
+    This is a regression introduced by
+    745ca2475a6ac596e3d8d37c2759c0fbe2586227 "CRED: Pass credentials through
+    dentry_open()".
+
+    Signed-off-by: David Howells <dhowells@redhat.com>
+    Tested-and-Verified-By: Steve Dickson <steved@redhat.com>
+    Cc: stable@kernel.org
+    Signed-off-by: J. Bruce Fields <bfields@citi.umich.edu>
+---
+
+ fs/nfsd/vfs.c |    3 +--
+ 1 files changed, 1 insertions(+), 2 deletions(-)
+
+
+diff --git a/fs/nfsd/vfs.c b/fs/nfsd/vfs.c
+index b660435..7843755 100644
+--- a/fs/nfsd/vfs.c
++++ b/fs/nfsd/vfs.c
+@@ -677,7 +677,6 @@ __be32
+ nfsd_open(struct svc_rqst *rqstp, struct svc_fh *fhp, int type,
+ 			int access, struct file **filp)
+ {
+-	const struct cred *cred = current_cred();
+ 	struct dentry	*dentry;
+ 	struct inode	*inode;
+ 	int		flags = O_RDONLY|O_LARGEFILE;
+@@ -732,7 +731,7 @@ nfsd_open(struct svc_rqst *rqstp, struct svc_fh *fhp, int type,
+ 		vfs_dq_init(inode);
+ 	}
+ 	*filp = dentry_open(dget(dentry), mntget(fhp->fh_export->ex_path.mnt),
+-			    flags, cred);
++			    flags, current_cred());
+ 	if (IS_ERR(*filp))
+ 		host_err = PTR_ERR(*filp);
+ out_nfserr:

@@ -1,0 +1,14 @@
+Index: ofed_kernel/drivers/infiniband/core/sysfs.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/core/sysfs.c	2009-12-17 10:05:07.000000000 +0200
++++ ofed_kernel/drivers/infiniband/core/sysfs.c	2009-12-17 10:39:43.000000000 +0200
+@@ -767,8 +767,8 @@
+ 	int i;
+ 
+ 	class_dev->class      = &ib_class;
+-	class_dev->driver_data = device;
+ 	class_dev->parent     = device->dma_device;
++	dev_set_drvdata(class_dev, device);
+ 	dev_set_name(class_dev, device->name);
+ 
+ 	INIT_LIST_HEAD(&device->port_list);

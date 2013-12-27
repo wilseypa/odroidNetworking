@@ -1,0 +1,15 @@
+diff --git a/drivers/infiniband/hw/nes/nes_verbs.c b/drivers/infiniband/hw/nes/nes_verbs.c
+index 6b0ba3a..53408cf 100644
+--- a/drivers/infiniband/hw/nes/nes_verbs.c
++++ b/drivers/infiniband/hw/nes/nes_verbs.c
+@@ -585,7 +585,9 @@ static int nes_query_port(struct ib_devi
+ 	props->lmc = 0;
+ 	props->sm_lid = 0;
+ 	props->sm_sl = 0;
+-	if (nesvnic->linkup)
++	if (netif_queue_stopped(netdev))
++		props->state = IB_PORT_DOWN;
++	else if (nesvnic->linkup)
+ 		props->state = IB_PORT_ACTIVE;
+ 	else
+ 		props->state = IB_PORT_DOWN;

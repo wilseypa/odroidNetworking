@@ -1,0 +1,323 @@
+# $Id: Makefile 9120 2006-08-28 13:01:07Z vlad $
+
+all:
+.PHONY: all kernel install_kernel install clean clean_kernel
+.PHONY: install_kernel_iscsi
+.PHONY: install_kernel_cxgb3
+.PHONY: install_kernel_rds
+.PHONY: install_kernel_nfsrdma
+.PHONY: install_kernel_mlx4
+	
+.DELETE_ON_ERROR:
+
+include ./configure.mk.kernel
+include ./config.mk
+
+DEPMOD  = /sbin/depmod
+
+ifeq ($(CONFIG_MEMTRACK),m)
+        export KERNEL_MEMTRACK_CFLAGS = -include $(CWD)/drivers/infiniband/debug/mtrack.h
+else
+        export KERNEL_MEMTRACK_CFLAGS =
+endif
+
+ifeq ($(CONFIG_NFS_FS),m)
+	export KERNEL_NFS_FS_CFLAGS = -I$(CWD)/include-nfs
+else
+	export KERNEL_NFS_FS_CFLAGS = 
+endif
+
+export OPEN_ISCSI_MODULES = iscsi_tcp.ko libiscsi.ko scsi_transport_iscsi.ko
+
+configure.mk.kernel:
+	@echo Please run ./configure
+	@exit 1
+
+all: kernel
+
+install: install_kernel
+install_kernel: install_modules
+
+ifeq ($(CONFIG_CHELSIO_T3),m)
+install_kernel: install_kernel_cxgb3
+endif
+
+ifeq ($(CONFIG_SUNRPC_XPRT_RDMA),m)
+install_kernel: install_kernel_nfsrdma
+endif
+
+ifeq ($(CONFIG_RDS),m)
+install_kernel: install_kernel_rds
+endif
+
+ifeq ($(CONFIG_MLX4_CORE),m)
+install_kernel: install_kernel_mlx4
+endif
+
+ifeq ($(CONFIG_INFINIBAND),m)
+install_kernel:   install_kernel_infiniband
+endif
+
+autoconf_h=$(shell /bin/ls -1 $(KSRC)/include/*/autoconf.h)
+
+V ?= 1
+
+#########################
+#	make kernel	#
+#########################
+#NB: The LINUXINCLUDE value comes from main kernel Makefile
+#    with local directories prepended. This eventually affects
+#    CPPFLAGS in the kernel Makefile
+kernel:
+	@echo "Building kernel modules"
+	@echo "Kernel version: $(KVERSION)"
+	@echo "Modules directory: $(DESTDIR)/$(MODULES_DIR)"
+	@echo "Kernel sources: $(KSRC)"
+	env CWD=$(CWD) BACKPORT_INCLUDES=$(BACKPORT_INCLUDES) \
+		$(MAKE) -C $(KSRC) SUBDIRS="$(CWD)" \
+		V=$(V) $(WITH_MAKE_PARAMS) \
+		CONFIG_MEMTRACK=$(CONFIG_MEMTRACK) \
+		CONFIG_DEBUG_INFO=$(CONFIG_DEBUG_INFO) \
+		CONFIG_INFINIBAND=$(CONFIG_INFINIBAND) \
+		CONFIG_INFINIBAND_IPOIB=$(CONFIG_INFINIBAND_IPOIB) \
+		CONFIG_INFINIBAND_IPOIB_CM=$(CONFIG_INFINIBAND_IPOIB_CM) \
+		CONFIG_INFINIBAND_SDP=$(CONFIG_INFINIBAND_SDP) \
+		CONFIG_INFINIBAND_SRP=$(CONFIG_INFINIBAND_SRP) \
+		CONFIG_INFINIBAND_SRPT=$(CONFIG_INFINIBAND_SRPT) \
+		CONFIG_INFINIBAND_USER_MAD=$(CONFIG_INFINIBAND_USER_MAD) \
+		CONFIG_INFINIBAND_USER_ACCESS=$(CONFIG_INFINIBAND_USER_ACCESS) \
+		CONFIG_INFINIBAND_USER_MEM=$(CONFIG_INFINIBAND_USER_MEM) \
+		CONFIG_INFINIBAND_ADDR_TRANS=$(CONFIG_INFINIBAND_ADDR_TRANS) \
+		CONFIG_INFINIBAND_MTHCA=$(CONFIG_INFINIBAND_MTHCA) \
+		CONFIG_INFINIBAND_IPOIB_DEBUG=$(CONFIG_INFINIBAND_IPOIB_DEBUG) \
+		CONFIG_INFINIBAND_ISER=$(CONFIG_INFINIBAND_ISER) \
+		CONFIG_SCSI_ISCSI_ATTRS=$(CONFIG_SCSI_ISCSI_ATTRS) \
+		CONFIG_ISCSI_TCP=$(CONFIG_ISCSI_TCP) \
+		CONFIG_INFINIBAND_EHCA=$(CONFIG_INFINIBAND_EHCA) \
+		CONFIG_INFINIBAND_EHCA_SCALING=$(CONFIG_INFINIBAND_EHCA_SCALING) \
+		CONFIG_RDS=$(CONFIG_RDS) \
+		CONFIG_RDS_RDMA=$(CONFIG_RDS_RDMA) \
+		CONFIG_RDS_TCP=$(CONFIG_RDS_TCP) \
+		CONFIG_RDS_DEBUG=$(CONFIG_RDS_DEBUG) \
+		CONFIG_INFINIBAND_IPOIB_DEBUG_DATA=$(CONFIG_INFINIBAND_IPOIB_DEBUG_DATA) \
+		CONFIG_INFINIBAND_SDP_SEND_ZCOPY=$(CONFIG_INFINIBAND_SDP_SEND_ZCOPY) \
+		CONFIG_INFINIBAND_SDP_RECV_ZCOPY=$(CONFIG_INFINIBAND_SDP_RECV_ZCOPY) \
+		CONFIG_INFINIBAND_SDP_DEBUG=$(CONFIG_INFINIBAND_SDP_DEBUG) \
+		CONFIG_INFINIBAND_SDP_DEBUG_DATA=$(CONFIG_INFINIBAND_SDP_DEBUG_DATA) \
+		CONFIG_INFINIBAND_IPATH=$(CONFIG_INFINIBAND_IPATH) \
+		CONFIG_INFINIBAND_QIB=$(CONFIG_INFINIBAND_QIB) \
+		CONFIG_INFINIBAND_MTHCA_DEBUG=$(CONFIG_INFINIBAND_MTHCA_DEBUG) \
+		CONFIG_INFINIBAND_MADEYE=$(CONFIG_INFINIBAND_MADEYE) \
+		CONFIG_INFINIBAND_QLGC_VNIC=$(CONFIG_INFINIBAND_QLGC_VNIC) \
+		CONFIG_INFINIBAND_QLGC_VNIC_DEBUG=$(CONFIG_INFINIBAND_QLGC_VNIC_DEBUG) \
+		CONFIG_INFINIBAND_QLGC_VNIC_STATS=$(CONFIG_INFINIBAND_QLGC_VNIC_STATS) \
+		CONFIG_CHELSIO_T3=$(CONFIG_CHELSIO_T3) \
+		CONFIG_INFINIBAND_CXGB3=$(CONFIG_INFINIBAND_CXGB3) \
+		CONFIG_INFINIBAND_CXGB3_DEBUG=$(CONFIG_INFINIBAND_CXGB3_DEBUG) \
+		CONFIG_INFINIBAND_NES=$(CONFIG_INFINIBAND_NES) \
+		CONFIG_INFINIBAND_NES_DEBUG=$(CONFIG_INFINIBAND_NES_DEBUG) \
+		CONFIG_MLX4_CORE=$(CONFIG_MLX4_CORE) \
+		CONFIG_MLX4_EN=$(CONFIG_MLX4_EN) \
+		CONFIG_MLX4_INFINIBAND=$(CONFIG_MLX4_INFINIBAND) \
+		CONFIG_MLX4_ETHERNET=$(CONFIG_MLX4_ETHERNET) \
+		CONFIG_MLX4_DEBUG=$(CONFIG_MLX4_DEBUG) \
+		CONFIG_INFINIBAND_RXE=$(CONFIG_INFINIBAND_RXE) \
+		CONFIG_INFINIBAND_AMSO1100=$(CONFIG_INFINIBAND_AMSO1100) \
+		CONFIG_SUNRPC_XPRT_RDMA=$(CONFIG_SUNRPC_XPRT_RDMA) \
+		CONFIG_SUNRPC=$(CONFIG_SUNRPC) \
+		CONFIG_SUNRPC_GSS=$(CONFIG_SUNRPC_GSS) \
+		CONFIG_RPCSEC_GSS_KRB5=$(CONFIG_RPCSEC_GSS_KRB5) \
+		CONFIG_RPCSEC_GSS_SPKM3=$(CONFIG_RPCSEC_GSS_SPKM3) \
+		CONFIG_NFS_FS=$(CONFIG_NFS_FS) \
+		CONFIG_NFS_V3=$(CONFIG_NFS_V3) \
+		CONFIG_NFS_V3_ACL=$(CONFIG_NFS_V3_ACL) \
+		CONFIG_NFS_V4=$(CONFIG_NFS_V4) \
+		CONFIG_NFS_ACL_SUPPORT=$(CONFIG_NFS_ACL_SUPPORT) \
+		CONFIG_NFS_DIRECTIO=$(CONFIG_NFS_DIRECTIO) \
+		CONFIG_EXPORTFS=$(CONFIG_EXPORTFS)\
+		CONFIG_LOCKD=$(CONFIG_LOCKD) \
+		CONFIG_LOCKD_V4=$(CONFIG_LOCKD_V4) \
+		CONFIG_NFSD=$(CONFIG_NFSD) \
+		CONFIG_NFSD_V2_ACL=$(CONFIG_NFSD_V2_ACL) \
+		CONFIG_NFSD_V3=$(CONFIG_NFSD_V3) \
+		CONFIG_NFSD_V3_ACL=$(CONFIG_NFSD_V3_ACL) \
+		CONFIG_NFSD_V4=$(CONFIG_NFSD_V4) \
+		CONFIG_NFSD_RDMA=$(CONFIG_NFSD_RDMA) \
+		LINUXINCLUDE=' \
+		-D__OFED_BUILD__ \
+		-include $(autoconf_h) \
+		-include $(CWD)/include/linux/autoconf.h \
+		$(BACKPORT_INCLUDES) \
+		$(KERNEL_MEMTRACK_CFLAGS) \
+		$(KERNEL_NFS_FS_CFLAGS) \
+		$(OPENIB_KERNEL_EXTRA_CFLAGS) \
+		-I$(CWD)/include \
+		-I$(CWD)/drivers/infiniband/debug \
+		-I/usr/local/include/scst \
+		-I$(CWD)/drivers/infiniband/ulp/srpt \
+		-I$(CWD)/drivers/net/cxgb3 \
+		-I$$(srctree)/arch/$$(hdr-arch)/include \
+		-Iinclude \
+		$$(if $$(KBUILD_SRC),-Iinclude2 -I$$(srctree)/include) \
+		-I$$(srctree)/arch/$$(SRCARCH)/include \
+		-include $(autoconf_h) \
+		' \
+		modules
+
+
+#########################
+#	Install kernel	#
+#########################
+install_modules:
+	@echo "Installing kernel modules"
+
+	$(MAKE) -C $(KSRC) SUBDIRS="$(CWD)" \
+		INSTALL_MOD_PATH=$(CWD) \
+		$(WITH_MAKE_PARAMS) modules_install;
+
+install_kernel_infiniband: install_modules
+	# Copy new infiniband kernel modules to $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/infiniband
+	if [ -d $(CWD)/lib/modules/$(KVERSION)/infiniband ]; then \
+		/bin/rm -rf $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/infiniband; \
+		mkdir -p $(DESTDIR)/$(MODULES_DIR)/kernel/drivers; \
+		mv $(CWD)/lib/modules/$(KVERSION)/infiniband $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/; \
+	fi;
+	if [ -d $(CWD)/lib/modules/$(KVERSION)/extra/drivers/infiniband ]; then \
+		/bin/rm -rf $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/infiniband; \
+		mkdir -p $(DESTDIR)/$(MODULES_DIR)/kernel/drivers; \
+		mv $(CWD)/lib/modules/$(KVERSION)/extra/drivers/infiniband $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/; \
+	elif [ -d $(CWD)/lib/modules/$(KVERSION)/extra ]; then \
+		/bin/rm -rf $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/infiniband; \
+		mkdir -p $(DESTDIR)/$(MODULES_DIR)/kernel/drivers; \
+		mv $(CWD)/lib/modules/$(KVERSION)/extra $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/infiniband; \
+	fi;
+
+	if [ ! -n "$(DESTDIR)" ]; then $(DEPMOD) -r -ae $(KVERSION);fi;
+
+install_kernel_iscsi: install_modules
+	# Backup original open-iscsi kernel modules
+	# under 'prefix'/backup directory
+	if [ -d $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/scsi ]; then \
+	        for open_iscsi_module in $(OPEN_ISCSI_MODULES); \
+	        do \
+	                (/bin/rm -f $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/scsi/$$open_iscsi_module ); \
+	        done; \
+	fi;
+
+	# Copy new open-iscsi kernel modules to $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/scsi     
+	if [ -d $(CWD)/lib/modules/$(KVERSION)/scsi ]; then \
+	        mkdir -p $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/scsi; \
+	        for open_iscsi_module in $(OPEN_ISCSI_MODULES); \
+	        do \
+	                (mv $(CWD)/lib/modules/$(KVERSION)/scsi/$$open_iscsi_module $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/scsi/ ); \
+	        done; \
+	fi; \
+	if [ -d $(CWD)/lib/modules/$(KVERSION)/extra/drivers/scsi ]; then \
+	        mkdir -p $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/scsi; \
+	        for open_iscsi_module in $(OPEN_ISCSI_MODULES); \
+	        do \
+	                (mv $(CWD)/lib/modules/$(KVERSION)/extra/drivers/scsi/$$open_iscsi_module $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/scsi/ ); \
+	        done; \
+	elif [ -d $(CWD)/lib/modules/$(KVERSION)/extra ]; then \
+	        mkdir -p $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/scsi; \
+	        for open_iscsi_module in $(OPEN_ISCSI_MODULES); \
+	        do \
+	                (mv $(CWD)/lib/modules/$(KVERSION)/extra/$$open_iscsi_module $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/scsi/ ); \
+	        done; \
+	fi;
+	
+	if [ ! -n "$(DESTDIR)" ]; then $(DEPMOD) -r -ae $(KVERSION);fi;
+
+install_kernel_nfsrdma: install_modules
+	# backup all the modules
+	# Copy new nfs rdma kernel modules to $(DESTDIR)/$(MODULES_DIR)/kernel
+	NFSRDMA_PATHS="fs/nfs fs/nfsd fs/lockd fs/exportfs fs/nfs_common net/sunrpc net/sunrpc/xprtrdma net/sunrpc/auth_gss"; \
+	NFSRDMA_MODS="net/sunrpc/auth_gss/auth_rpcgss.ko net/sunrpc/auth_gss/rpcsec_gss_krb5.ko net/sunrpc/auth_gss/rpcsec_gss_spkm3.ko fs/exportfs/exportfs.ko fs/lockd/lockd.ko fs/nfs_common/nfs_acl.ko fs/nfsd/nfsd.ko fs/nfs/nfs.ko net/sunrpc/sunrpc.ko net/sunrpc/xprtrdma/svcrdma.ko net/sunrpc/xprtrdma/xprtrdma.ko"; \
+	if [ -d $(CWD)/lib/modules/$(KVERSION)/net/sunrpc/xprtrdma ]; then \
+		for each_path in $$NFSRDMA_PATHS; do \
+			mkdir -p $(DESTDIR)/$(MODULES_DIR)/kernel/$$each_path; \
+		done; \
+		for each_module in $$NFSRDMA_MODS; do \
+			mv $(CWD)/lib/modules/$(KVERSION)/$$each_module $(DESTDIR)/$(MODULES_DIR)/kernel/$$each_module; \
+		done; \
+	fi; \
+	if [ -d $(CWD)/lib/modules/$(KVERSION)/extra/net/sunrpc ]; then \
+		for each_path in $$NFSRDMA_PATHS; do \
+			mkdir -p $(DESTDIR)/$(MODULES_DIR)/kernel/$$each_path; \
+		done; \
+		for each_module in $$NFSRDMA_MODS; do \
+			mv $(CWD)/lib/modules/$(KVERSION)/extra/$$each_module $(DESTDIR)/$(MODULES_DIR)/kernel/$$each_module; \
+		done; \
+	fi;
+	if [ ! -n "$(DESTDIR)" ]; then $(DEPMOD) -r -ae $(KVERSION); fi;
+
+install_kernel_cxgb3: install_modules
+	# Copy new cxgb3 kernel module to $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/net/cxgb3     
+	if [ -d $(CWD)/lib/modules/$(KVERSION)/drivers/net/cxgb3 ]; then \
+		mkdir -p $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/net/cxgb3; \
+		mv $(CWD)/lib/modules/$(KVERSION)/drivers/net/cxgb3/cxgb3.ko $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/net/cxgb3; \
+	fi; \
+	if [ -d $(CWD)/lib/modules/$(KVERSION)/extra/drivers/net/cxgb3 ]; then \
+		mkdir -p $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/net/cxgb3; \
+		mv $(CWD)/lib/modules/$(KVERSION)/extra/drivers/net/cxgb3/cxgb3.ko $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/net/cxgb3/ ; \
+	elif [ -d $(CWD)/lib/modules/$(KVERSION)/extra ]; then \
+		mkdir -p $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/net/cxgb3; \
+		mv $(CWD)/lib/modules/$(KVERSION)/extra/cxgb3.ko $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/net/cxgb3/ ; \
+	fi;
+	
+	if [ ! -n "$(DESTDIR)" ]; then $(DEPMOD) -r -ae $(KVERSION);fi;
+
+install_kernel_mlx4: install_modules
+	# Copy new mlx4 kernel module to $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/net/mlx4
+	if [ -d $(CWD)/lib/modules/$(KVERSION)/drivers/net/mlx4 ]; then \
+		mkdir -p $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/net/mlx4; \
+		mv $(CWD)/lib/modules/$(KVERSION)/drivers/net/mlx4/mlx4*.ko $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/net/mlx4; \
+	fi; \
+	if [ -d $(CWD)/lib/modules/$(KVERSION)/extra/drivers/net/mlx4 ]; then \
+		mkdir -p $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/net/mlx4; \
+		mv $(CWD)/lib/modules/$(KVERSION)/extra/drivers/net/mlx4/mlx4*.ko $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/net/mlx4/ ; \
+	elif [ -d $(CWD)/lib/modules/$(KVERSION)/extra ]; then \
+		mkdir -p $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/net/mlx4; \
+		mv $(CWD)/lib/modules/$(KVERSION)/extra/mlx4*.ko $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/net/mlx4/ ; \
+	fi;
+	
+	if [ ! -n "$(DESTDIR)" ]; then $(DEPMOD) -r -ae $(KVERSION);fi;
+
+install_kernel_rds: install_modules
+	# Copy new rds kernel module to $(DESTDIR)/$(MODULES_DIR)/kernel/drivers/net/rds     
+	if [ -d $(CWD)/lib/modules/$(KVERSION)/kernel/net/rds ]; then \
+		mkdir -p $(DESTDIR)/$(MODULES_DIR)/kernel/net/rds; \
+		mv $(CWD)/lib/modules/$(KVERSION)/kernel/net/rds/rds*.ko $(DESTDIR)/$(MODULES_DIR)/kernel/net/rds; \
+	fi; \
+	if [ -d $(CWD)/lib/modules/$(KVERSION)/extra/net/rds ]; then \
+		mkdir -p $(DESTDIR)/$(MODULES_DIR)/kernel/net/rds; \
+		mv $(CWD)/lib/modules/$(KVERSION)/extra/net/rds/rds*.ko $(DESTDIR)/$(MODULES_DIR)/kernel/net/rds/ ; \
+	elif [ -d $(CWD)/lib/modules/$(KVERSION)/extra ]; then \
+		mkdir -p $(DESTDIR)/$(MODULES_DIR)/kernel/net/rds; \
+		mv $(CWD)/lib/modules/$(KVERSION)/extra/rds*.ko $(DESTDIR)/$(MODULES_DIR)/kernel/net/rds/ ; \
+	fi;
+	
+	if [ ! -n "$(DESTDIR)" ]; then $(DEPMOD) -r -ae $(KVERSION);fi;
+
+clean: clean_kernel
+
+clean_kernel:
+	$(MAKE) -C $(KSRC) SUBDIRS="$(CWD)" $(WITH_MAKE_PARAMS) clean
+
+help:
+	@echo
+	@echo kernel: 		        build kernel modules
+	@echo all: 		        build kernel modules
+	@echo
+	@echo install_kernel:	        install kernel modules under $(DESTDIR)/$(MODULES_DIR)
+	@echo install_kernel_infiniband:install kernel modules under $(DESTDIR)/$(MODULES_DIR)
+	@echo install_kernel_iscsi:     install iSCSI kernel modules under $(DESTDIR)/$(MODULES_DIR)
+	@echo install_kernel_cxgb3:    	install cxgb3 kernel module under $(DESTDIR)/$(MODULES_DIR)
+	@echo install_kernel_mlx4:    	install mlx4 kernel module under $(DESTDIR)/$(MODULES_DIR)
+	@echo install_kernel_rds:    	install rds kernel module under $(DESTDIR)/$(MODULES_DIR)
+	@echo install_kernel_nfsrdma:  	install nfsrdma kernel modules under $(DESTDIR)/$(MODULES_DIR)
+	@echo install:	        	run install_kernel
+	@echo
+	@echo clean:	        	delete kernel modules binaries
+	@echo clean_kernel:	        delete kernel modules binaries
+	@echo

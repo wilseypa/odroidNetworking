@@ -1,0 +1,29 @@
+svcrdma: Fix rq_respages start computation
+
+From: Tom Tucker <tom@ogc.us>
+
+The rq_respages start address computation is off by 1 in
+rdma_read_complete. This can cause a response to run off the end of the
+allocated array.
+
+Signed-off-by: David Wilder <dwilder@us.ibm.com>
+Signed-off-by: Tom Tucker <tom@ogc.us>
+---
+
+ net/sunrpc/xprtrdma/svc_rdma_recvfrom.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+
+diff --git a/net/sunrpc/xprtrdma/svc_rdma_recvfrom.c b/net/sunrpc/xprtrdma/svc_rdma_recvfrom.c
+index 42a6f9f..8ea0f86 100644
+--- a/net/sunrpc/xprtrdma/svc_rdma_recvfrom.c
++++ b/net/sunrpc/xprtrdma/svc_rdma_recvfrom.c
+@@ -543,7 +543,7 @@ static int rdma_read_complete(struct svc_rqst *rqstp,
+ 	rqstp->rq_arg.page_base = head->arg.page_base;
+ 
+ 	/* rq_respages starts after the last arg page */
+-	rqstp->rq_respages = &rqstp->rq_arg.pages[page_no];
++	rqstp->rq_respages = &rqstp->rq_pages[head->count];
+ 	rqstp->rq_resused = 0;
+ 
+ 	/* Rebuild rq_arg head and tail. */

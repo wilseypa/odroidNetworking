@@ -1,0 +1,19 @@
+IB/mlx4: fix post_recv wq overflow check 
+
+the post recv flow should check wq overflow using the recv and not the send cq
+
+Signed-off-by: Or Gerlitz <ogerlitz@voltaire.com>
+
+Index: ofed_kernel-fixes/drivers/infiniband/hw/mlx4/qp.c
+===================================================================
+--- ofed_kernel-fixes.orig/drivers/infiniband/hw/mlx4/qp.c	2009-12-24 14:47:11.000000000 +0200
++++ ofed_kernel-fixes/drivers/infiniband/hw/mlx4/qp.c	2009-12-24 14:52:31.000000000 +0200
+@@ -1936,7 +1936,7 @@ int mlx4_ib_post_recv(struct ib_qp *ibqp
+ 	ind = qp->rq.head & (qp->rq.wqe_cnt - 1);
+ 
+ 	for (nreq = 0; wr; ++nreq, wr = wr->next) {
+-		if (mlx4_wq_overflow(&qp->rq, nreq, qp->ibqp.send_cq)) {
++		if (mlx4_wq_overflow(&qp->rq, nreq, qp->ibqp.recv_cq)) {
+ 			mlx4_ib_dbg("QP 0x%x: WQE overflow", ibqp->qp_num);
+ 			err = -ENOMEM;
+ 			*bad_wr = wr;

@@ -1,0 +1,28 @@
+IB/qib: Hooks for adding the QIB driver into the framework
+    
+Signed-off-by: Yannick Cote <yannick.cote@qlogic.com>
+
+diff --git a/drivers/infiniband/Kconfig b/drivers/infiniband/Kconfig
+index ace3c5e..0a2ef11 100644
+--- a/drivers/infiniband/Kconfig
++++ b/drivers/infiniband/Kconfig
+@@ -42,6 +42,7 @@ config INFINIBAND_ADDR_TRANS
+
+ source "drivers/infiniband/hw/mthca/Kconfig"
+ source "drivers/infiniband/hw/ipath/Kconfig"
++source "drivers/infiniband/hw/qib/Kconfig"
+ source "drivers/infiniband/hw/ehca/Kconfig"
+ source "drivers/infiniband/hw/amso1100/Kconfig"
+ source "drivers/infiniband/hw/cxgb3/Kconfig"
+diff --git a/drivers/infiniband/Makefile b/drivers/infiniband/Makefile
+index 510968d..ea5dbe0 100644
+--- a/drivers/infiniband/Makefile
++++ b/drivers/infiniband/Makefile
+@@ -1,6 +1,7 @@
+ obj-$(CONFIG_INFINIBAND)		+= core/
+ obj-$(CONFIG_INFINIBAND_MTHCA)		+= hw/mthca/
+ obj-$(CONFIG_INFINIBAND_IPATH)		+= hw/ipath/
++obj-$(CONFIG_INFINIBAND_QIB)		+= hw/qib/
+ obj-$(CONFIG_INFINIBAND_EHCA)		+= hw/ehca/
+ obj-$(CONFIG_INFINIBAND_AMSO1100)	+= hw/amso1100/
+ obj-$(CONFIG_INFINIBAND_CXGB3)		+= hw/cxgb3/

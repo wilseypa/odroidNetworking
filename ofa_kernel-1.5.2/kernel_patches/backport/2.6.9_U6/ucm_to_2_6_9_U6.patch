@@ -1,0 +1,65 @@
+--- a/drivers/infiniband/core/ucm.c	2008-12-09 15:07:37.000000000 +0200
++++ b/drivers/infiniband/core/ucm.c	2008-12-09 15:00:49.000000000 +0200
+@@ -1226,6 +1226,11 @@ static struct file_operations ucm_fops =
+ 	.poll    = ib_ucm_poll,
+ };
+ 
++static struct class ucm_class = {
++	.name    = "infiniband_ucm",
++	.release = ucm_release_class_dev
++};
++
+ static ssize_t show_ibdev(struct class_device *class_dev, char *buf)
+ {
+ 	struct ib_ucm_device *dev;
+@@ -1261,10 +1266,9 @@ static void ib_ucm_add_one(struct ib_dev
+ 	if (cdev_add(&ucm_dev->dev, IB_UCM_BASE_DEV + ucm_dev->devnum, 1))
+ 		goto err;
+ 
+-	ucm_dev->class_dev.class = &cm_class;
++	ucm_dev->class_dev.class = &ucm_class;
+ 	ucm_dev->class_dev.dev = device->dma_device;
+ 	/* ucm_dev->class_dev.devt = ucm_dev->dev.dev; */
+-	ucm_dev->class_dev.release = ucm_release_class_dev;
+ 	snprintf(ucm_dev->class_dev.class_id, BUS_ID_SIZE, "ucm%d",
+ 		 ucm_dev->devnum);
+ 	if (class_device_register(&ucm_dev->class_dev))
+@@ -1314,12 +1318,18 @@ static int __init ib_ucm_init(void)
+ 		goto error1;
+ 	}
+ 
+-	ret = class_create_file(&cm_class, &class_attr_abi_version);
++	ret = class_register(&ucm_class);
+ 	if (ret) {
+-		printk(KERN_ERR "ucm: couldn't create abi_version attribute\n");
++		printk(KERN_ERR "ucm: couldn't create class infiniband_cm\n");
+ 		goto error2;
+ 	}
+ 
++	ret = class_create_file(&ucm_class, &class_attr_abi_version);
++	if (ret) {
++		printk(KERN_ERR "ucm: couldn't create abi_version attribute\n");
++		goto error3;
++	}
++
+ 	ret = ib_register_client(&ucm_client);
+ 	if (ret) {
+ 		printk(KERN_ERR "ucm: couldn't register client\n");
+@@ -1328,7 +1338,7 @@ static int __init ib_ucm_init(void)
+ 	return 0;
+ 
+ error3:
+-	class_remove_file(&cm_class, &class_attr_abi_version);
++	class_unregister(&ucm_class);
+ error2:
+ 	unregister_chrdev_region(IB_UCM_BASE_DEV, IB_UCM_MAX_DEVICES);
+ error1:
+@@ -1338,7 +1348,7 @@ error1:
+ static void __exit ib_ucm_cleanup(void)
+ {
+ 	ib_unregister_client(&ucm_client);
+-	class_remove_file(&cm_class, &class_attr_abi_version);
++	class_unregister(&ucm_class);
+ 	unregister_chrdev_region(IB_UCM_BASE_DEV, IB_UCM_MAX_DEVICES);
+ 	idr_destroy(&ctx_id_table);
+ }

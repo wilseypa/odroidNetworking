@@ -1,0 +1,64 @@
+---
+ drivers/scsi/libiscsi.c |    8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+Index: ofed_kernel/drivers/scsi/libiscsi.c
+===================================================================
+--- ofed_kernel.orig/drivers/scsi/libiscsi.c
++++ ofed_kernel/drivers/scsi/libiscsi.c
+@@ -968,12 +968,14 @@ int iscsi_eh_host_reset(struct scsi_cmnd
+ 	struct iscsi_conn *conn = session->leadconn;
+ 	int fail_session = 0;
+ 
++	spin_unlock_irq(host->host_lock);
+ 	spin_lock_bh(&session->lock);
+ 	if (session->state == ISCSI_STATE_TERMINATE) {
+ failed:
+ 		debug_scsi("failing host reset: session terminated "
+ 			   "[CID %d age %d]\n", conn->id, session->age);
+ 		spin_unlock_bh(&session->lock);
++		spin_lock_irq(host->host_lock);
+ 		return FAILED;
+ 	}
+ 
+@@ -1005,6 +1007,7 @@ failed:
+ 	else
+ 		goto failed;
+ 	spin_unlock_bh(&session->lock);
++	spin_lock_irq(host->host_lock);
+ 
+ 	return SUCCESS;
+ }
+@@ -1162,13 +1165,16 @@ int iscsi_eh_abort(struct scsi_cmnd *sc)
+ 	struct iscsi_conn *conn;
+ 	struct iscsi_session *session;
+ 	int rc;
++	struct Scsi_Host *shost = sc->device->host;
+ 
++	spin_unlock_irq(shost->host_lock);
+ 	/*
+ 	 * if session was ISCSI_STATE_IN_RECOVERY then we may not have
+ 	 * got the command.
+ 	 */
+ 	if (!sc->SCp.ptr) {
+ 		debug_scsi("sc never reached iscsi layer or it completed.\n");
++		spin_lock_irq(shost->host_lock);
+ 		return SUCCESS;
+ 	}
+ 
+@@ -1253,6 +1259,7 @@ success_cleanup:
+ 
+ success_rel_mutex:
+ 	mutex_unlock(&conn->xmitmutex);
++	spin_lock_irq(shost->host_lock);
+ 	return SUCCESS;
+ 
+ failed:
+@@ -1260,6 +1267,7 @@ failed:
+ 	mutex_unlock(&conn->xmitmutex);
+ 
+ 	debug_scsi("abort failed [sc %lx itt 0x%x]\n", (long)sc, ctask->itt);
++	spin_lock_irq(shost->host_lock);
+ 	return FAILED;
+ }
+ EXPORT_SYMBOL_GPL(iscsi_eh_abort);

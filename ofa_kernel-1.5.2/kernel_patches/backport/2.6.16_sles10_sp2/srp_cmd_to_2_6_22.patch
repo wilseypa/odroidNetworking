@@ -1,0 +1,79 @@
+---
+ drivers/infiniband/ulp/srp/ib_srp.c |   33 +++++++++++++++++++++++++++++----
+ drivers/infiniband/ulp/srp/ib_srp.h |    5 +++++
+ 2 files changed, 34 insertions(+), 4 deletions(-)
+
+Index: ofed_kernel/drivers/infiniband/ulp/srp/ib_srp.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/srp/ib_srp.c
++++ ofed_kernel/drivers/infiniband/ulp/srp/ib_srp.c
+@@ -510,6 +510,9 @@ static void srp_unmap_data(struct scsi_c
+ 			   struct srp_target_port *target,
+ 			   struct srp_request *req)
+ {
++	struct scatterlist *scat;
++	int nents;
++
+ 	if (!scsi_sglist(scmnd) ||
+ 	    (scmnd->sc_data_direction != DMA_TO_DEVICE &&
+ 	     scmnd->sc_data_direction != DMA_FROM_DEVICE))
+@@ -520,8 +523,20 @@ static void srp_unmap_data(struct scsi_c
+ 		req->fmr = NULL;
+ 	}
+ 
+-	ib_dma_unmap_sg(target->srp_host->srp_dev->dev, scsi_sglist(scmnd),
+-			scsi_sg_count(scmnd), scmnd->sc_data_direction);
++	/*
++	 * This handling of non-SG commands can be killed when the
++	 * SCSI midlayer no longer generates non-SG commands.
++	 */
++	if (likely(scsi_sg_count(scmnd))) {
++		nents = scsi_sg_count(scmnd);
++		scat  = scsi_sglist(scmnd);
++	} else {
++		nents = 1;
++		scat  = &req->fake_sg;
++	}
++
++	ib_dma_unmap_sg(target->srp_host->srp_dev->dev, scat, nents,
++			scmnd->sc_data_direction);
+ }
+ 
+ static void srp_remove_req(struct srp_target_port *target, struct srp_request *req)
+@@ -721,8 +736,18 @@ static int srp_map_data(struct scsi_cmnd
+ 		return -EINVAL;
+ 	}
+ 
+-	nents = scsi_sg_count(scmnd);
+-	scat  = scsi_sglist(scmnd);
++	/*
++	 * This handling of non-SG commands can be killed when the
++	 * SCSI midlayer no longer generates non-SG commands.
++	 */
++	if (likely(scsi_sg_count(scmnd))) {
++		nents = scsi_sg_count(scmnd);
++		scat  = scsi_sglist(scmnd);
++	} else {
++		nents = 1;
++		scat  = &req->fake_sg;
++		sg_init_one(scat, scmnd->request_buffer, scmnd->request_bufflen);
++	}
+ 
+ 	dev = target->srp_host->srp_dev;
+ 	ibdev = dev->dev;
+Index: ofed_kernel/drivers/infiniband/ulp/srp/ib_srp.h
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/srp/ib_srp.h
++++ ofed_kernel/drivers/infiniband/ulp/srp/ib_srp.h
+@@ -111,6 +111,11 @@ struct srp_request {
+ 	struct srp_iu	       *cmd;
+ 	struct srp_iu	       *tsk_mgmt;
+ 	struct ib_pool_fmr     *fmr;
++	/*
++	 * Fake scatterlist used when scsi_sg_count(scmnd)==0.  Can be killed
++	 * when the SCSI midlayer no longer generates non-SG commands.
++	 */
++	struct scatterlist	fake_sg;
+ 	struct completion	done;
+ 	short			index;
+ 	u8			cmd_done;

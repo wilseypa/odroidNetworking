@@ -1,0 +1,30 @@
+From 8f0cd5a57db8486b86714e4a9506dfc906e47fe0 Mon Sep 17 00:00:00 2001
+From: Eli Cohen <eli@mellanox.co.il>
+Date: Wed, 26 May 2010 10:30:04 +0300
+Subject: [PATCH] mlx4_en: use net_device dev_id to indicate port number
+
+Today, there are no means to know which port of a hardware device a netdev
+interface uses. struct net_device conatins a field, dev_id, that can be used
+for that. Use this field to save the port number in ConnectX that is being used
+by the net device; port numbers are zero based.
+
+Signed-off-by: Eli Cohen <eli@mellanox.co.il>
+---
+ drivers/net/mlx4/en_netdev.c |    1 +
+ 1 files changed, 1 insertions(+), 0 deletions(-)
+
+diff --git a/drivers/net/mlx4/en_netdev.c b/drivers/net/mlx4/en_netdev.c
+index 6c2b15b..ab1d480 100644
+--- a/drivers/net/mlx4/en_netdev.c
++++ b/drivers/net/mlx4/en_netdev.c
+@@ -978,6 +978,7 @@ int mlx4_en_init_netdev(struct mlx4_en_dev *mdev, int port,
+ 	}
+ 
+ 	SET_NETDEV_DEV(dev, &mdev->dev->pdev->dev);
++	dev->dev_id =  port - 1;
+ 
+ 	/*
+ 	 * Initialize driver private data
+-- 
+1.7.1
+

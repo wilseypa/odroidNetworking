@@ -1,0 +1,29 @@
+commit e73984bf07f4dc54f9c3274d715b47d8cb5aea34
+Author: Andy Grover <andy.grover@oracle.com>
+Date:   Fri Jul 17 12:37:25 2009 -0700
+
+    RDS backport patch for pre-2.6.24
+    
+    Signed-off-by: Andy Grover <andy.grover@oracle.com>
+
+diff --git a/net/rds/af_rds.c b/net/rds/af_rds.c
+index 20cf16f..2f38de5 100644
+--- a/net/rds/af_rds.c
++++ b/net/rds/af_rds.c
+@@ -409,14 +409,14 @@ static int __rds_create(struct socket *sock, struct sock *sk, int protocol)
+ 	return 0;
+ }
+ 
+-static int rds_create(struct net *net, struct socket *sock, int protocol)
++static int rds_create(struct socket *sock, int protocol)
+ {
+ 	struct sock *sk;
+ 
+ 	if (sock->type != SOCK_SEQPACKET || protocol)
+ 		return -ESOCKTNOSUPPORT;
+ 
+-	sk = sk_alloc(net, AF_RDS, GFP_ATOMIC, &rds_proto);
++	sk = sk_alloc(AF_RDS, GFP_ATOMIC, &rds_proto, 1);
+ 	if (!sk)
+ 		return -ENOMEM;
+ 

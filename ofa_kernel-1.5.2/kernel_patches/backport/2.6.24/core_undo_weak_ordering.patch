@@ -1,0 +1,83 @@
+From 91f5e350089e023d485e42e6f30a7fcf28ea394c Mon Sep 17 00:00:00 2001
+From: Eli Cohen <eli@mellanox.co.il>
+Date: Tue, 28 Oct 2008 10:19:24 +0200
+Subject: [PATCH] Revert "ib_core: Use weak ordering for data registered memory"
+
+This reverts commit 4beb8b521a750990346adf47f549c7db5fd50893.
+
+Doing this for backports since the original patch requires API
+available in kernel 2.6.27 and newer.
+
+Signed-off-by: Eli Cohen <eli@mellanox.co.il>
+---
+ drivers/infiniband/core/umem.c |   12 ++----------
+ include/rdma/ib_umem.h         |    2 --
+ 2 files changed, 2 insertions(+), 12 deletions(-)
+
+diff --git a/drivers/infiniband/core/umem.c b/drivers/infiniband/core/umem.c
+index da5e247..6f7c096 100644
+--- a/drivers/infiniband/core/umem.c
++++ b/drivers/infiniband/core/umem.c
+@@ -40,10 +40,6 @@
+ 
+ #include "uverbs.h"
+ 
+-static int allow_weak_ordering;
+-module_param(allow_weak_ordering, bool, 0444);
+-MODULE_PARM_DESC(allow_weak_ordering,  "Allow weak ordering for data registered memory");
+-
+ #define IB_UMEM_MAX_PAGE_CHUNK						\
+ 	((PAGE_SIZE - offsetof(struct ib_umem_chunk, page_list)) /	\
+ 	 ((void *) &((struct ib_umem_chunk *) 0)->page_list[1] -	\
+@@ -55,8 +51,8 @@ static void __ib_umem_release(struct ib_device *dev, struct ib_umem *umem, int d
+ 	int i;
+ 
+ 	list_for_each_entry_safe(chunk, tmp, &umem->chunk_list, list) {
+-		ib_dma_unmap_sg_attrs(dev, chunk->page_list,
+-				      chunk->nents, DMA_BIDIRECTIONAL, &chunk->attrs);
++		ib_dma_unmap_sg(dev, chunk->page_list,
++				chunk->nents, DMA_BIDIRECTIONAL);
+ 		for (i = 0; i < chunk->nents; ++i) {
+ 			struct page *page = sg_page(&chunk->page_list[i]);
+ 
+@@ -95,9 +91,6 @@ struct ib_umem *ib_umem_get(struct ib_ucontext *context, unsigned long addr,
+ 
+ 	if (dmasync)
+ 		dma_set_attr(DMA_ATTR_WRITE_BARRIER, &attrs);
+-	else if (allow_weak_ordering)
+-		dma_set_attr(DMA_ATTR_WEAK_ORDERING, &attrs);
+-
+ 
+ 	if (!can_do_mlock())
+ 		return ERR_PTR(-EPERM);
+@@ -176,7 +169,6 @@ struct ib_umem *ib_umem_get(struct ib_ucontext *context, unsigned long addr,
+ 				goto out;
+ 			}
+ 
+-			chunk->attrs = attrs;
+ 			chunk->nents = min_t(int, ret, IB_UMEM_MAX_PAGE_CHUNK);
+ 			sg_init_table(chunk->page_list, chunk->nents);
+ 			for (i = 0; i < chunk->nents; ++i) {
+diff --git a/include/rdma/ib_umem.h b/include/rdma/ib_umem.h
+index 90f3712..9ee0d2e 100644
+--- a/include/rdma/ib_umem.h
++++ b/include/rdma/ib_umem.h
+@@ -36,7 +36,6 @@
+ #include <linux/list.h>
+ #include <linux/scatterlist.h>
+ #include <linux/workqueue.h>
+-#include <linux/dma-attrs.h>
+ 
+ struct ib_ucontext;
+ 
+@@ -57,7 +56,6 @@ struct ib_umem_chunk {
+ 	struct list_head	list;
+ 	int                     nents;
+ 	int                     nmap;
+-	struct dma_attrs	attrs;
+ 	struct scatterlist      page_list[0];
+ };
+ 
+-- 
+1.6.0.2
+

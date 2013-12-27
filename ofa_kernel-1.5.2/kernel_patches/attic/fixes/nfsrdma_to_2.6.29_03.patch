@@ -1,0 +1,51 @@
+commit a67d18f89f5782806135aad4ee012ff78d45aae7
+Author: Tom Talpey <tmtalpey@gmail.com>
+Date:   Wed Mar 11 14:37:56 2009 -0400
+
+    NFS: load the rpc/rdma transport module automatically
+    
+    When mounting an NFS/RDMA server with the "-o proto=rdma" or
+    "-o rdma" options, attempt to dynamically load the necessary
+    "xprtrdma" client transport module. Doing so improves usability,
+    while avoiding a static module dependency and any unnecesary
+    resources.
+    
+    Signed-off-by: Tom Talpey <tmtalpey@gmail.com>
+    Cc: Chuck Lever <chuck.lever@oracle.com>
+    Signed-off-by: Trond Myklebust <Trond.Myklebust@netapp.com>
+
+diff --git a/fs/nfs/super.c b/fs/nfs/super.c
+index d6686f4..0942fcb 100644
+--- a/fs/nfs/super.c
++++ b/fs/nfs/super.c
+@@ -1018,6 +1018,7 @@ static int nfs_parse_mount_options(char *raw,
+ 		case Opt_rdma:
+ 			mnt->flags |= NFS_MOUNT_TCP; /* for side protocols */
+ 			mnt->nfs_server.protocol = XPRT_TRANSPORT_RDMA;
++			xprt_load_transport(p);
+ 			break;
+ 		case Opt_acl:
+ 			mnt->flags &= ~NFS_MOUNT_NOACL;
+@@ -1205,12 +1206,14 @@ static int nfs_parse_mount_options(char *raw,
+ 				/* vector side protocols to TCP */
+ 				mnt->flags |= NFS_MOUNT_TCP;
+ 				mnt->nfs_server.protocol = XPRT_TRANSPORT_RDMA;
++				xprt_load_transport(string);
+ 				break;
+ 			default:
+ 				errors++;
+ 				dfprintk(MOUNT, "NFS:   unrecognized "
+ 						"transport protocol\n");
+ 			}
++			kfree(string);
+ 			break;
+ 		case Opt_mountproto:
+ 			string = match_strdup(args);
+@@ -1218,7 +1221,6 @@ static int nfs_parse_mount_options(char *raw,
+ 				goto out_nomem;
+ 			token = match_token(string,
+ 					    nfs_xprt_protocol_tokens, args);
+-			kfree(string);
+ 
+ 			switch (token) {
+ 			case Opt_xprt_udp:

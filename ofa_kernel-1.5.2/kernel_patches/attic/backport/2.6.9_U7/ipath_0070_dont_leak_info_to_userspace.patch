@@ -1,0 +1,67 @@
+BACKPORT - don't clear memory a second time
+
+Signed-off-by: Ralph Campbell <ralph.campbell@qlogic.com>
+
+---
+ drivers/infiniband/hw/ipath/ipath_mmap.c |   37 ++++++++++++++++++++++++++++---
+ 1 file changed, 34 insertions(+), 3 deletions(-)
+
+Index: ofed_kernel/drivers/infiniband/hw/ipath/ipath_mmap.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/hw/ipath/ipath_mmap.c
++++ ofed_kernel/drivers/infiniband/hw/ipath/ipath_mmap.c
+@@ -74,9 +74,40 @@ static void ipath_vma_close(struct vm_ar
+ 	kref_put(&ip->ref, ipath_release_mmap_info);
+ }
+ 
++/*
++ * ipath_vma_nopage - handle a VMA page fault.
++ */
++static struct page *ipath_vma_nopage(struct vm_area_struct *vma,
++				     unsigned long address, int *type)
++{
++	struct ipath_mmap_info *ip = vma->vm_private_data;
++	unsigned long offset = address - vma->vm_start;
++	struct page *page = NOPAGE_SIGBUS;
++	void *pageptr;
++
++	if (offset >= ip->size)
++		goto out; /* out of range */
++
++	/*
++	 * Convert the vmalloc address into a struct page.
++	 */
++	pageptr = (void *)(offset + ip->obj);
++	page = vmalloc_to_page(pageptr);
++	if (!page)
++		goto out;
++
++	/* Increment the reference count. */
++	get_page(page);
++	if (type)
++		*type = VM_FAULT_MINOR;
++out:
++	return page;
++}
++
+ static struct vm_operations_struct ipath_vm_ops = {
+ 	.open =     ipath_vma_open,
+ 	.close =    ipath_vma_close,
++	.nopage =   ipath_vma_nopage,
+ };
+ 
+ /**
+@@ -111,10 +142,10 @@ int ipath_mmap(struct ib_ucontext *conte
+ 		list_del_init(&ip->pending_mmaps);
+ 		spin_unlock_irq(&dev->pending_lock);
+ 
+-		ret = remap_vmalloc_range(vma, ip->obj, 0);
+-		if (ret)
+-			goto done;
++		ret = 0;
++
+ 		vma->vm_ops = &ipath_vm_ops;
++		vma->vm_flags |= VM_RESERVED | VM_DONTEXPAND;
+ 		vma->vm_private_data = ip;
+ 		ipath_vma_open(vma);
+ 		goto done;

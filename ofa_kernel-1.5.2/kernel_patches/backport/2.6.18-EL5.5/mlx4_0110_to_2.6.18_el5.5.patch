@@ -1,0 +1,13 @@
+Index: ofa_1_5_dev_kernel-20100822-1825_linux-2.6.18-194.el5_check/drivers/infiniband/hw/mlx4/main.c
+===================================================================
+--- ofa_1_5_dev_kernel-20100822-1825_linux-2.6.18-194.el5_check.orig/drivers/infiniband/hw/mlx4/main.c	2010-08-22 18:40:28.000000000 +0300
++++ ofa_1_5_dev_kernel-20100822-1825_linux-2.6.18-194.el5_check/drivers/infiniband/hw/mlx4/main.c	2010-08-22 18:43:45.000000000 +0300
+@@ -1083,7 +1083,7 @@ static int update_ipv6_gids(struct mlx4_
+ 	}
+ 
+ 	read_lock(&dev_base_lock);
+-	for_each_netdev(&init_net, tmp) {
++	for (tmp = dev_base; tmp; tmp = tmp->next) {
+ 		if (ndev && (tmp == ndev || rdma_vlan_dev_real_dev(tmp) == ndev)) {
+ 			gid.global.subnet_prefix = cpu_to_be64(0xfe80000000000000LL);
+ 			vid = rdma_vlan_dev_vlan_id(tmp);

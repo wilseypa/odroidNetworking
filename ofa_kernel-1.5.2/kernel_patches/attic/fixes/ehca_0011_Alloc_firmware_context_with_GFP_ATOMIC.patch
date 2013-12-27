@@ -1,0 +1,24 @@
+From e00dc99d72ffdeceb135dcdeafbec6d190979c52 Mon Sep 17 00:00:00 2001
+From: Hoang-Nam Nguyen <hnguyen@de.ibm.com>
+Date: Mon, 4 Feb 2008 18:12:26 +0100
+Subject: [PATCH] IB/ehca: Alloc firmware context in query_port with GFP_ATOMIC
+This is required to prevent scheduling oops on rhel4.5.
+
+Signed-off-by: Hoang-Nam Nguyen <hnguyen@de.ibm.com>
+---
+ drivers/infiniband/hw/ehca/ehca_hca.c |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+Index: ofed_kernel/drivers/infiniband/hw/ehca/ehca_hca.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/hw/ehca/ehca_hca.c
++++ ofed_kernel/drivers/infiniband/hw/ehca/ehca_hca.c
+@@ -186,7 +186,7 @@ int ehca_query_port(struct ib_device *ib
+ 					      ib_device);
+ 	struct hipz_query_port *rblock;
+ 
+-	rblock = ehca_alloc_fw_ctrlblock(GFP_KERNEL);
++	rblock = ehca_alloc_fw_ctrlblock(GFP_ATOMIC);
+ 	if (!rblock) {
+ 		ehca_err(&shca->ib_device, "Can't allocate rblock memory.");
+ 		return -ENOMEM;

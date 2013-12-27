@@ -1,0 +1,77 @@
+--- a/drivers/infiniband/hw/ipath/ipath_wc_pat.c.orig	2008-11-04 13:46:56.557658000 -0800
++++ b/drivers/infiniband/hw/ipath/ipath_wc_pat.c	2008-11-04 13:47:50.521639000 -0800
+@@ -182,7 +182,7 @@
+ 	preempt_disable();
+ 	rd_old_pat(&ret);
+ 	if (!ret)
+-		smp_call_function(rd_old_pat, &ret, 1);
++		smp_call_function(rd_old_pat, &ret, 1, 1);
+ 	if (ret)
+ 		goto out;
+ 
+@@ -193,7 +193,7 @@
+ 	if (ret)
+ 		goto out;
+ 
+-	smp_call_function(wr_new_pat, &ret, 1);
++	smp_call_function(wr_new_pat, &ret, 1, 1);
+ 	BUG_ON(ret); /* have inconsistent PAT state */
+ out:
+ 	preempt_enable();
+@@ -207,7 +207,7 @@
+ 	preempt_disable();
+ 	wr_old_pat(&ret);
+ 	if (!ret) {
+-		smp_call_function(wr_old_pat, &ret, 1);
++		smp_call_function(wr_old_pat, &ret, 1, 1);
+ 		BUG_ON(ret); /* have inconsistent PAT state */
+ 	}
+ 
+diff --git a/drivers/infiniband/hw/ipath/ipath_wc_pat.c b/drivers/infiniband/hw/ipath/ipath_wc_pat.c
+index 8edf2fb..5233eac 100644
+--- a/drivers/infiniband/hw/ipath/ipath_wc_pat.c
++++ b/drivers/infiniband/hw/ipath/ipath_wc_pat.c
+@@ -217,7 +217,7 @@
+ 
+ int ipath_enable_wc_pat(void)
+ {
+-	struct cpuinfo_x86 *c = &cpu_data(0);
++	struct cpuinfo_x86 *c = &(cpu_data)[0];
+ 	int ret;
+ 
+ 	if (wc_enabled)
+@@ -257,6 +257,11 @@ pgprot_t pgprot_wc(pgprot_t _prot)
+ 		pgprot_noncached(_prot);
+ }
+ 
++void __iomem *ioremap_wc(unsigned long phys_addr, unsigned long size)
++{
++	return __ioremap(phys_addr, size, IPATH_WC_FLAGS);
++}
++
+ int ipath_wc_pat_enabled(void)
+ {
+ 	return wc_enabled;
+@@ -272,6 +277,11 @@ pgprot_t pgprot_wc(pgprot_t _prot)
+ 	return pgprot_noncached(_prot);
+ }
+ 
++void __iomem *ioremap_wc(unsigned long phys_addr, unsigned long size)
++{
++	return ioremap_nocache(phys_addr, size);
++}
++
+ int ipath_wc_pat_enabled(void)
+ {
+ 	return 0;
+diff --git a/drivers/infiniband/hw/ipath/ipath_wc_pat.h b/drivers/infiniband/hw/ipath/ipath_wc_pat.h
+index 28ba52f..1b17661 100644
+--- a/drivers/infiniband/hw/ipath/ipath_wc_pat.h
++++ b/drivers/infiniband/hw/ipath/ipath_wc_pat.h
+@@ -42,5 +42,6 @@ int ipath_enable_wc_pat(void);
+ void ipath_disable_wc_pat(void);
+ int ipath_wc_pat_enabled(void);
+ pgprot_t pgprot_wc(pgprot_t _prot);
++void __iomem *ioremap_wc(unsigned long phys_addr, unsigned long size);
+ 
+ #endif

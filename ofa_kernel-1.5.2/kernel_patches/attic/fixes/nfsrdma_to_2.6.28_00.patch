@@ -1,0 +1,74 @@
+From 0d3ebb9ae9f9c887518fd4c81a68084111d154d7 Mon Sep 17 00:00:00 2001
+From: Tom Tucker <tom@opengridcomputing.com>
+Date: Tue, 30 Sep 2008 13:06:13 -0500
+Subject: [PATCH] svcrdma: Add Fast Reg MR Data Types
+
+Add data types to track Fast Reg Memory Regions. The core data type is
+svc_rdma_fastreg_mr that associates a device MR with a host kva and page
+list. A field is added to the WR context to keep track of the FRMR
+used to map the local memory for an RPC.
+
+An FRMR list and spin lock are added to the transport instance to keep
+track of all FRMR allocated for the transport. Also added are device
+capability flags to indicate what the memory registration
+capabilities are for the underlying device and whether or not fast
+memory registration is supported.
+
+Signed-off-by: Tom Tucker <tom@opengridcomputing.com>
+
+diff --git a/include/linux/sunrpc/svc_rdma.h b/include/linux/sunrpc/svc_rdma.h
+index dc05b54..49e458d 100644
+--- a/include/linux/sunrpc/svc_rdma.h
++++ b/include/linux/sunrpc/svc_rdma.h
+@@ -72,6 +72,7 @@ extern atomic_t rdma_stat_sq_prod;
+  */
+ struct svc_rdma_op_ctxt {
+ 	struct svc_rdma_op_ctxt *read_hdr;
++	struct svc_rdma_fastreg_mr *frmr;
+ 	int hdr_count;
+ 	struct xdr_buf arg;
+ 	struct list_head dto_q;
+@@ -103,16 +104,30 @@ struct svc_rdma_chunk_sge {
+ 	int start;		/* sge no for this chunk */
+ 	int count;		/* sge count for this chunk */
+ };
++struct svc_rdma_fastreg_mr {
++	struct ib_mr *mr;
++	void *kva;
++	struct ib_fast_reg_page_list *page_list;
++	int page_list_len;
++	unsigned long access_flags;
++	unsigned long map_len;
++	enum dma_data_direction direction;
++	struct list_head frmr_list;
++};
+ struct svc_rdma_req_map {
++	struct svc_rdma_fastreg_mr *frmr;
+ 	unsigned long count;
+ 	union {
+ 		struct kvec sge[RPCSVC_MAXPAGES];
+ 		struct svc_rdma_chunk_sge ch[RPCSVC_MAXPAGES];
+ 	};
+ };
+-
++#define RDMACTXT_F_FAST_UNREG	1
+ #define RDMACTXT_F_LAST_CTXT	2
+ 
++#define	SVCRDMA_DEVCAP_FAST_REG		1	/* fast mr registration */
++#define	SVCRDMA_DEVCAP_READ_W_INV	2	/* read w/ invalidate */
++
+ struct svcxprt_rdma {
+ 	struct svc_xprt      sc_xprt;		/* SVC transport structure */
+ 	struct rdma_cm_id    *sc_cm_id;		/* RDMA connection id */
+@@ -136,6 +151,11 @@ struct svcxprt_rdma {
+ 	struct ib_cq         *sc_rq_cq;
+ 	struct ib_cq         *sc_sq_cq;
+ 	struct ib_mr         *sc_phys_mr;	/* MR for server memory */
++	u32		     sc_dev_caps;	/* distilled device caps */
++	u32		     sc_dma_lkey;	/* local dma key */
++	unsigned int	     sc_frmr_pg_list_len;
++	struct list_head     sc_frmr_q;
++	spinlock_t	     sc_frmr_q_lock;
+ 
+ 	spinlock_t	     sc_lock;		/* transport lock */
+ 

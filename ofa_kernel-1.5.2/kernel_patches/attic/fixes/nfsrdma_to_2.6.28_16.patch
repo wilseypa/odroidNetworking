@@ -1,0 +1,20 @@
+From ad0e9e01da4ece70ff524b49c77c5e850d5dd53e Mon Sep 17 00:00:00 2001
+From: Tom Talpey <talpey@netapp.com>
+Date: Thu, 9 Oct 2008 15:00:50 -0400
+Subject: [PATCH] RPC/RDMA: maintain the RPC task bytes-sent statistic.
+
+Signed-off-by: Tom Talpey <talpey@netapp.com>
+Signed-off-by: Trond Myklebust <Trond.Myklebust@netapp.com>
+
+diff --git a/net/sunrpc/xprtrdma/transport.c b/net/sunrpc/xprtrdma/transport.c
+index 0aefc64..ec6d1e7 100644
+--- a/net/sunrpc/xprtrdma/transport.c
++++ b/net/sunrpc/xprtrdma/transport.c
+@@ -699,6 +699,7 @@ xprt_rdma_send_request(struct rpc_task *task)
+ 	if (rpcrdma_ep_post(&r_xprt->rx_ia, &r_xprt->rx_ep, req))
+ 		goto drop_connection;
+ 
++	task->tk_bytes_sent += rqst->rq_snd_buf.len;
+ 	rqst->rq_bytes_sent = 0;
+ 	return 0;
+ 

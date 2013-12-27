@@ -1,0 +1,28 @@
+IB/ipath - Only do 1X workaround on rev1 chips.
+
+Only do 1X workaround on rev1 chips.
+
+Signed-off-by: Dave Olson <dave.olson@qlogic.com>
+---
+
+diff -upr ofed_kernel-fixes-orig/drivers/infiniband/hw/ipath/ipath_iba7220.c ofed_kernel-fixes/drivers/infiniband/hw/ipath/ipath_iba7220.c
+--- ofed_kernel-fixes-orig/drivers/infiniband/hw/ipath/ipath_iba7220.c	2008-10-28 11:58:20.000000000 -0700
++++ ofed_kernel-fixes/drivers/infiniband/hw/ipath/ipath_iba7220.c	2008-10-28 11:58:39.000000000 -0700
+@@ -2452,13 +2452,14 @@ static int ipath_7220_ib_updown(struct i
+ 			}
+ 		}
+ 		/*
+-		 * if we are in 1X, and are in autoneg width, it
+-		 * could be due to an xgxs problem, so if we haven't
++		 * if we are in 1X on rev1 only, and are in autoneg width,
++		 * it could be due to an xgxs problem, so if we haven't
+ 		 * already tried, try twice to get to 4X; if we
+ 		 * tried, and couldn't, report it, since it will
+ 		 * probably not be what is desired.
+ 		 */
+-		if ((dd->ipath_link_width_enabled & (IB_WIDTH_1X |
++		if (dd->ipath_minrev == 1 &&
++		    (dd->ipath_link_width_enabled & (IB_WIDTH_1X |
+ 			IB_WIDTH_4X)) == (IB_WIDTH_1X | IB_WIDTH_4X)
+ 			&& dd->ipath_link_width_active == IB_WIDTH_1X
+ 			&& dd->ipath_x1_fix_tries < 3) {

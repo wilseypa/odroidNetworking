@@ -1,0 +1,60 @@
+rpcrdma: Fix SQ size calculation when memreg is FRMR
+
+From: Tom Tucker <tom@ogc.us>
+
+This patch updates the computation to include the worst case situation
+where three FRMR are required to map a single RPC REQ.
+
+Signed-off-by: Tom Tucker <tom@ogc.us>
+Signed-off-by: Vu Pham <vu@mellanox.com>
+---
+
+ net/sunrpc/xprtrdma/rpc_rdma.c |    2 ++
+ net/sunrpc/xprtrdma/verbs.c    |   20 ++++++++++++++++----
+ 2 files changed, 18 insertions(+), 4 deletions(-)
+
+
+diff --git a/net/sunrpc/xprtrdma/rpc_rdma.c b/net/sunrpc/xprtrdma/rpc_rdma.c
+index e5e28d1..2ac3f6e 100644
+--- a/net/sunrpc/xprtrdma/rpc_rdma.c
++++ b/net/sunrpc/xprtrdma/rpc_rdma.c
+@@ -249,6 +249,8 @@ rpcrdma_create_chunks(struct rpc_rqst *rqst, struct xdr_buf *target,
+ 	req->rl_nchunks = nchunks;
+ 
+ 	BUG_ON(nchunks == 0);
++	BUG_ON((r_xprt->rx_ia.ri_memreg_strategy == RPCRDMA_FRMR)
++	       && (nchunks > 3));
+ 
+ 	/*
+ 	 * finish off header. If write, marshal discrim and nchunks.
+diff --git a/net/sunrpc/xprtrdma/verbs.c b/net/sunrpc/xprtrdma/verbs.c
+index 465aafc..be1ad9d 100644
+--- a/net/sunrpc/xprtrdma/verbs.c
++++ b/net/sunrpc/xprtrdma/verbs.c
+@@ -649,10 +649,22 @@ rpcrdma_ep_create(struct rpcrdma_ep *ep, struct rpcrdma_ia *ia,
+ 	ep->rep_attr.cap.max_send_wr = cdata->max_requests;
+ 	switch (ia->ri_memreg_strategy) {
+ 	case RPCRDMA_FRMR:
+-		/* Add room for frmr register and invalidate WRs */
+-		ep->rep_attr.cap.max_send_wr *= 3;
+-		if (ep->rep_attr.cap.max_send_wr > devattr.max_qp_wr)
+-			return -EINVAL;
++		/* Add room for frmr register and invalidate WRs.
++		 * 1. FRMR reg WR for head
++		 * 2. FRMR invalidate WR for head
++		 * 3. FRMR reg WR for pagelist
++		 * 4. FRMR invalidate WR for pagelist
++		 * 5. FRMR reg WR for tail
++		 * 6. FRMR invalidate WR for tail
++		 * 7. The RDMA_SEND WR
++		 */
++		ep->rep_attr.cap.max_send_wr *= 7;
++		if (ep->rep_attr.cap.max_send_wr > devattr.max_qp_wr) {
++			cdata->max_requests = devattr.max_qp_wr / 7;
++			if (!cdata->max_requests)
++				return -EINVAL;
++			ep->rep_attr.cap.max_send_wr = cdata->max_requests * 7;
++		}
+ 		break;
+ 	case RPCRDMA_MEMWINDOWS_ASYNC:
+ 	case RPCRDMA_MEMWINDOWS:

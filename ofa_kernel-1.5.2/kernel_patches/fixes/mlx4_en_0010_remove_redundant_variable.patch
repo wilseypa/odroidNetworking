@@ -1,0 +1,34 @@
+From 9d13828ce72fd89f71efade410a94a3d403765d2 Mon Sep 17 00:00:00 2001
+From: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+Date: Sun, 24 May 2009 13:46:19 +0300
+Subject: [PATCH 1/8] mlx4_en: Removed redundant stride variable
+
+Signed-off-by: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+---
+ drivers/net/mlx4/en_netdev.c |    3 ---
+ 1 files changed, 0 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/net/mlx4/en_netdev.c b/drivers/net/mlx4/en_netdev.c
+index 7bcc49d..be487fa 100644
+--- a/drivers/net/mlx4/en_netdev.c
++++ b/drivers/net/mlx4/en_netdev.c
+@@ -559,7 +559,6 @@ int mlx4_en_start_port(struct net_device *dev)
+ 	struct mlx4_en_rx_ring *rx_ring;
+ 	int rx_index = 0;
+ 	int tx_index = 0;
+-	u16 stride;
+ 	int err = 0;
+ 	int i;
+ 	int j;
+@@ -573,8 +572,6 @@ int mlx4_en_start_port(struct net_device *dev)
+ 	dev->mtu = min(dev->mtu, priv->max_mtu);
+ 	mlx4_en_calc_rx_buf(dev);
+ 	mlx4_dbg(DRV, priv, "Rx buf size:%d\n", priv->rx_skb_size);
+-	stride = roundup_pow_of_two(sizeof(struct mlx4_en_rx_desc) +
+-				    DS_SIZE * priv->num_frags);
+ 	/* Configure rx cq's and rings */
+ 	for (i = 0; i < priv->rx_ring_num; i++) {
+ 		cq = &priv->rx_cq[i];
+-- 
+1.6.3
+

@@ -1,0 +1,40 @@
+commit eba5c3ab7fbdb153a36243bc0db3353a9d3682c7
+Author: root <root@almus.(none)>
+Date:   Wed Aug 26 16:08:31 2009 -0700
+
+    cxgb3_00540_fixphypowerdown
+
+diff --git a/drivers/net/cxgb3/ael1002.c b/drivers/net/cxgb3/ael1002.c
+index 6b7026a..3b98984 100644
+--- a/drivers/net/cxgb3/ael1002.c
++++ b/drivers/net/cxgb3/ael1002.c
+@@ -226,11 +226,6 @@ static int ael1006_reset(struct cphy *phy, int wait)
+ 	return t3_phy_reset(phy, MDIO_DEV_PMA_PMD, wait);
+ }
+ 
+-static int ael1006_power_down(struct cphy *phy, int enable)
+-{
+-	return t3_mdio_change_bits(phy, MDIO_DEV_PMA_PMD, MII_BMCR,
+-				   BMCR_PDOWN, enable ? BMCR_PDOWN : 0);
+-}
+ 
+ static struct cphy_ops ael1006_ops = {
+ 	.reset = ael1006_reset,
+@@ -239,7 +234,7 @@ static struct cphy_ops ael1006_ops = {
+ 	.intr_clear = t3_phy_lasi_intr_clear,
+ 	.intr_handler = t3_phy_lasi_intr_handler,
+ 	.get_link_status = get_link_status_r,
+-	.power_down = ael1006_power_down,
++	.power_down = ael1002_power_down,
+ };
+ 
+ int t3_ael1006_phy_prep(struct cphy *phy, struct adapter *adapter,
+@@ -1834,7 +1829,7 @@ static struct cphy_ops qt2045_ops = {
+ 	.intr_clear = t3_phy_lasi_intr_clear,
+ 	.intr_handler = t3_phy_lasi_intr_handler,
+ 	.get_link_status = get_link_status_x,
+-	.power_down = ael1006_power_down,
++	.power_down = ael1002_power_down,
+ };
+ 
+ int t3_qt2045_phy_prep(struct cphy *phy, struct adapter *adapter,

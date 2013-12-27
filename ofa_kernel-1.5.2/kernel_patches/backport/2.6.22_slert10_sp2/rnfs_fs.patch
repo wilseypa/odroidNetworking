@@ -1,0 +1,1987 @@
+diff --git a/fs/exportfs/expfs.c b/fs/exportfs/expfs.c
+index 197c7db..1a2636f 100644
+--- a/fs/exportfs/expfs.c
++++ b/fs/exportfs/expfs.c
+@@ -19,11 +19,11 @@
+ #define dprintk(fmt, args...) do{}while(0)
+ 
+ 
+-static int get_name(struct vfsmount *mnt, struct dentry *dentry, char *name,
++static int get_name(struct dentry *dentry, char *name,
+ 		struct dentry *child);
+ 
+ 
+-static int exportfs_get_name(struct vfsmount *mnt, struct dentry *dir,
++static int exportfs_get_name(struct dentry *dir,
+ 		char *name, struct dentry *child)
+ {
+ 	const struct export_operations *nop = dir->d_sb->s_export_op;
+@@ -31,7 +31,7 @@ static int exportfs_get_name(struct vfsmount *mnt, struct dentry *dir,
+ 	if (nop->get_name)
+ 		return nop->get_name(dir, name, child);
+ 	else
+-		return get_name(mnt, dir, name, child);
++		return get_name(dir, name, child);
+ }
+ 
+ /*
+@@ -95,7 +95,7 @@ find_disconnected_root(struct dentry *dentry)
+  * It may already be, as the flag isn't always updated when connection happens.
+  */
+ static int
+-reconnect_path(struct vfsmount *mnt, struct dentry *target_dir, char *nbuf)
++reconnect_path(struct super_block *sb, struct dentry *target_dir, char *nbuf)
+ {
+ 	int noprogress = 0;
+ 	int err = -ESTALE;
+@@ -117,7 +117,7 @@ reconnect_path(struct vfsmount *mnt, struct dentry *target_dir, char *nbuf)
+ 			pd->d_flags &= ~DCACHE_DISCONNECTED;
+ 			spin_unlock(&pd->d_lock);
+ 			noprogress = 0;
+-		} else if (pd == mnt->mnt_sb->s_root) {
++		} else if (pd == sb->s_root) {
+ 			printk(KERN_ERR "export: Eeek filesystem root is not connected, impossible\n");
+ 			spin_lock(&pd->d_lock);
+ 			pd->d_flags &= ~DCACHE_DISCONNECTED;
+@@ -143,8 +143,8 @@ reconnect_path(struct vfsmount *mnt, struct dentry *target_dir, char *nbuf)
+ 			struct dentry *npd;
+ 
+ 			mutex_lock(&pd->d_inode->i_mutex);
+-			if (mnt->mnt_sb->s_export_op->get_parent)
+-				ppd = mnt->mnt_sb->s_export_op->get_parent(pd);
++			if (sb->s_export_op->get_parent)
++				ppd = sb->s_export_op->get_parent(pd);
+ 			mutex_unlock(&pd->d_inode->i_mutex);
+ 
+ 			if (IS_ERR(ppd)) {
+@@ -157,7 +157,7 @@ reconnect_path(struct vfsmount *mnt, struct dentry *target_dir, char *nbuf)
+ 
+ 			dprintk("%s: find name of %lu in %lu\n", __func__,
+ 				pd->d_inode->i_ino, ppd->d_inode->i_ino);
+-			err = exportfs_get_name(mnt, ppd, nbuf, pd);
++			err = exportfs_get_name(ppd, nbuf, pd);
+ 			if (err) {
+ 				dput(ppd);
+ 				dput(pd);
+@@ -247,10 +247,9 @@ static int filldir_one(void * __buf, const char * name, int len,
+  * calls readdir on the parent until it finds an entry with
+  * the same inode number as the child, and returns that.
+  */
+-static int get_name(struct vfsmount *mnt, struct dentry *dentry,
++static int get_name(struct dentry *dentry,
+ 		char *name, struct dentry *child)
+ {
+-	const struct cred *cred = current_cred();
+ 	struct inode *dir = dentry->d_inode;
+ 	int error;
+ 	struct file *file;
+@@ -265,7 +264,7 @@ static int get_name(struct vfsmount *mnt, struct dentry *dentry,
+ 	/*
+ 	 * Open the directory ...
+ 	 */
+-	file = dentry_open(dget(dentry), mntget(mnt), O_RDONLY, cred);
++	file = dentry_open(dget(dentry), NULL, O_RDONLY);
+ 	error = PTR_ERR(file);
+ 	if (IS_ERR(file))
+ 		goto out;
+@@ -301,6 +300,59 @@ out:
+ 	return error;
+ }
+ 
++static struct dentry *export_iget(struct super_block *sb, unsigned long ino, __u32 generation)
++{
++
++	/* iget isn't really right if the inode is currently unallocated!!
++	 * This should really all be done inside each filesystem
++	 *
++	 * ext2fs' read_inode has been strengthed to return a bad_inode if
++	 * the inode had been deleted.
++	 *
++	 * Currently we don't know the generation for parent directory, so
++	 * a generation of 0 means "accept any"
++	 */
++	struct inode *inode;
++	struct dentry *result;
++	if (ino == 0)
++		return ERR_PTR(-ESTALE);
++	inode = iget(sb, ino);
++	if (inode == NULL)
++		return ERR_PTR(-ENOMEM);
++	if (is_bad_inode(inode)
++	    || (generation && inode->i_generation != generation)
++		) {
++		/* we didn't find the right inode.. */
++		dprintk("fh_verify: Inode %lu, Bad count: %d %d or version  %u %u\n",
++			inode->i_ino,
++			inode->i_nlink, atomic_read(&inode->i_count),
++			inode->i_generation,
++			generation);
++
++		iput(inode);
++		return ERR_PTR(-ESTALE);
++	}
++	/* now to find a dentry.
++	 * If possible, get a well-connected one
++	 */
++	result = d_alloc_anon(inode);
++	if (!result) {
++		iput(inode);
++		return ERR_PTR(-ENOMEM);
++	}
++	return result;
++}
++
++
++static struct dentry *get_object(struct super_block *sb, void *vobjp)
++{
++	__u32 *objp = vobjp;
++	unsigned long ino = objp[0];
++	__u32 generation = objp[1];
++
++	return export_iget(sb, ino, generation);
++}
++
+ /**
+  * export_encode_fh - default export_operations->encode_fh function
+  * @dentry:  the dentry to encode
+@@ -356,11 +408,12 @@ int exportfs_encode_fh(struct dentry *dentry, struct fid *fid, int *max_len,
+ }
+ EXPORT_SYMBOL_GPL(exportfs_encode_fh);
+ 
+-struct dentry *exportfs_decode_fh(struct vfsmount *mnt, struct fid *fid,
+-		int fh_len, int fileid_type,
+-		int (*acceptable)(void *, struct dentry *), void *context)
++struct dentry *
++find_exported_dentry(struct super_block *sb, void *obj, void *parent,
++                     int (*acceptable)(void *context, struct dentry *de),
++                     void *context)
+ {
+-	const struct export_operations *nop = mnt->mnt_sb->s_export_op;
++	const struct export_operations *nop = sb->s_export_op;
+ 	struct dentry *result, *alias;
+ 	char nbuf[NAME_MAX+1];
+ 	int err;
+@@ -368,7 +421,10 @@ struct dentry *exportfs_decode_fh(struct vfsmount *mnt, struct fid *fid,
+ 	/*
+ 	 * Try to get any dentry for the given file handle from the filesystem.
+ 	 */
+-	result = nop->fh_to_dentry(mnt->mnt_sb, fid, fh_len, fileid_type);
++	if (nop->get_dentry)
++		result = nop->get_dentry(sb, obj);
++	else
++		result = get_object(sb, obj);
+ 	if (!result)
+ 		result = ERR_PTR(-ESTALE);
+ 	if (IS_ERR(result))
+@@ -384,7 +440,7 @@ struct dentry *exportfs_decode_fh(struct vfsmount *mnt, struct fid *fid,
+ 		 * filesystem root.
+ 		 */
+ 		if (result->d_flags & DCACHE_DISCONNECTED) {
+-			err = reconnect_path(mnt, result, nbuf);
++			err = reconnect_path(sb, result, nbuf);
+ 			if (err)
+ 				goto err_result;
+ 		}
+@@ -419,11 +475,10 @@ struct dentry *exportfs_decode_fh(struct vfsmount *mnt, struct fid *fid,
+ 		 * file handle.  If this fails we'll have to give up.
+ 		 */
+ 		err = -ESTALE;
+-		if (!nop->fh_to_parent)
++		if (!nop->get_parent)
+ 			goto err_result;
+ 
+-		target_dir = nop->fh_to_parent(mnt->mnt_sb, fid,
+-				fh_len, fileid_type);
++		target_dir = nop->get_parent(result);
+ 		if (!target_dir)
+ 			goto err_result;
+ 		err = PTR_ERR(target_dir);
+@@ -435,7 +490,7 @@ struct dentry *exportfs_decode_fh(struct vfsmount *mnt, struct fid *fid,
+ 		 * connected to the filesystem root.  The VFS really doesn't
+ 		 * like disconnected directories..
+ 		 */
+-		err = reconnect_path(mnt, target_dir, nbuf);
++		err = reconnect_path(sb, target_dir, nbuf);
+ 		if (err) {
+ 			dput(target_dir);
+ 			goto err_result;
+@@ -446,7 +501,7 @@ struct dentry *exportfs_decode_fh(struct vfsmount *mnt, struct fid *fid,
+ 		 * dentry for the inode we're after, make sure that our
+ 		 * inode is actually connected to the parent.
+ 		 */
+-		err = exportfs_get_name(mnt, target_dir, nbuf, result);
++		err = exportfs_get_name(target_dir, nbuf, result);
+ 		if (!err) {
+ 			mutex_lock(&target_dir->d_inode->i_mutex);
+ 			nresult = lookup_one_len(nbuf, target_dir,
+@@ -484,6 +539,22 @@ struct dentry *exportfs_decode_fh(struct vfsmount *mnt, struct fid *fid,
+ 	dput(result);
+ 	return ERR_PTR(err);
+ }
++EXPORT_SYMBOL_GPL(find_exported_dentry);
++
++struct dentry *exportfs_decode_fh(struct vfsmount *mnt, struct fid *fid,
++		int fh_len, int fileid_type,
++		int (*acceptable)(void *, struct dentry *), void *context)
++{
++	struct export_operations *nop = mnt->mnt_sb->s_export_op;
++	struct dentry *result;
++
++	if (nop->decode_fh)
++		result = nop->decode_fh(mnt->mnt_sb, fid->raw, fh_len, fileid_type, acceptable, context);
++	else
++		result = find_exported_dentry(mnt->mnt_sb, fid->raw, NULL, acceptable, context);
++
++	return result;
++}
+ EXPORT_SYMBOL_GPL(exportfs_decode_fh);
+ 
+ MODULE_LICENSE("GPL");
+diff --git a/fs/lockd/mon.c b/fs/lockd/mon.c
+index 6d5d4a4..80af4b4 100644
+--- a/fs/lockd/mon.c
++++ b/fs/lockd/mon.c
+@@ -65,7 +65,7 @@ static void nsm_display_ipv4_address(const struct sockaddr *sap, char *buf,
+ 				     const size_t len)
+ {
+ 	const struct sockaddr_in *sin = (struct sockaddr_in *)sap;
+-	snprintf(buf, len, "%pI4", &sin->sin_addr.s_addr);
++	snprintf(buf, len, NIPQUAD_FMT, NIPQUAD(sin->sin_addr.s_addr));
+ }
+ 
+ static void nsm_display_ipv6_address(const struct sockaddr *sap, char *buf,
+@@ -74,12 +74,11 @@ static void nsm_display_ipv6_address(const struct sockaddr *sap, char *buf,
+ 	const struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)sap;
+ 
+ 	if (ipv6_addr_v4mapped(&sin6->sin6_addr))
+-		snprintf(buf, len, "%pI4", &sin6->sin6_addr.s6_addr32[3]);
++		snprintf(buf, len, NIPQUAD_FMT, NIPQUAD(sin6->sin6_addr.s6_addr32[3]));
+ 	else if (sin6->sin6_scope_id != 0)
+-		snprintf(buf, len, "%pI6%%%u", &sin6->sin6_addr,
+-				sin6->sin6_scope_id);
++		snprintf(buf, len, NIP6_FMT"%%%u", NIP6(sin6->sin6_addr), sin6->sin6_scope_id);
+ 	else
+-		snprintf(buf, len, "%pI6", &sin6->sin6_addr);
++		snprintf(buf, len, NIP6_FMT, NIP6(sin6->sin6_addr));
+ }
+ 
+ static void nsm_display_address(const struct sockaddr *sap,
+diff --git a/fs/nfs/Makefile b/fs/nfs/Makefile
+index 8451598..5637a95 100644
+--- a/fs/nfs/Makefile
++++ b/fs/nfs/Makefile
+@@ -6,7 +6,7 @@ obj-$(CONFIG_NFS_FS) += nfs.o
+ 
+ nfs-y 			:= client.o dir.o file.o getroot.o inode.o super.o nfs2xdr.o \
+ 			   direct.o pagelist.o proc.o read.o symlink.o unlink.o \
+-			   write.o namespace.o mount_clnt.o
++			   write.o namespace.o mount_clnt.o backport-namespace.o
+ nfs-$(CONFIG_ROOT_NFS)	+= nfsroot.o
+ nfs-$(CONFIG_NFS_V3)	+= nfs3proc.o nfs3xdr.o
+ nfs-$(CONFIG_NFS_V3_ACL)	+= nfs3acl.o
+diff --git a/fs/nfs/backport-namespace.c b/fs/nfs/backport-namespace.c
+new file mode 100644
+index 0000000..de57f8b
+--- /dev/null
++++ b/fs/nfs/backport-namespace.c
+@@ -0,0 +1 @@
++#include "src/namespace.c"
+diff --git a/fs/nfs/dir.c b/fs/nfs/dir.c
+index 89f98e9..b5176be 100644
+--- a/fs/nfs/dir.c
++++ b/fs/nfs/dir.c
+@@ -899,7 +899,7 @@ static void nfs_dentry_iput(struct dentry *dentry, struct inode *inode)
+ 	iput(inode);
+ }
+ 
+-const struct dentry_operations nfs_dentry_operations = {
++struct dentry_operations nfs_dentry_operations = {
+ 	.d_revalidate	= nfs_lookup_revalidate,
+ 	.d_delete	= nfs_dentry_delete,
+ 	.d_iput		= nfs_dentry_iput,
+@@ -967,7 +967,7 @@ out:
+ #ifdef CONFIG_NFS_V4
+ static int nfs_open_revalidate(struct dentry *, struct nameidata *);
+ 
+-const struct dentry_operations nfs4_dentry_operations = {
++struct dentry_operations nfs4_dentry_operations = {
+ 	.d_revalidate	= nfs_open_revalidate,
+ 	.d_delete	= nfs_dentry_delete,
+ 	.d_iput		= nfs_dentry_iput,
+@@ -985,7 +985,7 @@ static int is_atomic_open(struct nameidata *nd)
+ 	if (nd->flags & LOOKUP_DIRECTORY)
+ 		return 0;
+ 	/* Are we trying to write to a read only partition? */
+-	if (__mnt_is_readonly(nd->path.mnt) &&
++	if (__mnt_is_readonly(nd->mnt) &&
+ 	    (nd->intent.open.flags & (O_CREAT|O_TRUNC|FMODE_WRITE)))
+ 		return 0;
+ 	return 1;
+@@ -1924,7 +1924,7 @@ int nfs_may_open(struct inode *inode, struct rpc_cred *cred, int openflags)
+ 	return nfs_do_access(inode, cred, nfs_open_permission_mask(openflags));
+ }
+ 
+-int nfs_permission(struct inode *inode, int mask)
++int nfs_permission(struct inode *inode, int mask, struct nameidata *nd)
+ {
+ 	struct rpc_cred *cred;
+ 	int res = 0;
+@@ -1934,7 +1934,7 @@ int nfs_permission(struct inode *inode, int mask)
+ 	if ((mask & (MAY_READ | MAY_WRITE | MAY_EXEC)) == 0)
+ 		goto out;
+ 	/* Is this sys_access() ? */
+-	if (mask & MAY_ACCESS)
++	if (nd != NULL && (nd->flags & LOOKUP_ACCESS))
+ 		goto force_lookup;
+ 
+ 	switch (inode->i_mode & S_IFMT) {
+@@ -1943,7 +1943,8 @@ int nfs_permission(struct inode *inode, int mask)
+ 		case S_IFREG:
+ 			/* NFSv4 has atomic_open... */
+ 			if (nfs_server_capable(inode, NFS_CAP_ATOMIC_OPEN)
+-					&& (mask & MAY_OPEN)
++					&& nd != NULL
++					&& (nd->flags & LOOKUP_OPEN)
+ 					&& !(mask & MAY_EXEC))
+ 				goto out;
+ 			break;
+diff --git a/fs/nfs/file.c b/fs/nfs/file.c
+index ec7e27d..dd7dafa 100644
+--- a/fs/nfs/file.c
++++ b/fs/nfs/file.c
+@@ -55,7 +55,6 @@ static int  nfs_file_fsync(struct file *, struct dentry *dentry, int datasync);
+ static int nfs_check_flags(int flags);
+ static int nfs_lock(struct file *filp, int cmd, struct file_lock *fl);
+ static int nfs_flock(struct file *filp, int cmd, struct file_lock *fl);
+-static int nfs_setlease(struct file *file, long arg, struct file_lock **fl);
+ 
+ static struct vm_operations_struct nfs_file_vm_ops;
+ 
+@@ -74,7 +73,6 @@ const struct file_operations nfs_file_operations = {
+ 	.flock		= nfs_flock,
+ 	.splice_read	= nfs_file_splice_read,
+ 	.check_flags	= nfs_check_flags,
+-	.setlease	= nfs_setlease,
+ };
+ 
+ const struct inode_operations nfs_file_inode_operations = {
+@@ -186,12 +184,8 @@ static loff_t nfs_file_llseek(struct file *filp, loff_t offset, int origin)
+ 		int retval = nfs_revalidate_file_size(inode, filp);
+ 		if (retval < 0)
+ 			return (loff_t)retval;
+-
+-		spin_lock(&inode->i_lock);
+-		loff = generic_file_llseek_unlocked(filp, offset, origin);
+-		spin_unlock(&inode->i_lock);
+-	} else
+-		loff = generic_file_llseek_unlocked(filp, offset, origin);
++	}
++	loff = remote_llseek(filp, offset, origin);
+ 	return loff;
+ }
+ 
+@@ -332,82 +326,36 @@ nfs_file_fsync(struct file *file, struct dentry *dentry, int datasync)
+  * If the writer ends up delaying the write, the writer needs to
+  * increment the page use counts until he is done with the page.
+  */
+-static int nfs_write_begin(struct file *file, struct address_space *mapping,
+-			loff_t pos, unsigned len, unsigned flags,
+-			struct page **pagep, void **fsdata)
++static int nfs_prepare_write(struct file *file, struct page *page, unsigned offset, unsigned to)
+ {
+-	int ret;
+-	pgoff_t index;
+-	struct page *page;
+-	index = pos >> PAGE_CACHE_SHIFT;
+-
+-	dfprintk(PAGECACHE, "NFS: write_begin(%s/%s(%ld), %u@%lld)\n",
+-		file->f_path.dentry->d_parent->d_name.name,
+-		file->f_path.dentry->d_name.name,
+-		mapping->host->i_ino, len, (long long) pos);
+-
+-	/*
+-	 * Prevent starvation issues if someone is doing a consistency
+-	 * sync-to-disk
+-	 */
+-	ret = wait_on_bit(&NFS_I(mapping->host)->flags, NFS_INO_FLUSHING,
+-			nfs_wait_bit_killable, TASK_KILLABLE);
+-	if (ret)
+-		return ret;
+-
+-	page = grab_cache_page_write_begin(mapping, index, flags);
+-	if (!page)
+-		return -ENOMEM;
+-	*pagep = page;
+-
+-	ret = nfs_flush_incompatible(file, page);
+-	if (ret) {
+-		unlock_page(page);
+-		page_cache_release(page);
+-	}
+-	return ret;
++	return nfs_flush_incompatible(file, page);
+ }
+ 
+-static int nfs_write_end(struct file *file, struct address_space *mapping,
+-			loff_t pos, unsigned len, unsigned copied,
+-			struct page *page, void *fsdata)
++static int nfs_commit_write(struct file *file, struct page *page, unsigned offset, unsigned to)
+ {
+-	unsigned offset = pos & (PAGE_CACHE_SIZE - 1);
+ 	int status;
+ 
+-	dfprintk(PAGECACHE, "NFS: write_end(%s/%s(%ld), %u@%lld)\n",
+-		file->f_path.dentry->d_parent->d_name.name,
+-		file->f_path.dentry->d_name.name,
+-		mapping->host->i_ino, len, (long long) pos);
+-
+ 	/*
+ 	 * Zero any uninitialised parts of the page, and then mark the page
+ 	 * as up to date if it turns out that we're extending the file.
+ 	 */
+ 	if (!PageUptodate(page)) {
+ 		unsigned pglen = nfs_page_length(page);
+-		unsigned end = offset + len;
+ 
+ 		if (pglen == 0) {
+ 			zero_user_segments(page, 0, offset,
+-					end, PAGE_CACHE_SIZE);
++					to, PAGE_CACHE_SIZE);
+ 			SetPageUptodate(page);
+-		} else if (end >= pglen) {
+-			zero_user_segment(page, end, PAGE_CACHE_SIZE);
++		} else if (to >= pglen) {
++			zero_user_segment(page, to, PAGE_CACHE_SIZE);
+ 			if (offset == 0)
+ 				SetPageUptodate(page);
+ 		} else
+ 			zero_user_segment(page, pglen, PAGE_CACHE_SIZE);
+ 	}
+ 
+-	status = nfs_updatepage(file, page, offset, copied);
+-
+-	unlock_page(page);
+-	page_cache_release(page);
+-
+-	if (status < 0)
+-		return status;
+-	return copied;
++	status = nfs_updatepage(file, page, offset, to-offset);
++	return status;
+ }
+ 
+ /*
+@@ -471,8 +419,8 @@ const struct address_space_operations nfs_file_aops = {
+ 	.set_page_dirty = __set_page_dirty_nobuffers,
+ 	.writepage = nfs_writepage,
+ 	.writepages = nfs_writepages,
+-	.write_begin = nfs_write_begin,
+-	.write_end = nfs_write_end,
++	.prepare_write = nfs_prepare_write,
++	.commit_write = nfs_commit_write,
+ 	.invalidatepage = nfs_invalidate_page,
+ 	.releasepage = nfs_release_page,
+ 	.direct_IO = nfs_direct_IO,
+@@ -484,9 +432,8 @@ const struct address_space_operations nfs_file_aops = {
+  * writable, implying that someone is about to modify the page through a
+  * shared-writable mapping
+  */
+-static int nfs_vm_page_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf)
++static int nfs_vm_page_mkwrite(struct vm_area_struct *vma, struct page *page)
+ {
+-	struct page *page = vmf->page;
+ 	struct file *filp = vma->vm_file;
+ 	struct dentry *dentry = filp->f_path.dentry;
+ 	unsigned pagelen;
+@@ -517,14 +464,15 @@ static int nfs_vm_page_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf)
+ 
+ 	ret = nfs_updatepage(filp, page, 0, pagelen);
+ out_unlock:
++	unlock_page(page);
+ 	if (!ret)
+ 		return VM_FAULT_LOCKED;
+-	unlock_page(page);
+ 	return VM_FAULT_SIGBUS;
+ }
+ 
+ static struct vm_operations_struct nfs_file_vm_ops = {
+-	.fault = filemap_fault,
++	.nopage         = filemap_nopage,
++	.populate       = filemap_populate,
+ 	.page_mkwrite = nfs_vm_page_mkwrite,
+ };
+ 
+@@ -751,16 +699,3 @@ static int nfs_flock(struct file *filp, int cmd, struct file_lock *fl)
+ 		return do_unlk(filp, cmd, fl);
+ 	return do_setlk(filp, cmd, fl);
+ }
+-
+-/*
+- * There is no protocol support for leases, so we have no way to implement
+- * them correctly in the face of opens by other clients.
+- */
+-static int nfs_setlease(struct file *file, long arg, struct file_lock **fl)
+-{
+-	dprintk("NFS: setlease(%s/%s, arg=%ld)\n",
+-			file->f_path.dentry->d_parent->d_name.name,
+-			file->f_path.dentry->d_name.name, arg);
+-
+-	return -EINVAL;
+-}
+diff --git a/fs/nfs/inode.c b/fs/nfs/inode.c
+index 64f8719..a66bfaf 100644
+--- a/fs/nfs/inode.c
++++ b/fs/nfs/inode.c
+@@ -1372,7 +1372,7 @@ static inline void nfs4_init_once(struct nfs_inode *nfsi)
+ #endif
+ }
+ 
+-static void init_once(void *foo)
++static void init_once(void *foo, struct kmem_cache *cachep, unsigned long temp)
+ {
+ 	struct nfs_inode *nfsi = (struct nfs_inode *) foo;
+ 
+@@ -1443,6 +1443,10 @@ static int __init init_nfs_fs(void)
+ {
+ 	int err;
+ 
++	err = init_mnt_writers();
++	if (err)
++		goto out7;
++
+ 	err = nfs_fscache_register();
+ 	if (err < 0)
+ 		goto out7;
+diff --git a/fs/nfs/namespace.c b/fs/nfs/namespace.c
+index 64a288e..3c0cf14 100644
+--- a/fs/nfs/namespace.c
++++ b/fs/nfs/namespace.c
+@@ -110,29 +110,29 @@ static void * nfs_follow_mountpoint(struct dentry *dentry, struct nameidata *nd)
+ 		goto out_err;
+ 
+ 	dprintk("%s: enter\n", __func__);
+-	dput(nd->path.dentry);
+-	nd->path.dentry = dget(dentry);
++	dput(nd->dentry);
++	nd->dentry = dget(dentry);
+ 
+ 	/* Look it up again */
+-	parent = dget_parent(nd->path.dentry);
++	parent = dget_parent(nd->dentry);
+ 	err = server->nfs_client->rpc_ops->lookup(parent->d_inode,
+-						  &nd->path.dentry->d_name,
++						  &nd->dentry->d_name,
+ 						  &fh, &fattr);
+ 	dput(parent);
+ 	if (err != 0)
+ 		goto out_err;
+ 
+ 	if (fattr.valid & NFS_ATTR_FATTR_V4_REFERRAL)
+-		mnt = nfs_do_refmount(nd->path.mnt, nd->path.dentry);
++		mnt = nfs_do_refmount(nd->mnt, nd->dentry);
+ 	else
+-		mnt = nfs_do_submount(nd->path.mnt, nd->path.dentry, &fh,
++		mnt = nfs_do_submount(nd->mnt, nd->dentry, &fh,
+ 				      &fattr);
+ 	err = PTR_ERR(mnt);
+ 	if (IS_ERR(mnt))
+ 		goto out_err;
+ 
+ 	mntget(mnt);
+-	err = do_add_mount(mnt, &nd->path, nd->path.mnt->mnt_flags|MNT_SHRINKABLE,
++	err = do_add_mount(mnt, nd, nd->mnt->mnt_flags|MNT_SHRINKABLE,
+ 			   &nfs_automount_list);
+ 	if (err < 0) {
+ 		mntput(mnt);
+@@ -140,9 +140,9 @@ static void * nfs_follow_mountpoint(struct dentry *dentry, struct nameidata *nd)
+ 			goto out_follow;
+ 		goto out_err;
+ 	}
+-	path_put(&nd->path);
+-	nd->path.mnt = mnt;
+-	nd->path.dentry = dget(mnt->mnt_root);
++	backport_path_put(nd);
++	nd->mnt = mnt;
++	nd->dentry = dget(mnt->mnt_root);
+ 	schedule_delayed_work(&nfs_automount_task, nfs_mountpoint_expiry_timeout);
+ out:
+ 	dprintk("%s: done, returned %d\n", __func__, err);
+@@ -150,11 +150,11 @@ out:
+ 	dprintk("<-- nfs_follow_mountpoint() = %d\n", err);
+ 	return ERR_PTR(err);
+ out_err:
+-	path_put(&nd->path);
++	backport_path_put(nd);
+ 	goto out;
+ out_follow:
+-	while (d_mountpoint(nd->path.dentry) &&
+-	       follow_down(&nd->path.mnt, &nd->path.dentry))
++	while (d_mountpoint(nd->dentry) &&
++	       follow_down(&nd->mnt, &nd->dentry))
+ 		;
+ 	err = 0;
+ 	goto out;
+diff --git a/fs/nfs/nfs4_fs.h b/fs/nfs/nfs4_fs.h
+index 84345de..4e4d332 100644
+--- a/fs/nfs/nfs4_fs.h
++++ b/fs/nfs/nfs4_fs.h
+@@ -179,7 +179,7 @@ struct nfs4_state_recovery_ops {
+ 	int (*recover_lock)(struct nfs4_state *, struct file_lock *);
+ };
+ 
+-extern const struct dentry_operations nfs4_dentry_operations;
++extern struct dentry_operations nfs4_dentry_operations;
+ extern const struct inode_operations nfs4_dir_inode_operations;
+ 
+ /* inode.c */
+diff --git a/fs/nfs/nfs4proc.c b/fs/nfs/nfs4proc.c
+index 4674f80..aee7604 100644
+--- a/fs/nfs/nfs4proc.c
++++ b/fs/nfs/nfs4proc.c
+@@ -1487,7 +1487,7 @@ struct dentry *
+ nfs4_atomic_open(struct inode *dir, struct dentry *dentry, struct nameidata *nd)
+ {
+ 	struct path path = {
+-		.mnt = nd->path.mnt,
++		.mnt = nd->mnt,
+ 		.dentry = dentry,
+ 	};
+ 	struct dentry *parent;
+@@ -1536,7 +1536,7 @@ int
+ nfs4_open_revalidate(struct inode *dir, struct dentry *dentry, int openflags, struct nameidata *nd)
+ {
+ 	struct path path = {
+-		.mnt = nd->path.mnt,
++		.mnt = nd->mnt,
+ 		.dentry = dentry,
+ 	};
+ 	struct rpc_cred *cred;
+@@ -1999,7 +1999,7 @@ nfs4_proc_create(struct inode *dir, struct dentry *dentry, struct iattr *sattr,
+                  int flags, struct nameidata *nd)
+ {
+ 	struct path path = {
+-		.mnt = nd->path.mnt,
++		.mnt = nd->mnt,
+ 		.dentry = dentry,
+ 	};
+ 	struct nfs4_state *state;
+diff --git a/fs/nfs/nfsroot.c b/fs/nfs/nfsroot.c
+index e3ed590..d08bf7f 100644
+--- a/fs/nfs/nfsroot.c
++++ b/fs/nfs/nfsroot.c
+@@ -129,7 +129,7 @@ enum {
+ 	Opt_err
+ };
+ 
+-static const match_table_t tokens __initconst = {
++static match_table_t tokens = {
+ 	{Opt_port, "port=%u"},
+ 	{Opt_rsize, "rsize=%u"},
+ 	{Opt_wsize, "wsize=%u"},
+@@ -331,7 +331,7 @@ static int __init root_nfs_addr(void)
+ 	}
+ 
+ 	snprintf(nfs_data.hostname, sizeof(nfs_data.hostname),
+-		 "%pI4", &servaddr);
++		 NIPQUAD_FMT, NIPQUAD(servaddr));
+ 	return 0;
+ }
+ 
+@@ -423,8 +423,8 @@ static int __init root_nfs_getport(int program, int version, int proto)
+ {
+ 	struct sockaddr_in sin;
+ 
+-	printk(KERN_NOTICE "Looking up port of RPC %d/%d on %pI4\n",
+-		program, version, &servaddr);
++	printk(KERN_NOTICE "Looking up port of RPC %d/%d on "NIPQUAD_FMT"\n",
++		program, version, NIPQUAD(servaddr));
+ 	set_sockaddr(&sin, servaddr, 0);
+ 	return rpcb_getport_sync(&sin, program, version, proto);
+ }
+diff --git a/fs/nfs/super.c b/fs/nfs/super.c
+index d2d6778..d4a2b8f 100644
+--- a/fs/nfs/super.c
++++ b/fs/nfs/super.c
+@@ -103,7 +103,7 @@ enum {
+ 	Opt_err
+ };
+ 
+-static const match_table_t nfs_mount_option_tokens = {
++static match_table_t nfs_mount_option_tokens = {
+ 	{ Opt_userspace, "bg" },
+ 	{ Opt_userspace, "fg" },
+ 	{ Opt_userspace, "retry=%s" },
+@@ -175,7 +175,7 @@ enum {
+ 	Opt_xprt_err
+ };
+ 
+-static const match_table_t nfs_xprt_protocol_tokens = {
++static match_table_t nfs_xprt_protocol_tokens = {
+ 	{ Opt_xprt_udp, "udp" },
+ 	{ Opt_xprt_tcp, "tcp" },
+ 	{ Opt_xprt_rdma, "rdma" },
+@@ -192,7 +192,7 @@ enum {
+ 	Opt_sec_err
+ };
+ 
+-static const match_table_t nfs_secflavor_tokens = {
++static match_table_t nfs_secflavor_tokens = {
+ 	{ Opt_sec_none, "none" },
+ 	{ Opt_sec_none, "null" },
+ 	{ Opt_sec_sys, "sys" },
+@@ -229,7 +229,7 @@ static match_table_t nfs_lookupcache_tokens = {
+ };
+ 
+ 
+-static void nfs_umount_begin(struct super_block *);
++static void nfs_umount_begin(struct vfsmount *vfsmnt, int flags);
+ static int  nfs_statfs(struct dentry *, struct kstatfs *);
+ static int  nfs_show_options(struct seq_file *, struct vfsmount *);
+ static int  nfs_show_stats(struct seq_file *, struct vfsmount *);
+@@ -313,10 +313,7 @@ static const struct super_operations nfs4_sops = {
+ };
+ #endif
+ 
+-static struct shrinker acl_shrinker = {
+-	.shrink		= nfs_access_cache_shrinker,
+-	.seeks		= DEFAULT_SEEKS,
+-};
++static struct shrinker *acl_shrinker;
+ 
+ /*
+  * Register the NFS filesystems
+@@ -337,7 +334,7 @@ int __init register_nfs_fs(void)
+ 	if (ret < 0)
+ 		goto error_2;
+ #endif
+-	register_shrinker(&acl_shrinker);
++	acl_shrinker = set_shrinker(DEFAULT_SEEKS, nfs_access_cache_shrinker);
+ 	return 0;
+ 
+ #ifdef CONFIG_NFS_V4
+@@ -355,7 +352,8 @@ error_0:
+  */
+ void __exit unregister_nfs_fs(void)
+ {
+-	unregister_shrinker(&acl_shrinker);
++	if (acl_shrinker != NULL)
++		remove_shrinker(acl_shrinker);
+ #ifdef CONFIG_NFS_V4
+ 	unregister_filesystem(&nfs4_fs_type);
+ #endif
+@@ -471,12 +469,12 @@ static void nfs_show_mountd_options(struct seq_file *m, struct nfs_server *nfss,
+ 	switch (sap->sa_family) {
+ 	case AF_INET: {
+ 		struct sockaddr_in *sin = (struct sockaddr_in *)sap;
+-		seq_printf(m, ",mountaddr=%pI4", &sin->sin_addr.s_addr);
++		seq_printf(m, ",mountaddr="NIPQUAD_FMT, NIPQUAD(sin->sin_addr.s_addr));
+ 		break;
+ 	}
+ 	case AF_INET6: {
+ 		struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)sap;
+-		seq_printf(m, ",mountaddr=%pI6", &sin6->sin6_addr);
++		seq_printf(m, ",mountaddr="NIP6_FMT, NIP6(sin6->sin6_addr));
+ 		break;
+ 	}
+ 	default:
+@@ -681,14 +679,17 @@ static int nfs_show_stats(struct seq_file *m, struct vfsmount *mnt)
+  * Begin unmount by attempting to remove all automounted mountpoints we added
+  * in response to xdev traversals and referrals
+  */
+-static void nfs_umount_begin(struct super_block *sb)
++static void nfs_umount_begin(struct vfsmount *vfsmnt, int flags)
+ {
+ 	struct nfs_server *server;
+ 	struct rpc_clnt *rpc;
+ 
++	if (!(flags & MNT_FORCE))
++		return;
++
+ 	lock_kernel();
+ 
+-	server = NFS_SB(sb);
++	server = NFS_SB(vfsmnt->mnt_sb);
+ 	/* -EIO all pending I/O */
+ 	rpc = server->client_acl;
+ 	if (!IS_ERR(rpc))
+diff --git a/fs/nfsd/auth.c b/fs/nfsd/auth.c
+index 5573508..294992e 100644
+--- a/fs/nfsd/auth.c
++++ b/fs/nfsd/auth.c
+@@ -27,73 +27,53 @@ int nfsexp_flags(struct svc_rqst *rqstp, struct svc_export *exp)
+ 
+ int nfsd_setuser(struct svc_rqst *rqstp, struct svc_export *exp)
+ {
+-	struct group_info *rqgi;
+-	struct group_info *gi;
+-	struct cred *new;
++	struct svc_cred	cred = rqstp->rq_cred;
+ 	int i;
+ 	int flags = nfsexp_flags(rqstp, exp);
+ 	int ret;
+ 
+-	/* discard any old override before preparing the new set */
+-	revert_creds(get_cred(current->real_cred));
+-	new = prepare_creds();
+-	if (!new)
+-		return -ENOMEM;
+-
+-	new->fsuid = rqstp->rq_cred.cr_uid;
+-	new->fsgid = rqstp->rq_cred.cr_gid;
+-
+-	rqgi = rqstp->rq_cred.cr_group_info;
+-
+ 	if (flags & NFSEXP_ALLSQUASH) {
+-		new->fsuid = exp->ex_anon_uid;
+-		new->fsgid = exp->ex_anon_gid;
+-		gi = groups_alloc(0);
+-		if (!gi)
+-			goto oom;
++		cred.cr_uid = exp->ex_anon_uid;
++		cred.cr_gid = exp->ex_anon_gid;
++		cred.cr_group_info = groups_alloc(0);
+ 	} else if (flags & NFSEXP_ROOTSQUASH) {
+-		if (!new->fsuid)
+-			new->fsuid = exp->ex_anon_uid;
+-		if (!new->fsgid)
+-			new->fsgid = exp->ex_anon_gid;
+-
+-		gi = groups_alloc(rqgi->ngroups);
+-		if (!gi)
+-			goto oom;
++		struct group_info *gi;
++		if (!cred.cr_uid)
++			cred.cr_uid = exp->ex_anon_uid;
++		if (!cred.cr_gid)
++			cred.cr_gid = exp->ex_anon_gid;
++		gi = groups_alloc(cred.cr_group_info->ngroups);
++		if (gi)
++			for (i = 0; i < cred.cr_group_info->ngroups; i++) {
++				if (!GROUP_AT(cred.cr_group_info, i))
++					GROUP_AT(gi, i) = exp->ex_anon_gid;
++				else
++					GROUP_AT(gi, i) = GROUP_AT(cred.cr_group_info, i);
++			}
++		cred.cr_group_info = gi;
++	} else
++		get_group_info(cred.cr_group_info);
++
++	if (cred.cr_uid != (uid_t) -1)
++		current->fsuid = cred.cr_uid;
++	else
++		current->fsuid = exp->ex_anon_uid;
++	if (cred.cr_gid != (gid_t) -1)
++		current->fsgid = cred.cr_gid;
++	else
++		current->fsgid = exp->ex_anon_gid;
+ 
+-		for (i = 0; i < rqgi->ngroups; i++) {
+-			if (!GROUP_AT(rqgi, i))
+-				GROUP_AT(gi, i) = exp->ex_anon_gid;
+-			else
+-				GROUP_AT(gi, i) = GROUP_AT(rqgi, i);
+-		}
++	if (!cred.cr_group_info)
++		return -ENOMEM;
++	ret = set_current_groups(cred.cr_group_info);
++	put_group_info(cred.cr_group_info);
++	if ((cred.cr_uid)) {
++		current->cap_effective =
++			cap_drop_nfsd_set(current->cap_effective);
+ 	} else {
+-		gi = get_group_info(rqgi);
++		current->cap_effective =
++			cap_raise_nfsd_set(current->cap_effective,
++					   current->cap_permitted);
+ 	}
+-
+-	if (new->fsuid == (uid_t) -1)
+-		new->fsuid = exp->ex_anon_uid;
+-	if (new->fsgid == (gid_t) -1)
+-		new->fsgid = exp->ex_anon_gid;
+-
+-	ret = set_groups(new, gi);
+-	put_group_info(gi);
+-	if (ret < 0)
+-		goto error;
+-
+-	if (new->fsuid)
+-		new->cap_effective = cap_drop_nfsd_set(new->cap_effective);
+-	else
+-		new->cap_effective = cap_raise_nfsd_set(new->cap_effective,
+-							new->cap_permitted);
+-	put_cred(override_creds(new));
+-	put_cred(new);
+-	return 0;
+-
+-oom:
+-	ret = -ENOMEM;
+-error:
+-	abort_creds(new);
+ 	return ret;
+ }
+-
+diff --git a/fs/nfsd/export.c b/fs/nfsd/export.c
+index 5839b22..41482e0 100644
+--- a/fs/nfsd/export.c
++++ b/fs/nfsd/export.c
+@@ -203,7 +203,7 @@ static int expkey_show(struct seq_file *m,
+ 	if (test_bit(CACHE_VALID, &h->flags) && 
+ 	    !test_bit(CACHE_NEGATIVE, &h->flags)) {
+ 		seq_printf(m, " ");
+-		seq_path(m, &ek->ek_path, "\\ \t\n");
++		seq_path(m, ek->ek_path.mnt, ek->ek_path.dentry, "\\ \t\n");
+ 	}
+ 	seq_printf(m, "\n");
+ 	return 0;
+@@ -345,7 +345,7 @@ static void svc_export_request(struct cache_detail *cd,
+ 	char *pth;
+ 
+ 	qword_add(bpp, blen, exp->ex_client->name);
+-	pth = d_path(&exp->ex_path, *bpp, *blen);
++	pth = d_path(exp->ex_path.dentry, exp->ex_path.mnt, *bpp, *blen);
+ 	if (IS_ERR(pth)) {
+ 		/* is this correct? */
+ 		(*bpp)[0] = '\n';
+@@ -383,12 +383,10 @@ static int check_export(struct inode *inode, int flags, unsigned char *uuid)
+ 		return -EINVAL;
+ 	}
+ 
+-	if (!inode->i_sb->s_export_op ||
+-	    !inode->i_sb->s_export_op->fh_to_dentry) {
+-		dprintk("exp_export: export of invalid fs type.\n");
+-		return -EINVAL;
+-	}
+-
++	/* Ok, we can export it */;
++	if (!inode->i_sb->s_export_op->find_exported_dentry)
++		inode->i_sb->s_export_op->find_exported_dentry =
++			find_exported_dentry;
+ 	return 0;
+ 
+ }
+@@ -642,7 +640,7 @@ static int svc_export_show(struct seq_file *m,
+ 		return 0;
+ 	}
+ 	exp = container_of(h, struct svc_export, h);
+-	seq_path(m, &exp->ex_path, " \t\n\\");
++	seq_path(m, exp->ex_path.mnt, exp->ex_path.dentry, " \t\n\\");
+ 	seq_putc(m, '\t');
+ 	seq_escape(m, exp->ex_client->name, " \t\n\\");
+ 	seq_putc(m, '(');
+diff --git a/fs/nfsd/nfs4recover.c b/fs/nfsd/nfs4recover.c
+index b534840..0e87865 100644
+--- a/fs/nfsd/nfs4recover.c
++++ b/fs/nfsd/nfs4recover.c
+@@ -54,26 +54,20 @@
+ static struct path rec_dir;
+ static int rec_dir_init = 0;
+ 
+-static int
+-nfs4_save_creds(const struct cred **original_creds)
++static void
++nfs4_save_user(uid_t *saveuid, gid_t *savegid)
+ {
+-	struct cred *new;
+-
+-	new = prepare_creds();
+-	if (!new)
+-		return -ENOMEM;
+-
+-	new->fsuid = 0;
+-	new->fsgid = 0;
+-	*original_creds = override_creds(new);
+-	put_cred(new);
+-	return 0;
++	*saveuid = current->fsuid;
++	*savegid = current->fsgid;
++	current->fsuid = 0;
++	current->fsgid = 0;
+ }
+ 
+ static void
+-nfs4_reset_creds(const struct cred *original)
++nfs4_reset_user(uid_t saveuid, gid_t savegid)
+ {
+-	revert_creds(original);
++	current->fsuid = saveuid;
++	current->fsgid = savegid;
+ }
+ 
+ static void
+@@ -135,7 +129,8 @@ nfsd4_sync_rec_dir(void)
+ int
+ nfsd4_create_clid_dir(struct nfs4_client *clp)
+ {
+-	const struct cred *original_cred;
++	uid_t uid;
++	gid_t gid;
+ 	char *dname = clp->cl_recdir;
+ 	struct dentry *dentry;
+ 	int status;
+@@ -145,9 +140,7 @@ nfsd4_create_clid_dir(struct nfs4_client *clp)
+ 	if (!rec_dir_init || clp->cl_firststate)
+ 		return 0;
+ 
+-	status = nfs4_save_creds(&original_cred);
+-	if (status < 0)
+-		return status;
++	nfs4_save_user(&uid, &gid);
+ 
+ 	/* lock the parent */
+ 	mutex_lock(&rec_dir.dentry->d_inode->i_mutex);
+@@ -175,7 +168,7 @@ out_unlock:
+ 		clp->cl_firststate = 1;
+ 		nfsd4_sync_rec_dir();
+ 	}
+-	nfs4_reset_creds(original_cred);
++	nfs4_reset_user(uid, gid);
+ 	dprintk("NFSD: nfsd4_create_clid_dir returns %d\n", status);
+ 	return status;
+ }
+@@ -208,7 +201,8 @@ nfsd4_build_namelist(void *arg, const char *name, int namlen,
+ static int
+ nfsd4_list_rec_dir(struct dentry *dir, recdir_func *f)
+ {
+-	const struct cred *original_cred;
++	uid_t uid;
++	gid_t gid;
+ 	struct file *filp;
+ 	LIST_HEAD(names);
+ 	struct name_list *entry;
+@@ -218,12 +212,9 @@ nfsd4_list_rec_dir(struct dentry *dir, recdir_func *f)
+ 	if (!rec_dir_init)
+ 		return 0;
+ 
+-	status = nfs4_save_creds(&original_cred);
+-	if (status < 0)
+-		return status;
++	nfs4_save_user(&uid, &gid);
+ 
+-	filp = dentry_open(dget(dir), mntget(rec_dir.mnt), O_RDONLY,
+-			   current_cred());
++	filp = dentry_open(dget(dir), mntget(rec_dir.mnt), O_RDONLY);
+ 	status = PTR_ERR(filp);
+ 	if (IS_ERR(filp))
+ 		goto out;
+@@ -252,7 +243,7 @@ out:
+ 		list_del(&entry->list);
+ 		kfree(entry);
+ 	}
+-	nfs4_reset_creds(original_cred);
++	nfs4_reset_user(uid, gid);
+ 	return status;
+ }
+ 
+@@ -284,7 +275,8 @@ out_unlock:
+ void
+ nfsd4_remove_clid_dir(struct nfs4_client *clp)
+ {
+-	const struct cred *original_cred;
++	uid_t uid;
++	gid_t gid;
+ 	int status;
+ 
+ 	if (!rec_dir_init || !clp->cl_firststate)
+@@ -295,12 +287,10 @@ nfsd4_remove_clid_dir(struct nfs4_client *clp)
+ 		goto out;
+ 	clp->cl_firststate = 0;
+ 
+-	status = nfs4_save_creds(&original_cred);
+-	if (status < 0)
+-		goto out;
++	nfs4_save_user(&uid, &gid);
+ 
+ 	status = nfsd4_unlink_clid_dir(clp->cl_recdir, HEXDIR_LEN-1);
+-	nfs4_reset_creds(original_cred);
++	nfs4_reset_user(uid, gid);
+ 	if (status == 0)
+ 		nfsd4_sync_rec_dir();
+ 	mnt_drop_write(rec_dir.mnt);
+@@ -378,7 +368,8 @@ nfsd4_recdir_load(void) {
+ void
+ nfsd4_init_recdir(char *rec_dirname)
+ {
+-	const struct cred *original_cred;
++	uid_t uid;
++	gid_t gid;
+ 	int status;
+ 
+ 	printk("NFSD: Using %s as the NFSv4 state recovery directory\n",
+@@ -386,13 +377,7 @@ nfsd4_init_recdir(char *rec_dirname)
+ 
+ 	BUG_ON(rec_dir_init);
+ 
+-	status = nfs4_save_creds(&original_cred);
+-	if (status < 0) {
+-		printk("NFSD: Unable to change credentials to find recovery"
+-		       " directory: error %d\n",
+-		       status);
+-		return;
+-	}
++	nfs4_save_user(&uid, &gid);
+ 
+ 	status = kern_path(rec_dirname, LOOKUP_FOLLOW | LOOKUP_DIRECTORY,
+ 			&rec_dir);
+@@ -402,7 +387,7 @@ nfsd4_init_recdir(char *rec_dirname)
+ 
+ 	if (!status)
+ 		rec_dir_init = 1;
+-	nfs4_reset_creds(original_cred);
++	nfs4_reset_user(uid, gid);
+ }
+ 
+ void
+diff --git a/fs/nfsd/nfs4state.c b/fs/nfsd/nfs4state.c
+index 3b711f5..8c90853 100644
+--- a/fs/nfsd/nfs4state.c
++++ b/fs/nfsd/nfs4state.c
+@@ -1551,7 +1551,7 @@ nfsd4_setclientid(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
+ 		status = nfserr_clid_inuse;
+ 		if (!same_creds(&conf->cl_cred, &rqstp->rq_cred)) {
+ 			dprintk("NFSD: setclientid: string in use by client"
+-				" at %pI4\n", &conf->cl_addr);
++				" at "NIPQUAD_FMT"\n", NIPQUAD(conf->cl_addr));
+ 			goto out;
+ 		}
+ 	}
+@@ -3600,6 +3600,7 @@ nfsd4_lock(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
+ 	* Note: locks.c uses the BKL to protect the inode's lock list.
+ 	*/
+ 
++	locks_init_lock(&conflock);
+ 	err = vfs_lock_file(filp, cmd, &file_lock, &conflock);
+ 	switch (-err) {
+ 	case 0: /* success! */
+diff --git a/fs/nfsd/nfsfh.c b/fs/nfsd/nfsfh.c
+index 9f1ca17..3702de6 100644
+--- a/fs/nfsd/nfsfh.c
++++ b/fs/nfsd/nfsfh.c
+@@ -186,14 +186,9 @@ static __be32 nfsd_set_fh_dentry(struct svc_rqst *rqstp, struct svc_fh *fhp)
+ 		 * access control settings being in effect, we cannot
+ 		 * fix that case easily.
+ 		 */
+-		struct cred *new = prepare_creds();
+-		if (!new)
+-			return nfserrno(-ENOMEM);
+-		new->cap_effective =
+-			cap_raise_nfsd_set(new->cap_effective,
+-					   new->cap_permitted);
+-		put_cred(override_creds(new));
+-		put_cred(new);
++		current->cap_effective =
++			cap_raise_nfsd_set(current->cap_effective,
++					   current->cap_permitted);
+ 	} else {
+ 		error = nfsd_setuser_and_check_port(rqstp, exp);
+ 		if (error)
+diff --git a/fs/nfsd/vfs.c b/fs/nfsd/vfs.c
+index b660435..d5cbe47 100644
+--- a/fs/nfsd/vfs.c
++++ b/fs/nfsd/vfs.c
+@@ -55,6 +55,7 @@
+ #include <linux/security.h>
+ #endif /* CONFIG_NFSD_V4 */
+ #include <linux/jhash.h>
++#include <linux/cred.h>
+ 
+ #include <asm/uaccess.h>
+ 
+@@ -732,7 +732,7 @@ nfsd_open(struct svc_rqst *rqstp, struct svc_fh *fhp, int type,
+ 		vfs_dq_init(inode);
+ 	}
+ 	*filp = dentry_open(dget(dentry), mntget(fhp->fh_export->ex_path.mnt),
+-			    flags, current_cred());
++			    flags);
+ 	if (IS_ERR(*filp))
+ 		host_err = PTR_ERR(*filp);
+ out_nfserr:
+@@ -843,47 +843,38 @@ found:
+  * directly. They will be released after the sending has completed.
+  */
+ static int
+-nfsd_splice_actor(struct pipe_inode_info *pipe, struct pipe_buffer *buf,
+-		  struct splice_desc *sd)
++nfsd_read_actor(read_descriptor_t *desc, struct page *page, unsigned long offset, unsigned long size)
+ {
+-	struct svc_rqst *rqstp = sd->u.data;
++	unsigned long count = desc->count;
++	struct svc_rqst *rqstp = desc->arg.data;
+ 	struct page **pp = rqstp->rq_respages + rqstp->rq_resused;
+-	struct page *page = buf->page;
+-	size_t size;
+-	int ret;
+-
+-	ret = buf->ops->confirm(pipe, buf);
+-	if (unlikely(ret))
+-		return ret;
+ 
+-	size = sd->len;
++	if (size > count)
++		size = count;
+ 
+ 	if (rqstp->rq_res.page_len == 0) {
+ 		get_page(page);
+-		put_page(*pp);
+-		*pp = page;
+-		rqstp->rq_resused++;
+-		rqstp->rq_res.page_base = buf->offset;
++		if (*pp)
++			put_page(*pp);
++		rqstp->rq_respages[rqstp->rq_resused++] = page;
++		rqstp->rq_res.page_base = offset;
+ 		rqstp->rq_res.page_len = size;
+-	} else if (page != pp[-1]) {
++	} else if (page != rqstp->rq_respages[rqstp->rq_resused-1]) {
+ 		get_page(page);
+ 		if (*pp)
+ 			put_page(*pp);
+ 		*pp = page;
+-		rqstp->rq_resused++;
++		rqstp->rq_respages[rqstp->rq_resused++] = page;
+ 		rqstp->rq_res.page_len += size;
+-	} else
++	} else {
+ 		rqstp->rq_res.page_len += size;
++	}
+ 
++	desc->count = count - size;
++	desc->written += size;
+ 	return size;
+ }
+ 
+-static int nfsd_direct_splice_actor(struct pipe_inode_info *pipe,
+-				    struct splice_desc *sd)
+-{
+-	return __splice_from_pipe(pipe, sd, nfsd_splice_actor);
+-}
+-
+ static inline int svc_msnfs(struct svc_fh *ffhp)
+ {
+ #ifdef MSNFS
+@@ -915,16 +906,9 @@ nfsd_vfs_read(struct svc_rqst *rqstp, struct svc_fh *fhp, struct file *file,
+ 	if (ra && ra->p_set)
+ 		file->f_ra = ra->p_ra;
+ 
+-	if (file->f_op->splice_read && rqstp->rq_splice_ok) {
+-		struct splice_desc sd = {
+-			.len		= 0,
+-			.total_len	= *count,
+-			.pos		= offset,
+-			.u.data		= rqstp,
+-		};
+-
++	if (file->f_op->sendfile && rqstp->rq_sendfile_ok) {
+ 		rqstp->rq_resused = 1;
+-		host_err = splice_direct_to_actor(file, &sd, nfsd_direct_splice_actor);
++		host_err = file->f_op->sendfile(file, &offset, *count, nfsd_read_actor, rqstp);
+ 	} else {
+ 		oldfs = get_fs();
+ 		set_fs(KERNEL_DS);
+@@ -1005,9 +989,7 @@ nfsd_vfs_write(struct svc_rqst *rqstp, struct svc_fh *fhp, struct file *file,
+ 	if (!EX_ISSYNC(exp))
+ 		stable = 0;
+ 	if (stable && !EX_WGATHER(exp)) {
+-		spin_lock(&file->f_lock);
+ 		file->f_flags |= O_SYNC;
+-		spin_unlock(&file->f_lock);
+ 	}
+ 
+ 	/* Write the data. */
+diff --git a/include-nfs/linux/exportfs.h b/include-nfs/linux/exportfs.h
+index 27e772c..ad9a829 100644
+--- a/include-nfs/linux/exportfs.h
++++ b/include-nfs/linux/exportfs.h
+@@ -89,85 +89,10 @@ struct fid {
+ 	};
+ };
+ 
+-/**
+- * struct export_operations - for nfsd to communicate with file systems
+- * @encode_fh:      encode a file handle fragment from a dentry
+- * @fh_to_dentry:   find the implied object and get a dentry for it
+- * @fh_to_parent:   find the implied object's parent and get a dentry for it
+- * @get_name:       find the name for a given inode in a given directory
+- * @get_parent:     find the parent of a given directory
+- *
+- * See Documentation/filesystems/Exporting for details on how to use
+- * this interface correctly.
+- *
+- * encode_fh:
+- *    @encode_fh should store in the file handle fragment @fh (using at most
+- *    @max_len bytes) information that can be used by @decode_fh to recover the
+- *    file refered to by the &struct dentry @de.  If the @connectable flag is
+- *    set, the encode_fh() should store sufficient information so that a good
+- *    attempt can be made to find not only the file but also it's place in the
+- *    filesystem.   This typically means storing a reference to de->d_parent in
+- *    the filehandle fragment.  encode_fh() should return the number of bytes
+- *    stored or a negative error code such as %-ENOSPC
+- *
+- * fh_to_dentry:
+- *    @fh_to_dentry is given a &struct super_block (@sb) and a file handle
+- *    fragment (@fh, @fh_len). It should return a &struct dentry which refers
+- *    to the same file that the file handle fragment refers to.  If it cannot,
+- *    it should return a %NULL pointer if the file was found but no acceptable
+- *    &dentries were available, or an %ERR_PTR error code indicating why it
+- *    couldn't be found (e.g. %ENOENT or %ENOMEM).  Any suitable dentry can be
+- *    returned including, if necessary, a new dentry created with d_alloc_root.
+- *    The caller can then find any other extant dentries by following the
+- *    d_alias links.
+- *
+- * fh_to_parent:
+- *    Same as @fh_to_dentry, except that it returns a pointer to the parent
+- *    dentry if it was encoded into the filehandle fragment by @encode_fh.
+- *
+- * get_name:
+- *    @get_name should find a name for the given @child in the given @parent
+- *    directory.  The name should be stored in the @name (with the
+- *    understanding that it is already pointing to a a %NAME_MAX+1 sized
+- *    buffer.   get_name() should return %0 on success, a negative error code
+- *    or error.  @get_name will be called without @parent->i_mutex held.
+- *
+- * get_parent:
+- *    @get_parent should find the parent directory for the given @child which
+- *    is also a directory.  In the event that it cannot be found, or storage
+- *    space cannot be allocated, a %ERR_PTR should be returned.
+- *
+- * Locking rules:
+- *    get_parent is called with child->d_inode->i_mutex down
+- *    get_name is not (which is possibly inconsistent)
+- */
+-
+-struct export_operations {
+-	int (*encode_fh)(struct dentry *de, __u32 *fh, int *max_len,
+-			int connectable);
+-	struct dentry * (*fh_to_dentry)(struct super_block *sb, struct fid *fid,
+-			int fh_len, int fh_type);
+-	struct dentry * (*fh_to_parent)(struct super_block *sb, struct fid *fid,
+-			int fh_len, int fh_type);
+-	int (*get_name)(struct dentry *parent, char *name,
+-			struct dentry *child);
+-	struct dentry * (*get_parent)(struct dentry *child);
+-};
+-
+ extern int exportfs_encode_fh(struct dentry *dentry, struct fid *fid,
+ 	int *max_len, int connectable);
+ extern struct dentry *exportfs_decode_fh(struct vfsmount *mnt, struct fid *fid,
+ 	int fh_len, int fileid_type, int (*acceptable)(void *, struct dentry *),
+ 	void *context);
+ 
+-/*
+- * Generic helpers for filesystems.
+- */
+-extern struct dentry *generic_fh_to_dentry(struct super_block *sb,
+-	struct fid *fid, int fh_len, int fh_type,
+-	struct inode *(*get_inode) (struct super_block *sb, u64 ino, u32 gen));
+-extern struct dentry *generic_fh_to_parent(struct super_block *sb,
+-	struct fid *fid, int fh_len, int fh_type,
+-	struct inode *(*get_inode) (struct super_block *sb, u64 ino, u32 gen));
+-
+ #endif /* LINUX_EXPORTFS_H */
+diff --git a/include-nfs/linux/nfs_fs.h b/include-nfs/linux/nfs_fs.h
+index fdffb41..4f1382b 100644
+--- a/include-nfs/linux/nfs_fs.h
++++ b/include-nfs/linux/nfs_fs.h
+@@ -343,7 +343,7 @@ extern int nfs_refresh_inode(struct inode *, struct nfs_fattr *);
+ extern int nfs_post_op_update_inode(struct inode *inode, struct nfs_fattr *fattr);
+ extern int nfs_post_op_update_inode_force_wcc(struct inode *inode, struct nfs_fattr *fattr);
+ extern int nfs_getattr(struct vfsmount *, struct dentry *, struct kstat *);
+-extern int nfs_permission(struct inode *, int);
++extern int nfs_permission(struct inode *, int, struct nameidata *);
+ extern int nfs_open(struct inode *, struct file *);
+ extern int nfs_release(struct inode *, struct file *);
+ extern int nfs_attribute_timeout(struct inode *inode);
+@@ -425,7 +425,7 @@ extern const struct inode_operations nfs_dir_inode_operations;
+ extern const struct inode_operations nfs3_dir_inode_operations;
+ #endif /* CONFIG_NFS_V3 */
+ extern const struct file_operations nfs_dir_operations;
+-extern const struct dentry_operations nfs_dentry_operations;
++extern struct dentry_operations nfs_dentry_operations;
+ 
+ extern void nfs_force_lookup_revalidate(struct inode *dir);
+ extern int nfs_instantiate(struct dentry *dentry, struct nfs_fh *fh, struct nfs_fattr *fattr);
+diff --git a/include-nfs/linux/nfs_xdr.h b/include-nfs/linux/nfs_xdr.h
+index b89c34e..9708e78 100644
+--- a/include-nfs/linux/nfs_xdr.h
++++ b/include-nfs/linux/nfs_xdr.h
+@@ -817,7 +817,7 @@ struct nfs_access_entry;
+  */
+ struct nfs_rpc_ops {
+ 	u32	version;		/* Protocol version */
+-	const struct dentry_operations *dentry_ops;
++	struct dentry_operations *dentry_ops;
+ 	const struct inode_operations *dir_inode_ops;
+ 	const struct inode_operations *file_inode_ops;
+ 
+diff --git a/include-nfs/linux/sunrpc/svc.h b/include-nfs/linux/sunrpc/svc.h
+index 2a30775..972e62c 100644
+--- a/include-nfs/linux/sunrpc/svc.h
++++ b/include-nfs/linux/sunrpc/svc.h
+@@ -272,7 +272,7 @@ struct svc_rqst {
+ 						 * determine what device number
+ 						 * to report (real or virtual)
+ 						 */
+-	int			rq_splice_ok;   /* turned off in gss privacy
++	int			rq_sendfile_ok;	/* turned off in gss privacy
+ 						 * to prevent encrypting page
+ 						 * cache pages */
+ 	wait_queue_head_t	rq_wait;	/* synchronization */
+diff --git a/include-nfs/linux/sunrpc/svc_xprt.h b/include-nfs/linux/sunrpc/svc_xprt.h
+index 0d9cb6e..66ac213 100644
+--- a/include-nfs/linux/sunrpc/svc_xprt.h
++++ b/include-nfs/linux/sunrpc/svc_xprt.h
+@@ -147,13 +147,13 @@ static inline char *__svc_print_addr(const struct sockaddr *addr,
+ 
+ 	switch (addr->sa_family) {
+ 	case AF_INET:
+-		snprintf(buf, len, "%pI4, port=%u", &sin->sin_addr,
++		snprintf(buf, len,  NIPQUAD_FMT", port=%u", NIPQUAD(sin->sin_addr),
+ 			ntohs(sin->sin_port));
+ 		break;
+ 
+ 	case AF_INET6:
+-		snprintf(buf, len, "%pI6, port=%u",
+-			 &sin6->sin6_addr,
++		snprintf(buf, len, NIP6_FMT", port=%u",
++			NIP6(sin6->sin6_addr),
+ 			ntohs(sin6->sin6_port));
+ 		break;
+ 
+diff --git a/net/sunrpc/auth.c b/net/sunrpc/auth.c
+index 0c431c2..1b48190 100644
+--- a/net/sunrpc/auth.c
++++ b/net/sunrpc/auth.c
+@@ -350,18 +350,17 @@ EXPORT_SYMBOL_GPL(rpcauth_lookup_credcache);
+ struct rpc_cred *
+ rpcauth_lookupcred(struct rpc_auth *auth, int flags)
+ {
+-	struct auth_cred acred;
++	struct auth_cred acred = {
++		.uid = current->fsuid,
++		.gid = current->fsgid,
++		.group_info = current->group_info,
++	};
+ 	struct rpc_cred *ret;
+-	const struct cred *cred = current_cred();
+ 
+ 	dprintk("RPC:       looking up %s cred\n",
+ 		auth->au_ops->au_name);
+ 
+-	memset(&acred, 0, sizeof(acred));
+-	acred.uid = cred->fsuid;
+-	acred.gid = cred->fsgid;
+-	acred.group_info = get_group_info(((struct cred *)cred)->group_info);
+-
++	get_group_info(acred.group_info);
+ 	ret = auth->au_ops->lookup_cred(auth, &acred, flags);
+ 	put_group_info(acred.group_info);
+ 	return ret;
+@@ -568,19 +567,16 @@ rpcauth_uptodatecred(struct rpc_task *task)
+ 		test_bit(RPCAUTH_CRED_UPTODATE, &cred->cr_flags) != 0;
+ }
+ 
+-static struct shrinker rpc_cred_shrinker = {
+-	.shrink = rpcauth_cache_shrinker,
+-	.seeks = DEFAULT_SEEKS,
+-};
++static struct shrinker *rpc_cred_shrinker;
+ 
+ void __init rpcauth_init_module(void)
+ {
+ 	rpc_init_authunix();
+ 	rpc_init_generic_auth();
+-	register_shrinker(&rpc_cred_shrinker);
++	rpc_cred_shrinker = set_shrinker(DEFAULT_SEEKS, rpcauth_cache_shrinker);
+ }
+ 
+ void __exit rpcauth_remove_module(void)
+ {
+-	unregister_shrinker(&rpc_cred_shrinker);
++	remove_shrinker(rpc_cred_shrinker);
+ }
+diff --git a/net/sunrpc/auth_gss/svcauth_gss.c b/net/sunrpc/auth_gss/svcauth_gss.c
+index 2278a50..44b2e70 100644
+--- a/net/sunrpc/auth_gss/svcauth_gss.c
++++ b/net/sunrpc/auth_gss/svcauth_gss.c
+@@ -873,7 +873,7 @@ unwrap_priv_data(struct svc_rqst *rqstp, struct xdr_buf *buf, u32 seq, struct gs
+ 	u32 priv_len, maj_stat;
+ 	int pad, saved_len, remaining_len, offset;
+ 
+-	rqstp->rq_splice_ok = 0;
++	rqstp->rq_sendfile_ok = 0;
+ 
+ 	priv_len = svc_getnl(&buf->head[0]);
+ 	if (rqstp->rq_deferred) {
+diff --git a/net/sunrpc/clnt.c b/net/sunrpc/clnt.c
+index 5abab09..6555f87 100644
+--- a/net/sunrpc/clnt.c
++++ b/net/sunrpc/clnt.c
+@@ -279,15 +279,15 @@ struct rpc_clnt *rpc_create(struct rpc_create_args *args)
+ 		case AF_INET: {
+ 			struct sockaddr_in *sin =
+ 					(struct sockaddr_in *)args->address;
+-			snprintf(servername, sizeof(servername), "%pI4",
+-				 &sin->sin_addr.s_addr);
++			snprintf(servername, sizeof(servername),  NIPQUAD_FMT,
++				 NIPQUAD(sin->sin_addr.s_addr));
+ 			break;
+ 		}
+ 		case AF_INET6: {
+ 			struct sockaddr_in6 *sin =
+ 					(struct sockaddr_in6 *)args->address;
+-			snprintf(servername, sizeof(servername), "%pI6",
+-				 &sin->sin6_addr);
++			snprintf(servername, sizeof(servername), NIP6_FMT,
++				 NIP6(sin->sin6_addr));
+ 			break;
+ 		}
+ 		default:
+diff --git a/net/sunrpc/rpc_pipe.c b/net/sunrpc/rpc_pipe.c
+index 9ced062..849e10f 100644
+--- a/net/sunrpc/rpc_pipe.c
++++ b/net/sunrpc/rpc_pipe.c
+@@ -14,7 +14,7 @@
+ #include <linux/pagemap.h>
+ #include <linux/mount.h>
+ #include <linux/namei.h>
+-#include <linux/fsnotify.h>
++#include <linux/dnotify.h>
+ #include <linux/kernel.h>
+ 
+ #include <asm/ioctls.h>
+@@ -480,7 +480,7 @@ static int rpc_delete_dentry(struct dentry *dentry)
+ 	return 1;
+ }
+ 
+-static const struct dentry_operations rpc_dentry_operations = {
++static struct dentry_operations rpc_dentry_operations = {
+ 	.d_delete = rpc_delete_dentry,
+ };
+ 
+@@ -511,7 +511,7 @@ rpc_lookup_parent(char *path, struct nameidata *nd)
+ static void
+ rpc_release_path(struct nameidata *nd)
+ {
+-	path_put(&nd->path);
++	backport_path_put(nd);
+ 	rpc_put_mount();
+ }
+ 
+@@ -611,7 +611,6 @@ rpc_populate(struct dentry *parent,
+ 		if (S_ISDIR(mode))
+ 			inc_nlink(dir);
+ 		d_add(dentry, inode);
+-		fsnotify_create(dir, dentry);
+ 	}
+ 	mutex_unlock(&dir->i_mutex);
+ 	return 0;
+@@ -633,7 +632,7 @@ __rpc_mkdir(struct inode *dir, struct dentry *dentry)
+ 	inode->i_ino = iunique(dir->i_sb, 100);
+ 	d_instantiate(dentry, inode);
+ 	inc_nlink(dir);
+-	fsnotify_mkdir(dir, dentry);
++	inode_dir_notify(dir, DN_CREATE);
+ 	return 0;
+ out_err:
+ 	printk(KERN_WARNING "%s: %s failed to allocate inode for dentry %s\n",
+@@ -682,7 +681,7 @@ rpc_lookup_negative(char *path, struct nameidata *nd)
+ 
+ 	if ((error = rpc_lookup_parent(path, nd)) != 0)
+ 		return ERR_PTR(error);
+-	dentry = rpc_lookup_create(nd->path.dentry, nd->last.name, nd->last.len,
++	dentry = rpc_lookup_create(nd->dentry, nd->last.name, nd->last.len,
+ 				   1);
+ 	if (IS_ERR(dentry))
+ 		rpc_release_path(nd);
+@@ -710,7 +709,7 @@ rpc_mkdir(char *path, struct rpc_clnt *rpc_client)
+ 	dentry = rpc_lookup_negative(path, &nd);
+ 	if (IS_ERR(dentry))
+ 		return dentry;
+-	dir = nd.path.dentry->d_inode;
++	dir = nd.dentry->d_inode;
+ 	if ((error = __rpc_mkdir(dir, dentry)) != 0)
+ 		goto err_dput;
+ 	RPC_I(dentry->d_inode)->private = rpc_client;
+@@ -809,7 +808,7 @@ rpc_mkpipe(struct dentry *parent, const char *name, void *private, struct rpc_pi
+ 	rpci->flags = flags;
+ 	rpci->ops = ops;
+ 	rpci->nkern_readwriters = 1;
+-	fsnotify_create(dir, dentry);
++	inode_dir_notify(dir, DN_CREATE);
+ 	dget(dentry);
+ out:
+ 	mutex_unlock(&dir->i_mutex);
+@@ -911,7 +910,7 @@ static struct file_system_type rpc_pipe_fs_type = {
+ };
+ 
+ static void
+-init_once(void *foo)
++init_once(void *foo, struct kmem_cache *cachep, unsigned long temp)
+ {
+ 	struct rpc_inode *rpci = (struct rpc_inode *) foo;
+ 
+diff --git a/net/sunrpc/rpcb_clnt.c b/net/sunrpc/rpcb_clnt.c
+index beee6da..f5674ff 100644
+--- a/net/sunrpc/rpcb_clnt.c
++++ b/net/sunrpc/rpcb_clnt.c
+@@ -271,8 +271,8 @@ static int rpcb_register_inet4(const struct sockaddr *sap,
+ 	char buf[32];
+ 
+ 	/* Construct AF_INET universal address */
+-	snprintf(buf, sizeof(buf), "%pI4.%u.%u",
+-		 &sin->sin_addr.s_addr, port >> 8, port & 0xff);
++	snprintf(buf, sizeof(buf), NIPQUAD_FMT".%u.%u",
++		 NIPQUAD(sin->sin_addr.s_addr), port >> 8, port & 0xff);
+ 	map->r_addr = buf;
+ 
+ 	dprintk("RPC:       %sregistering [%u, %u, %s, '%s'] with "
+@@ -303,8 +303,8 @@ static int rpcb_register_inet6(const struct sockaddr *sap,
+ 		snprintf(buf, sizeof(buf), "::.%u.%u",
+ 				port >> 8, port & 0xff);
+ 	else
+-		snprintf(buf, sizeof(buf), "%pI6.%u.%u",
+-			 &sin6->sin6_addr, port >> 8, port & 0xff);
++		snprintf(buf, sizeof(buf), NIP6_FMT".%u.%u",
++			 NIP6(sin6->sin6_addr), port >> 8, port & 0xff);
+ 	map->r_addr = buf;
+ 
+ 	dprintk("RPC:       %sregistering [%u, %u, %s, '%s'] with "
+@@ -433,8 +433,8 @@ int rpcb_getport_sync(struct sockaddr_in *sin, u32 prog, u32 vers, int prot)
+ 	struct rpc_clnt	*rpcb_clnt;
+ 	int status;
+ 
+-	dprintk("RPC:       %s(%pI4, %u, %u, %d)\n",
+-		__func__, &sin->sin_addr.s_addr, prog, vers, prot);
++	dprintk("RPC:       %s("NIPQUAD_FMT", %u, %u, %d)\n",
++		__func__, NIPQUAD(sin->sin_addr.s_addr), prog, vers, prot);
+ 
+ 	rpcb_clnt = rpcb_create(NULL, (struct sockaddr *)sin,
+ 				sizeof(*sin), prot, RPCBVERS_2);
+diff --git a/net/sunrpc/stats.c b/net/sunrpc/stats.c
+index 1ef6e46..3713319 100644
+--- a/net/sunrpc/stats.c
++++ b/net/sunrpc/stats.c
+@@ -263,7 +263,7 @@ rpc_proc_init(void)
+ {
+ 	dprintk("RPC:       registering /proc/net/rpc\n");
+ 	if (!proc_net_rpc)
+-		proc_net_rpc = proc_mkdir("rpc", init_net.proc_net);
++		proc_net_rpc = proc_mkdir("rpc", proc_net);
+ }
+ 
+ void
+@@ -272,7 +272,7 @@ rpc_proc_exit(void)
+ 	dprintk("RPC:       unregistering /proc/net/rpc\n");
+ 	if (proc_net_rpc) {
+ 		proc_net_rpc = NULL;
+-		remove_proc_entry("rpc", init_net.proc_net);
++		remove_proc_entry("rpc", proc_net);
+ 	}
+ }
+ 
+diff --git a/net/sunrpc/svc.c b/net/sunrpc/svc.c
+index 8847add..8bfdc87 100644
+--- a/net/sunrpc/svc.c
++++ b/net/sunrpc/svc.c
+@@ -1007,7 +1007,7 @@ svc_process(struct svc_rqst *rqstp)
+ 	rqstp->rq_res.tail[0].iov_base = NULL;
+ 	rqstp->rq_res.tail[0].iov_len = 0;
+ 	/* Will be turned off only in gss privacy case: */
+-	rqstp->rq_splice_ok = 1;
++	rqstp->rq_sendfile_ok = 1;
+ 	/* Will be turned off only when NFSv4 Sessions are used */
+ 	rqstp->rq_usedeferral = 1;
+ 
+diff --git a/net/sunrpc/svcauth_unix.c b/net/sunrpc/svcauth_unix.c
+index 5c865e2..02c4bce 100644
+--- a/net/sunrpc/svcauth_unix.c
++++ b/net/sunrpc/svcauth_unix.c
+@@ -162,9 +162,9 @@ static void ip_map_request(struct cache_detail *cd,
+ 	struct ip_map *im = container_of(h, struct ip_map, h);
+ 
+ 	if (ipv6_addr_v4mapped(&(im->m_addr))) {
+-		snprintf(text_addr, 20, "%pI4", &im->m_addr.s6_addr32[3]);
++		snprintf(text_addr, 20, NIPQUAD_FMT, NIPQUAD(im->m_addr.s6_addr32[3]));
+ 	} else {
+-		snprintf(text_addr, 40, "%pI6", &im->m_addr);
++		snprintf(text_addr, 40, NIP6_FMT, NIP6(im->m_addr));
+ 	}
+ 	qword_add(bpp, blen, im->m_class);
+ 	qword_add(bpp, blen, text_addr);
+@@ -274,10 +274,10 @@ static int ip_map_show(struct seq_file *m,
+ 		dom = im->m_client->h.name;
+ 
+ 	if (ipv6_addr_v4mapped(&addr)) {
+-		seq_printf(m, "%s %pI4 %s\n",
+-			im->m_class, &addr.s6_addr32[3], dom);
++		seq_printf(m, "%s "NIPQUAD_FMT" %s\n",
++			im->m_class, NIPQUAD(addr.s6_addr32[3]), dom);
+ 	} else {
+-		seq_printf(m, "%s %pI6 %s\n", im->m_class, &addr, dom);
++		seq_printf(m, "%s "NIP6_FMT" %s\n", im->m_class, NIP6(addr), dom);
+ 	}
+ 	return 0;
+ }
+diff --git a/net/sunrpc/svcsock.c b/net/sunrpc/svcsock.c
+index 9d50423..ef4c527 100644
+--- a/net/sunrpc/svcsock.c
++++ b/net/sunrpc/svcsock.c
+@@ -246,10 +246,10 @@ static int one_sock_name(char *buf, struct svc_sock *svsk)
+ 
+ 	switch(svsk->sk_sk->sk_family) {
+ 	case AF_INET:
+-		len = sprintf(buf, "ipv4 %s %pI4 %d\n",
++		len = sprintf(buf, "ipv4 %s "NIPQUAD_FMT" %d\n",
+ 			      svsk->sk_sk->sk_protocol == IPPROTO_UDP ?
+ 			      "udp" : "tcp",
+-			      &inet_sk(svsk->sk_sk)->rcv_saddr,
++			      NIPQUAD(inet_sk(svsk->sk_sk)->rcv_saddr),
+ 			      inet_sk(svsk->sk_sk)->num);
+ 		break;
+ 	default:
+diff --git a/net/sunrpc/xprtrdma/svc_rdma_transport.c b/net/sunrpc/xprtrdma/svc_rdma_transport.c
+index 5151f9f..1dadf92 100644
+--- a/net/sunrpc/xprtrdma/svc_rdma_transport.c
++++ b/net/sunrpc/xprtrdma/svc_rdma_transport.c
+@@ -1049,21 +1049,21 @@ static struct svc_xprt *svc_rdma_accept(struct svc_xprt *xprt)
+ 
+ 	dprintk("svcrdma: new connection %p accepted with the following "
+ 		"attributes:\n"
+-		"    local_ip        : %pI4\n"
++		"    local_ip        : "NIPQUAD_FMT"\n"
+ 		"    local_port	     : %d\n"
+-		"    remote_ip       : %pI4\n"
++		"    remote_ip       : "NIPQUAD_FMT"\n"
+ 		"    remote_port     : %d\n"
+ 		"    max_sge         : %d\n"
+ 		"    sq_depth        : %d\n"
+ 		"    max_requests    : %d\n"
+ 		"    ord             : %d\n",
+ 		newxprt,
+-		&((struct sockaddr_in *)&newxprt->sc_cm_id->
+-			 route.addr.src_addr)->sin_addr.s_addr,
++		NIPQUAD(((struct sockaddr_in *)&newxprt->sc_cm_id->
++			 route.addr.src_addr)->sin_addr.s_addr),
+ 		ntohs(((struct sockaddr_in *)&newxprt->sc_cm_id->
+ 		       route.addr.src_addr)->sin_port),
+-		&((struct sockaddr_in *)&newxprt->sc_cm_id->
+-			 route.addr.dst_addr)->sin_addr.s_addr,
++		NIPQUAD(((struct sockaddr_in *)&newxprt->sc_cm_id->
++			 route.addr.dst_addr)->sin_addr.s_addr),
+ 		ntohs(((struct sockaddr_in *)&newxprt->sc_cm_id->
+ 		       route.addr.dst_addr)->sin_port),
+ 		newxprt->sc_max_sge,
+diff --git a/net/sunrpc/xprtrdma/transport.c b/net/sunrpc/xprtrdma/transport.c
+index 1dd6123..cc21d83 100644
+--- a/net/sunrpc/xprtrdma/transport.c
++++ b/net/sunrpc/xprtrdma/transport.c
+@@ -174,7 +174,7 @@ xprt_rdma_format_addresses(struct rpc_xprt *xprt)
+ 
+ 	buf = kzalloc(20, GFP_KERNEL);
+ 	if (buf)
+-		snprintf(buf, 20, "%pI4", &addr->sin_addr.s_addr);
++		snprintf(buf, 20,  NIPQUAD_FMT, NIPQUAD(addr->sin_addr.s_addr));
+ 	xprt->address_strings[RPC_DISPLAY_ADDR] = buf;
+ 
+ 	buf = kzalloc(8, GFP_KERNEL);
+@@ -186,8 +186,8 @@ xprt_rdma_format_addresses(struct rpc_xprt *xprt)
+ 
+ 	buf = kzalloc(48, GFP_KERNEL);
+ 	if (buf)
+-		snprintf(buf, 48, "addr=%pI4 port=%u proto=%s",
+-			&addr->sin_addr.s_addr,
++		snprintf(buf, 48, "addr="NIPQUAD_FMT" port=%u proto=%s",
++			NIPQUAD(addr->sin_addr.s_addr),
+ 			ntohs(addr->sin_port), "rdma");
+ 	xprt->address_strings[RPC_DISPLAY_ALL] = buf;
+ 
+@@ -204,8 +204,8 @@ xprt_rdma_format_addresses(struct rpc_xprt *xprt)
+ 
+ 	buf = kzalloc(30, GFP_KERNEL);
+ 	if (buf)
+-		snprintf(buf, 30, "%pI4.%u.%u",
+-			&addr->sin_addr.s_addr,
++		snprintf(buf, 30, NIPQUAD_FMT".%u.%u",
++			NIPQUAD(addr->sin_addr.s_addr),
+ 			ntohs(addr->sin_port) >> 8,
+ 			ntohs(addr->sin_port) & 0xff);
+ 	xprt->address_strings[RPC_DISPLAY_UNIVERSAL_ADDR] = buf;
+@@ -369,8 +369,8 @@ xprt_setup_rdma(struct xprt_create *args)
+ 	if (ntohs(sin->sin_port) != 0)
+ 		xprt_set_bound(xprt);
+ 
+-	dprintk("RPC:       %s: %pI4:%u\n",
+-		__func__, &sin->sin_addr.s_addr, ntohs(sin->sin_port));
++	dprintk("RPC:       %s: "NIPQUAD_FMT":%u\n",
++		__func__, NIPQUAD(sin->sin_addr.s_addr), ntohs(sin->sin_port));
+ 
+ 	/* Set max requests */
+ 	cdata.max_requests = xprt->max_reqs;
+diff --git a/net/sunrpc/xprtrdma/verbs.c b/net/sunrpc/xprtrdma/verbs.c
+index 465aafc..a3098e7 100644
+--- a/net/sunrpc/xprtrdma/verbs.c
++++ b/net/sunrpc/xprtrdma/verbs.c
+@@ -325,11 +325,11 @@ rpcrdma_conn_upcall(struct rdma_cm_id *id, struct rdma_cm_event *event)
+ 	case RDMA_CM_EVENT_DEVICE_REMOVAL:
+ 		connstate = -ENODEV;
+ connected:
+-		dprintk("RPC:       %s: %s: %pI4:%u (ep 0x%p event 0x%x)\n",
++		dprintk("RPC:       %s: %s: "NIPQUAD_FMT":%u (ep 0x%p event 0x%x)\n",
+ 			__func__,
+ 			(event->event <= 11) ? conn[event->event] :
+ 						"unknown connection error",
+-			&addr->sin_addr.s_addr,
++			NIPQUAD(addr->sin_addr.s_addr),
+ 			ntohs(addr->sin_port),
+ 			ep, event->event);
+ 		atomic_set(&rpcx_to_rdmax(ep->rep_xprt)->rx_buf.rb_credits, 1);
+@@ -349,17 +349,17 @@ connected:
+ 	if (connstate == 1) {
+ 		int ird = attr.max_dest_rd_atomic;
+ 		int tird = ep->rep_remote_cma.responder_resources;
+-		printk(KERN_INFO "rpcrdma: connection to %pI4:%u "
++		printk(KERN_INFO "rpcrdma: connection to "NIPQUAD_FMT":%u "
+ 			"on %s, memreg %d slots %d ird %d%s\n",
+-			&addr->sin_addr.s_addr,
++			NIPQUAD(addr->sin_addr.s_addr),
+ 			ntohs(addr->sin_port),
+ 			ia->ri_id->device->name,
+ 			ia->ri_memreg_strategy,
+ 			xprt->rx_buf.rb_max_requests,
+ 			ird, ird < 4 && ird < tird / 2 ? " (low!)" : "");
+ 	} else if (connstate < 0) {
+-		printk(KERN_INFO "rpcrdma: connection to %pI4:%u closed (%d)\n",
+-			&addr->sin_addr.s_addr,
++		printk(KERN_INFO "rpcrdma: connection to "NIPQUAD_FMT":%u closed (%d)\n",
++			NIPQUAD(addr->sin_addr.s_addr),
+ 			ntohs(addr->sin_port),
+ 			connstate);
+ 	}
+diff --git a/net/sunrpc/xprtsock.c b/net/sunrpc/xprtsock.c
+index e185961..2de8b4e 100644
+--- a/net/sunrpc/xprtsock.c
++++ b/net/sunrpc/xprtsock.c
+@@ -295,7 +295,7 @@ static void xs_format_ipv4_peer_addresses(struct rpc_xprt *xprt,
+ 
+ 	buf = kzalloc(20, GFP_KERNEL);
+ 	if (buf) {
+-		snprintf(buf, 20, "%pI4", &addr->sin_addr.s_addr);
++		snprintf(buf, 20, NIPQUAD_FMT, NIPQUAD(addr->sin_addr.s_addr));
+ 	}
+ 	xprt->address_strings[RPC_DISPLAY_ADDR] = buf;
+ 
+@@ -310,8 +310,8 @@ static void xs_format_ipv4_peer_addresses(struct rpc_xprt *xprt,
+ 
+ 	buf = kzalloc(48, GFP_KERNEL);
+ 	if (buf) {
+-		snprintf(buf, 48, "addr=%pI4 port=%u proto=%s",
+-			&addr->sin_addr.s_addr,
++		snprintf(buf, 48, "addr="NIPQUAD_FMT" port=%u proto=%s",
++			NIPQUAD(addr->sin_addr.s_addr),
+ 			ntohs(addr->sin_port),
+ 			protocol);
+ 	}
+@@ -333,8 +333,8 @@ static void xs_format_ipv4_peer_addresses(struct rpc_xprt *xprt,
+ 
+ 	buf = kzalloc(30, GFP_KERNEL);
+ 	if (buf) {
+-		snprintf(buf, 30, "%pI4.%u.%u",
+-				&addr->sin_addr.s_addr,
++		snprintf(buf, 30, NIPQUAD_FMT".%u.%u",
++				NIPQUAD(addr->sin_addr.s_addr),
+ 				ntohs(addr->sin_port) >> 8,
+ 				ntohs(addr->sin_port) & 0xff);
+ 	}
+@@ -352,7 +352,7 @@ static void xs_format_ipv6_peer_addresses(struct rpc_xprt *xprt,
+ 
+ 	buf = kzalloc(40, GFP_KERNEL);
+ 	if (buf) {
+-		snprintf(buf, 40, "%pI6",&addr->sin6_addr);
++		snprintf(buf, 40, NIP6_FMT, NIP6(addr->sin6_addr));
+ 	}
+ 	xprt->address_strings[RPC_DISPLAY_ADDR] = buf;
+ 
+@@ -367,8 +367,8 @@ static void xs_format_ipv6_peer_addresses(struct rpc_xprt *xprt,
+ 
+ 	buf = kzalloc(64, GFP_KERNEL);
+ 	if (buf) {
+-		snprintf(buf, 64, "addr=%pI6 port=%u proto=%s",
+-				&addr->sin6_addr,
++		snprintf(buf, 64, "addr="NIP6_FMT" port=%u proto=%s",
++				NIP6(addr->sin6_addr),
+ 				ntohs(addr->sin6_port),
+ 				protocol);
+ 	}
+@@ -376,7 +376,7 @@ static void xs_format_ipv6_peer_addresses(struct rpc_xprt *xprt,
+ 
+ 	buf = kzalloc(36, GFP_KERNEL);
+ 	if (buf)
+-		snprintf(buf, 36, "%pi6", &addr->sin6_addr);
++		snprintf(buf, 36, NIP6_FMT, NIP6(addr->sin6_addr));
+ 
+ 	xprt->address_strings[RPC_DISPLAY_HEX_ADDR] = buf;
+ 
+@@ -389,8 +389,8 @@ static void xs_format_ipv6_peer_addresses(struct rpc_xprt *xprt,
+ 
+ 	buf = kzalloc(50, GFP_KERNEL);
+ 	if (buf) {
+-		snprintf(buf, 50, "%pI6.%u.%u",
+-			 &addr->sin6_addr,
++		snprintf(buf, 50, NIP6_FMT".%u.%u",
++			 NIP6(addr->sin6_addr),
+ 			 ntohs(addr->sin6_port) >> 8,
+ 			 ntohs(addr->sin6_port) & 0xff);
+ 	}
+@@ -1477,8 +1477,8 @@ static int xs_bind4(struct sock_xprt *transport, struct socket *sock)
+ 		if (port > last)
+ 			nloop++;
+ 	} while (err == -EADDRINUSE && nloop != 2);
+-	dprintk("RPC:       %s %pI4:%u: %s (%d)\n",
+-			__func__, &myaddr.sin_addr,
++	dprintk("RPC:       %s "NIPQUAD_FMT":%u: %s (%d)\n",
++			__func__, NIPQUAD(myaddr.sin_addr),
+ 			port, err ? "failed" : "ok", err);
+ 	return err;
+ }
+@@ -1510,8 +1510,8 @@ static int xs_bind6(struct sock_xprt *transport, struct socket *sock)
+ 		if (port > last)
+ 			nloop++;
+ 	} while (err == -EADDRINUSE && nloop != 2);
+-	dprintk("RPC:       xs_bind6 %pI6:%u: %s (%d)\n",
+-		&myaddr.sin6_addr, port, err ? "failed" : "ok", err);
++	dprintk("RPC:       xs_bind6 "NIP6_FMT":%u: %s (%d)\n",
++		NIP6(myaddr.sin6_addr), port, err ? "failed" : "ok", err);
+ 	return err;
+ }
+
+diff --git a/fs/nfs/dir.c b/fs/nfs/dir.c
+index 89f98e9..88c61a8 100644
+--- a/fs/nfs/dir.c
++++ b/fs/nfs/dir.c
+@@ -707,7 +707,13 @@ static int nfs_is_exclusive_create(struct inode *dir, struct nameidata *nd)
+ {
+ 	if (NFS_PROTO(dir)->version == 2)
+ 		return 0;
++#ifdef LOOKUP_EXCL
+ 	return nd && nfs_lookup_check_intent(nd, LOOKUP_EXCL);
++#else
++	if (nd == NULL || nfs_lookup_check_intent(nd, LOOKUP_CREATE) == 0)
++		return 0;
++	return (nd->intent.open.flags & O_EXCL) != 0;
++#endif
+ }
+ 
+ /*
+@@ -1011,7 +1017,11 @@ static struct dentry *nfs_atomic_lookup(struct inode *dir, struct dentry *dentry
+ 
+ 	/* Let vfs_create() deal with O_EXCL. Instantiate, but don't hash
+ 	 * the dentry. */
++#ifdef LOOKUP_EXCL
+ 	if (nd->flags & LOOKUP_EXCL) {
++#else
++	if (nd->intent.open.flags & O_EXCL) {
++#endif
+ 		d_instantiate(dentry, NULL);
+ 		goto out;
+ 	}
+

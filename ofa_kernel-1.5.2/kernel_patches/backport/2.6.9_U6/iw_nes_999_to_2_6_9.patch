@@ -1,0 +1,85 @@
+diff -Nurp linux-2.6/drivers/infiniband/hw/nes/nes_ud.c nes.2_6_9_patch/drivers/infiniband/hw/nes/nes_ud.c
+--- linux-2.6/drivers/infiniband/hw/nes/nes_ud.c	2010-05-10 11:20:11.092362000 +0200
++++ nes.2_6_9_patch/drivers/infiniband/hw/nes/nes_ud.c	2010-05-10 16:43:07.738732000 +0200
+@@ -976,7 +976,7 @@ static void nes_ud_free_resources(struct
+ 		nes_write_indexed(nesdev, 0x5000, wqm_config0);
+ 	}
+ 
+-	dev_put(file->nesvnic->netdev);
++	__dev_put(file->nesvnic->netdev);
+ 
+ 	file->active = 0;
+ 
+@@ -1882,6 +1882,7 @@ static int nes_ud_sksq_open(struct inode
+ 	file->nes_ud_recv_file = NULL;
+ 
+ 	file->shared_page = __get_free_page(GFP_USER);
++	SetPageReserved(virt_to_page(file->shared_page));
+ 	return 0;
+ }
+ 
+@@ -1891,6 +1892,7 @@ static int nes_ud_sksq_close(struct inod
+ 	struct nes_ud_sksq_file *file = filp->private_data;
+ 
+ 	if (file->shared_page) {
++		ClearPageReserved(virt_to_page(file->shared_page));
+ 		free_page(file->shared_page);
+ 		file->shared_page = 0;
+ 	}
+diff -Nurp linux-2.6/drivers/infiniband/hw/nes/nes_verbs.c nes.2_6_9_patch/drivers/infiniband/hw/nes/nes_verbs.c
+--- linux-2.6/drivers/infiniband/hw/nes/nes_verbs.c	2010-05-10 16:43:23.350016000 +0200
++++ nes.2_6_9_patch/drivers/infiniband/hw/nes/nes_verbs.c	2010-05-10 11:21:30.509449000 +0200
+@@ -1037,6 +1037,8 @@ static int nes_setup_mmap_qp(struct nes_
+ {
+ 	void *mem;
+ 	struct nes_device *nesdev = nesvnic->nesdev;
++	u32 mem_size;
++	void *vmem;
+ 
+ 	nesqp->qp_mem_size = (sizeof(struct nes_hw_qp_wqe) * sq_size) +
+ 			(sizeof(struct nes_hw_qp_wqe) * rq_size) +
+@@ -1054,6 +1056,17 @@ static int nes_setup_mmap_qp(struct nes_
+ 			"host descriptor rings located @ %p (pa = 0x%08lX.) size = %u.\n",
+ 			mem, (unsigned long)nesqp->hwqp.sq_pbase, nesqp->qp_mem_size);
+ 
++	mem_size = nesqp->qp_mem_size;
++	vmem = mem;
++	if (nesqp->user_mode) {
++		while (mem_size > 0) {
++			nes_debug(NES_DBG_QP, "Setting memory page %p reserved, mem_size=%u\n",
++				  vmem, mem_size);
++			SetPageReserved(virt_to_page(vmem));
++			mem_size -= PAGE_SIZE;
++			vmem += PAGE_SIZE;
++		}
++	}
+ 	memset(mem, 0, nesqp->qp_mem_size);
+ 
+ 	nesqp->hwqp.sq_vbase = mem;
+@@ -1578,6 +1591,8 @@ static int nes_destroy_qp(struct ib_qp *
+ 	struct nes_cq *rcq;
+ 	struct nes_ucontext *nes_ucontext;
+ 	struct ib_qp_attr attr;
++	u32 mem_size;
++	void *vmem;
+ 	struct iw_cm_id *cm_id;
+ 	struct iw_cm_event cm_event;
+ 	int ret;
+@@ -1653,6 +1668,17 @@ static int nes_destroy_qp(struct ib_qp *
+ 			if (nes_ucontext->first_free_wq > nesqp->mmap_sq_db_index) {
+ 				nes_ucontext->first_free_wq = nesqp->mmap_sq_db_index;
+ 			}
++			mem_size = nesqp->qp_mem_size;
++			vmem = nesqp->hwqp.sq_vbase;
++			if (!nesqp->pbl_vbase) {
++				while (mem_size > 0) {
++					nes_debug(NES_DBG_QP, "Remove reserved memory page %p, mem_size=%u\n",
++							vmem, mem_size);
++					ClearPageReserved(virt_to_page(vmem));
++					mem_size -= PAGE_SIZE;
++					vmem += PAGE_SIZE;
++				}
++			}
+ 		}
+ 		if (nesqp->pbl_pbase && nesqp->sq_kmapped) {
+ 			nesqp->sq_kmapped = 0;

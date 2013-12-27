@@ -1,0 +1,85 @@
+From 5675add36e76b9487e7f9e689f854cb8d6afd9b4 Mon Sep 17 00:00:00 2001
+From: Tom Talpey <talpey@netapp.com>
+Date: Thu, 9 Oct 2008 15:01:41 -0400
+Subject: [PATCH] RPC/RDMA: harden connection logic against missing/late rdma_cm upcalls.
+
+Add defensive timeouts to wait_for_completion() calls in RDMA
+address resolution, and make them interruptible. Fix the timeout
+units to milliseconds (formerly jiffies) and move to private header.
+
+Signed-off-by: Tom Talpey <talpey@netapp.com>
+Signed-off-by: Trond Myklebust <Trond.Myklebust@netapp.com>
+
+diff --git a/include/linux/sunrpc/xprtrdma.h b/include/linux/sunrpc/xprtrdma.h
+index 55a5d92..54a379c 100644
+--- a/include/linux/sunrpc/xprtrdma.h
++++ b/include/linux/sunrpc/xprtrdma.h
+@@ -66,9 +66,6 @@
+ 
+ #define RPCRDMA_INLINE_PAD_THRESH  (512)/* payload threshold to pad (bytes) */
+ 
+-#define RDMA_RESOLVE_TIMEOUT	(5*HZ)	/* TBD 5 seconds */
+-#define RDMA_CONNECT_RETRY_MAX	(2)	/* retries if no listener backlog */
+-
+ /* memory registration strategies */
+ #define RPCRDMA_PERSISTENT_REGISTRATION (1)
+ 
+diff --git a/net/sunrpc/xprtrdma/verbs.c b/net/sunrpc/xprtrdma/verbs.c
+index a63d0c0..f46fb93 100644
+--- a/net/sunrpc/xprtrdma/verbs.c
++++ b/net/sunrpc/xprtrdma/verbs.c
+@@ -284,6 +284,7 @@ rpcrdma_conn_upcall(struct rdma_cm_id *id, struct rdma_cm_event *event)
+ 	switch (event->event) {
+ 	case RDMA_CM_EVENT_ADDR_RESOLVED:
+ 	case RDMA_CM_EVENT_ROUTE_RESOLVED:
++		ia->ri_async_rc = 0;
+ 		complete(&ia->ri_done);
+ 		break;
+ 	case RDMA_CM_EVENT_ADDR_ERROR:
+@@ -363,26 +364,28 @@ rpcrdma_create_id(struct rpcrdma_xprt *xprt,
+ 		return id;
+ 	}
+ 
+-	ia->ri_async_rc = 0;
++	ia->ri_async_rc = -ETIMEDOUT;
+ 	rc = rdma_resolve_addr(id, NULL, addr, RDMA_RESOLVE_TIMEOUT);
+ 	if (rc) {
+ 		dprintk("RPC:       %s: rdma_resolve_addr() failed %i\n",
+ 			__func__, rc);
+ 		goto out;
+ 	}
+-	wait_for_completion(&ia->ri_done);
++	wait_for_completion_interruptible_timeout(&ia->ri_done,
++				msecs_to_jiffies(RDMA_RESOLVE_TIMEOUT) + 1);
+ 	rc = ia->ri_async_rc;
+ 	if (rc)
+ 		goto out;
+ 
+-	ia->ri_async_rc = 0;
++	ia->ri_async_rc = -ETIMEDOUT;
+ 	rc = rdma_resolve_route(id, RDMA_RESOLVE_TIMEOUT);
+ 	if (rc) {
+ 		dprintk("RPC:       %s: rdma_resolve_route() failed %i\n",
+ 			__func__, rc);
+ 		goto out;
+ 	}
+-	wait_for_completion(&ia->ri_done);
++	wait_for_completion_interruptible_timeout(&ia->ri_done,
++				msecs_to_jiffies(RDMA_RESOLVE_TIMEOUT) + 1);
+ 	rc = ia->ri_async_rc;
+ 	if (rc)
+ 		goto out;
+diff --git a/net/sunrpc/xprtrdma/xprt_rdma.h b/net/sunrpc/xprtrdma/xprt_rdma.h
+index fde6499..c7a7eba 100644
+--- a/net/sunrpc/xprtrdma/xprt_rdma.h
++++ b/net/sunrpc/xprtrdma/xprt_rdma.h
+@@ -51,6 +51,9 @@
+ #include <linux/sunrpc/rpc_rdma.h> 	/* RPC/RDMA protocol */
+ #include <linux/sunrpc/xprtrdma.h> 	/* xprt parameters */
+ 
++#define RDMA_RESOLVE_TIMEOUT	(5000)	/* 5 seconds */
++#define RDMA_CONNECT_RETRY_MAX	(2)	/* retries if no listener backlog */
++
+ /*
+  * Interface Adapter -- one per transport instance
+  */

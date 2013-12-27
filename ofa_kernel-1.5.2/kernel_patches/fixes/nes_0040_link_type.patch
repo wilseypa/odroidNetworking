@@ -1,0 +1,13 @@
+diff --git a/drivers/infiniband/hw/nes/nes_verbs.c b/drivers/infiniband/hw/nes/nes_verbs.c
+index 466e773..9f24a03 100644
+--- a/drivers/infiniband/hw/nes/nes_verbs.c
++++ b/drivers/infiniband/hw/nes/nes_verbs.c
+@@ -598,7 +598,7 @@ static int nes_query_port(struct ib_device *ibdev, u8 port, struct ib_port_attr
+ 	props->active_width = IB_WIDTH_4X;
+ 	props->active_speed = 1;
+ 	props->max_msg_sz = 0x80000000;
+-
++	props->link_layer = IB_LINK_LAYER_ETHERNET;
+ 	return 0;
+ }
+ 

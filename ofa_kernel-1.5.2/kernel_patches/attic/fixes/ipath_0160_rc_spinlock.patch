@@ -1,0 +1,132 @@
+--- a/drivers/infiniband/hw/ipath/ipath_rc.c	2009-01-22 11:45:13.000000000 -0800
++++ b/drivers/infiniband/hw/ipath/ipath_rc.c	2009-01-22 12:03:11.000000000 -0800
+@@ -1268,13 +1268,12 @@ static inline void ipath_rc_rcv_resp(str
+ {
+ 	struct ipath_swqe *wqe;
+ 	enum ib_wc_status status;
+-	unsigned long flags;
+ 	int diff;
+ 	u32 pad;
+ 	u32 aeth;
+ 	u64 val;
+ 
+-	spin_lock_irqsave(&qp->s_lock, flags);
++	spin_lock(&qp->s_lock);
+ 
+ 	/* Double check we can process this now that we hold the s_lock. */
+ 	if (!(ib_ipath_state_ops[qp->state] & IPATH_PROCESS_RECV_OK))
+@@ -1377,7 +1376,7 @@ static inline void ipath_rc_rcv_resp(str
+ 		 */
+ 		qp->s_rdma_read_len -= pmtu;
+ 		update_last_psn(qp, psn);
+-		spin_unlock_irqrestore(&qp->s_lock, flags);
++		spin_unlock(&qp->s_lock);
+ 		ipath_copy_sge(&qp->s_rdma_read_sge, data, pmtu, 0);
+ 		goto bail;
+ 
+@@ -1460,7 +1459,7 @@ ack_err:
+ 		ipath_dbg("Delayed error %d\n", status);
+ 	}
+ ack_done:
+-	spin_unlock_irqrestore(&qp->s_lock, flags);
++	spin_unlock(&qp->s_lock);
+ bail:
+ 	return;
+ }
+@@ -1494,7 +1493,6 @@ static inline int ipath_rc_rcv_error(str
+ 	struct ipath_ack_entry *e;
+ 	u8 i, prev;
+ 	int old_req;
+-	unsigned long flags;
+ 
+ 	if (diff > 0) {
+ 		/*
+@@ -1529,7 +1527,7 @@ static inline int ipath_rc_rcv_error(str
+ 	e = NULL;
+ 	old_req = 1;
+ 
+-	spin_lock_irqsave(&qp->s_lock, flags);
++	spin_lock(&qp->s_lock);
+ 	/* Double check we can process this now that we hold the s_lock. */
+ 	if (!(ib_ipath_state_ops[qp->state] & IPATH_PROCESS_RECV_OK))
+ 		goto unlock_done;
+@@ -1640,7 +1638,7 @@ static inline int ipath_rc_rcv_error(str
+ 		 * after all the previous RDMA reads and atomics.
+ 		 */
+ 		if (i == qp->r_head_ack_queue) {
+-			spin_unlock_irqrestore(&qp->s_lock, flags);
++			spin_unlock(&qp->s_lock);
+ 			qp->r_nak_state = 0;
+ 			qp->r_ack_psn = qp->r_psn - 1;
+ 			goto send_ack;
+@@ -1653,7 +1651,7 @@ static inline int ipath_rc_rcv_error(str
+ 		if (qp->r_head_ack_queue == qp->s_tail_ack_queue &&
+ 		    !(qp->s_flags & IPATH_S_ACK_PENDING) &&
+ 		    qp->s_ack_state == OP(ACKNOWLEDGE)) {
+-			spin_unlock_irqrestore(&qp->s_lock, flags);
++			spin_unlock(&qp->s_lock);
+ 			qp->r_nak_state = 0;
+ 			qp->r_ack_psn = qp->s_ack_queue[i].psn - 1;
+ 			goto send_ack;
+@@ -1670,7 +1668,7 @@ static inline int ipath_rc_rcv_error(str
+ 	ipath_schedule_send(qp);
+ 
+ unlock_done:
+-	spin_unlock_irqrestore(&qp->s_lock, flags);
++	spin_unlock(&qp->s_lock);
+ done:
+ 	return 1;
+ 
+@@ -1736,7 +1734,6 @@ void ipath_rc_rcv(struct ipath_ibdev *de
+ 	int diff;
+ 	struct ib_reth *reth;
+ 	int header_in_data;
+-	unsigned long flags;
+ 
+ 	/* Validate the SLID. See Ch. 9.6.1.5 */
+ 	if (unlikely(be16_to_cpu(hdr->lrh[3]) != qp->remote_ah_attr.dlid))
+@@ -1963,7 +1960,7 @@ void ipath_rc_rcv(struct ipath_ibdev *de
+ 		next = qp->r_head_ack_queue + 1;
+ 		if (next > IPATH_MAX_RDMA_ATOMIC)
+ 			next = 0;
+-		spin_lock_irqsave(&qp->s_lock, flags);
++		spin_lock(&qp->s_lock);
+ 		/* Double check we can process this while holding the s_lock. */
+ 		if (!(ib_ipath_state_ops[qp->state] & IPATH_PROCESS_RECV_OK))
+ 			goto unlock;
+@@ -2053,7 +2050,7 @@ void ipath_rc_rcv(struct ipath_ibdev *de
+ 		next = qp->r_head_ack_queue + 1;
+ 		if (next > IPATH_MAX_RDMA_ATOMIC)
+ 			next = 0;
+-		spin_lock_irqsave(&qp->s_lock, flags);
++		spin_lock(&qp->s_lock);
+ 		/* Double check we can process this while holding the s_lock. */
+ 		if (!(ib_ipath_state_ops[qp->state] & IPATH_PROCESS_RECV_OK))
+ 			goto unlock;
+@@ -2133,7 +2130,7 @@ rnr_nak:
+ 	goto send_ack;
+ 
+ nack_inv_unlck:
+-	spin_unlock_irqrestore(&qp->s_lock, flags);
++	spin_unlock(&qp->s_lock);
+ nack_inv:
+ 	ipath_rc_error(qp, IB_WC_LOC_QP_OP_ERR);
+ 	qp->r_nak_state = IB_NAK_INVALID_REQUEST;
+@@ -2141,7 +2138,7 @@ nack_inv:
+ 	goto send_ack;
+ 
+ nack_acc_unlck:
+-	spin_unlock_irqrestore(&qp->s_lock, flags);
++	spin_unlock(&qp->s_lock);
+ nack_acc:
+ 	ipath_rc_error(qp, IB_WC_LOC_PROT_ERR);
+ 	qp->r_nak_state = IB_NAK_REMOTE_ACCESS_ERROR;
+@@ -2151,7 +2148,7 @@ send_ack:
+ 	goto done;
+ 
+ unlock:
+-	spin_unlock_irqrestore(&qp->s_lock, flags);
++	spin_unlock(&qp->s_lock);
+ done:
+ 	return;
+ }

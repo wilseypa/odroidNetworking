@@ -1,0 +1,17 @@
+---
+ drivers/infiniband/hw/mthca/mthca_eq.c |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+Index: ofed_kernel/drivers/infiniband/hw/mthca/mthca_eq.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/hw/mthca/mthca_eq.c
++++ ofed_kernel/drivers/infiniband/hw/mthca/mthca_eq.c
+@@ -780,7 +780,7 @@ int mthca_map_eq_icm(struct mthca_dev *d
+ 		return -ENOMEM;
+ 	dev->eq_table.icm_dma  = pci_map_page(dev->pdev, dev->eq_table.icm_page, 0,
+ 					      PAGE_SIZE, PCI_DMA_BIDIRECTIONAL);
+-	if (pci_dma_mapping_error(dev->pdev, dev->eq_table.icm_dma)) {
++	if (pci_dma_mapping_error(dev->eq_table.icm_dma)) {
+ 		__free_page(dev->eq_table.icm_page);
+ 		return -ENOMEM;
+ 	}

@@ -1,0 +1,167 @@
+commit 978304316edfa7b6e7f7bce7ea43c8672808be1d
+Author: Steve Wise <swise@opengridcomputing.com>
+Date:   Wed Aug 5 13:05:57 2009 -0700
+
+    RDMA/cxgb3: Handle port events properly
+    
+    Massage the err_handler upcall into an event handler upcall, pass
+    netdev port events to the cxgb3 ULPs and generate RDMA port events
+    based on LLD port events.
+    
+    Signed-off-by: Steve Wise <swise@opengridcomputing.com>
+    Signed-off-by: Roland Dreier <rolandd@cisco.com>
+
+diff --git a/drivers/infiniband/hw/cxgb3/iwch.c b/drivers/infiniband/hw/cxgb3/iwch.c
+index 26fc0a4..5796170 100644
+--- a/drivers/infiniband/hw/cxgb3/iwch.c
++++ b/drivers/infiniband/hw/cxgb3/iwch.c
+@@ -51,7 +51,7 @@ cxgb3_cpl_handler_func t3c_handlers[NUM_CPL_CMDS];
+ 
+ static void open_rnic_dev(struct t3cdev *);
+ static void close_rnic_dev(struct t3cdev *);
+-static void iwch_err_handler(struct t3cdev *, u32, u32);
++static void iwch_event_handler(struct t3cdev *, u32, u32);
+ 
+ struct cxgb3_client t3c_client = {
+ 	.name = "iw_cxgb3",
+@@ -59,7 +59,7 @@ struct cxgb3_client t3c_client = {
+ 	.remove = close_rnic_dev,
+ 	.handlers = t3c_handlers,
+ 	.redirect = iwch_ep_redirect,
+-	.err_handler = iwch_err_handler
++	.event_handler = iwch_event_handler
+ };
+ 
+ static LIST_HEAD(dev_list);
+@@ -162,21 +162,33 @@ static void close_rnic_dev(struct t3cdev *tdev)
+ 	mutex_unlock(&dev_mutex);
+ }
+ 
+-static void iwch_err_handler(struct t3cdev *tdev, u32 status, u32 error)
++static void iwch_event_handler(struct t3cdev *tdev, u32 evt, u32 port_id)
+ {
+ 	struct cxio_rdev *rdev = tdev->ulp;
+ 	struct iwch_dev *rnicp = rdev_to_iwch_dev(rdev);
+ 	struct ib_event event;
++	u32    portnum = port_id + 1;
+ 
+-	if (status == OFFLOAD_STATUS_DOWN) {
++	switch (evt) {
++	case OFFLOAD_STATUS_DOWN: {
+ 		rdev->flags = CXIO_ERROR_FATAL;
+-
+-		event.device = &rnicp->ibdev;
+ 		event.event  = IB_EVENT_DEVICE_FATAL;
+-		event.element.port_num = 0;
+-		ib_dispatch_event(&event);
++		break;
++		}
++	case OFFLOAD_PORT_DOWN: {
++		event.event  = IB_EVENT_PORT_ERR;
++		break;
++		}
++	case OFFLOAD_PORT_UP: {
++		event.event  = IB_EVENT_PORT_ACTIVE;
++		break;
++		}
+ 	}
+ 
++	event.device = &rnicp->ibdev;
++	event.element.port_num = portnum;
++	ib_dispatch_event(&event);
++
+ 	return;
+ }
+ 
+diff --git a/drivers/net/cxgb3/cxgb3_main.c b/drivers/net/cxgb3/cxgb3_main.c
+index fb5df5c..c97ab82 100644
+--- a/drivers/net/cxgb3/cxgb3_main.c
++++ b/drivers/net/cxgb3/cxgb3_main.c
+@@ -1286,6 +1286,7 @@ static int cxgb_open(struct net_device *dev)
+ 	if (!other_ports)
+ 		schedule_chk_task(adapter);
+ 
++	cxgb3_event_notify(&adapter->tdev, OFFLOAD_PORT_UP, pi->port_id);
+ 	return 0;
+ }
+ 
+@@ -1318,6 +1319,7 @@ static int cxgb_close(struct net_device *dev)
+ 	if (!adapter->open_device_map)
+ 		cxgb_down(adapter);
+ 
++	cxgb3_event_notify(&adapter->tdev, OFFLOAD_PORT_DOWN, pi->port_id);
+ 	return 0;
+ }
+ 
+@@ -2717,7 +2719,7 @@ static int t3_adapter_error(struct adapter *adapter, int reset)
+ 
+ 	if (is_offload(adapter) &&
+ 	    test_bit(OFFLOAD_DEVMAP_BIT, &adapter->open_device_map)) {
+-		cxgb3_err_notify(&adapter->tdev, OFFLOAD_STATUS_DOWN, 0);
++		cxgb3_event_notify(&adapter->tdev, OFFLOAD_STATUS_DOWN, 0);
+ 		offload_close(&adapter->tdev);
+ 	}
+ 
+@@ -2782,7 +2784,7 @@ static void t3_resume_ports(struct adapter *adapter)
+ 	}
+ 
+ 	if (is_offload(adapter) && !ofld_disable)
+-		cxgb3_err_notify(&adapter->tdev, OFFLOAD_STATUS_UP, 0);
++		cxgb3_event_notify(&adapter->tdev, OFFLOAD_STATUS_UP, 0);
+ }
+ 
+ /*
+diff --git a/drivers/net/cxgb3/cxgb3_offload.c b/drivers/net/cxgb3/cxgb3_offload.c
+index f9f54b5..75064ee 100644
+--- a/drivers/net/cxgb3/cxgb3_offload.c
++++ b/drivers/net/cxgb3/cxgb3_offload.c
+@@ -153,14 +153,14 @@ void cxgb3_remove_clients(struct t3cdev *tdev)
+ 	mutex_unlock(&cxgb3_db_lock);
+ }
+ 
+-void cxgb3_err_notify(struct t3cdev *tdev, u32 status, u32 error)
++void cxgb3_event_notify(struct t3cdev *tdev, u32 event, u32 port)
+ {
+ 	struct cxgb3_client *client;
+ 
+ 	mutex_lock(&cxgb3_db_lock);
+ 	list_for_each_entry(client, &client_list, client_list) {
+-		if (client->err_handler)
+-			client->err_handler(tdev, status, error);
++		if (client->event_handler)
++			client->event_handler(tdev, event, port);
+ 	}
+ 	mutex_unlock(&cxgb3_db_lock);
+ }
+diff --git a/drivers/net/cxgb3/cxgb3_offload.h b/drivers/net/cxgb3/cxgb3_offload.h
+index 55945f4..670aa62 100644
+--- a/drivers/net/cxgb3/cxgb3_offload.h
++++ b/drivers/net/cxgb3/cxgb3_offload.h
+@@ -64,14 +64,16 @@ void cxgb3_register_client(struct cxgb3_client *client);
+ void cxgb3_unregister_client(struct cxgb3_client *client);
+ void cxgb3_add_clients(struct t3cdev *tdev);
+ void cxgb3_remove_clients(struct t3cdev *tdev);
+-void cxgb3_err_notify(struct t3cdev *tdev, u32 status, u32 error);
++void cxgb3_event_notify(struct t3cdev *tdev, u32 event, u32 port);
+ 
+ typedef int (*cxgb3_cpl_handler_func)(struct t3cdev *dev,
+ 				      struct sk_buff *skb, void *ctx);
+ 
+ enum {
+ 	OFFLOAD_STATUS_UP,
+-	OFFLOAD_STATUS_DOWN
++	OFFLOAD_STATUS_DOWN,
++	OFFLOAD_PORT_DOWN,
++	OFFLOAD_PORT_UP
+ };
+ 
+ struct cxgb3_client {
+@@ -82,7 +84,7 @@ struct cxgb3_client {
+ 	int (*redirect)(void *ctx, struct dst_entry *old,
+ 			struct dst_entry *new, struct l2t_entry *l2t);
+ 	struct list_head client_list;
+-	void (*err_handler)(struct t3cdev *tdev, u32 status, u32 error);
++	void (*event_handler)(struct t3cdev *tdev, u32 event, u32 port);
+ };
+ 
+ /*

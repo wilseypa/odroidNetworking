@@ -1,0 +1,68 @@
+---
+ drivers/infiniband/core/addr.c |   29 ++++++++++++++++-------------
+ 1 file changed, 16 insertions(+), 13 deletions(-)
+
+Index: ofed_kernel/drivers/infiniband/core/addr.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/core/addr.c
++++ ofed_kernel/drivers/infiniband/core/addr.c
+@@ -40,7 +40,6 @@
+ #include <net/arp.h>
+ #include <net/neighbour.h>
+ #include <net/route.h>
+-#include <net/netevent.h>
+ #include <net/addrconf.h>
+ #include <net/ip6_route.h>
+ #include <rdma/ib_addr.h>
+@@ -358,21 +357,25 @@ void rdma_addr_cancel(struct rdma_dev_ad
+ }
+ EXPORT_SYMBOL(rdma_addr_cancel);
+ 
+-static int netevent_callback(struct notifier_block *self, unsigned long event,
+-	void *ctx)
++static int addr_arp_recv(struct sk_buff *skb, struct net_device *dev,
++			 struct packet_type *pkt, struct net_device *orig_dev)
+ {
+-	if (event == NETEVENT_NEIGH_UPDATE) {
+-		struct neighbour *neigh = ctx;
++	struct arphdr *arp_hdr;
+ 
+-		if (neigh->nud_state & NUD_VALID) {
+-			set_timeout(jiffies);
+-		}
+-	}
++	arp_hdr = (struct arphdr *) skb->nh.raw;
++
++	if (arp_hdr->ar_op == htons(ARPOP_REQUEST) ||
++	    arp_hdr->ar_op == htons(ARPOP_REPLY))
++		set_timeout(jiffies);
++
++	kfree_skb(skb);
+ 	return 0;
+ }
+ 
+-static struct notifier_block nb = {
+-	.notifier_call = netevent_callback
++static struct packet_type addr_arp = {
++	.type           = __constant_htons(ETH_P_ARP),
++	.func           = addr_arp_recv,
++	.af_packet_priv = (void*) 1,
+ };
+ 
+ static int addr_init(void)
+@@ -381,13 +384,13 @@ static int addr_init(void)
+ 	if (!addr_wq)
+ 		return -ENOMEM;
+ 
+-	register_netevent_notifier(&nb);
++	dev_add_pack(&addr_arp);
+ 	return 0;
+ }
+ 
+ static void addr_cleanup(void)
+ {
+-	unregister_netevent_notifier(&nb);
++	dev_remove_pack(&addr_arp);
+ 	destroy_workqueue(addr_wq);
+ }
+ 

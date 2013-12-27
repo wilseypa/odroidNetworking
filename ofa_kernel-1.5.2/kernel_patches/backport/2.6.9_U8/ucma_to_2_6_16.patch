@@ -1,0 +1,24 @@
+Remove const qualifier from struct file_operations prior to 2.6.17
+
+This eliminates the compiler warning:
+ucma.c:1109: warning: initialization discards qualifiers from pointer target type
+
+Signed-off-by: John Gregor <john.gregor@qlogic.com>
+
+---
+ drivers/infiniband/core/ucma.c |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+Index: ofed_kernel/drivers/infiniband/core/ucma.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/core/ucma.c
++++ ofed_kernel/drivers/infiniband/core/ucma.c
+@@ -1193,7 +1193,7 @@ static int ucma_close(struct inode *inod
+ 	return 0;
+ }
+ 
+-static const struct file_operations ucma_fops = {
++static struct file_operations ucma_fops = {
+ 	.owner 	 = THIS_MODULE,
+ 	.open 	 = ucma_open,
+ 	.release = ucma_close,

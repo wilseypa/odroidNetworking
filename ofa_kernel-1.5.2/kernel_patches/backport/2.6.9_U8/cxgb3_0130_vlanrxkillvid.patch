@@ -1,0 +1,30 @@
+commit ad41a1966a4a7d9925c89860fbdd9118d0a065b3
+Author: root <root@almus.(none)>
+Date:   Tue Oct 6 07:29:29 2009 -0700
+
+    cxgb3_0130_vlanrxkillvid.patch
+
+diff --git a/drivers/net/cxgb3/cxgb3_main.c b/drivers/net/cxgb3/cxgb3_main.c
+index b3ccacc..b109b59 100644
+--- a/drivers/net/cxgb3/cxgb3_main.c
++++ b/drivers/net/cxgb3/cxgb3_main.c
+@@ -2517,6 +2517,11 @@ static void vlan_rx_register(struct net_device *dev, struct vlan_group *grp)
+ 	t3_synchronize_rx(adapter, pi);
+ }
+ 
++static void vlan_rx_kill_vid(struct net_device *dev, unsigned short vid)
++{
++	/* nothing */
++}
++
+ #ifdef CONFIG_NET_POLL_CONTROLLER
+ static void cxgb_netpoll(struct net_device *dev)
+ {
+@@ -3169,6 +3174,7 @@ static int __devinit init_one(struct pci_dev *pdev,
+ 		netdev->features |= NETIF_F_HW_VLAN_TX | NETIF_F_HW_VLAN_RX;
+ 		netdev->hard_start_xmit = t3_eth_xmit;
+ 		netdev->vlan_rx_register = vlan_rx_register;
++		netdev->vlan_rx_kill_vid = vlan_rx_kill_vid;
+ 		netdev->open  = cxgb_open;
+ 		netdev->stop  = cxgb_close;
+ 		netdev->get_stats = cxgb_get_stats;

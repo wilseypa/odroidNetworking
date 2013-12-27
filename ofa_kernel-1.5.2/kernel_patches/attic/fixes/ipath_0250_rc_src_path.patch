@@ -1,0 +1,24 @@
+--- a/drivers/infiniband/hw/ipath/ipath_rc.c	2009-02-23 12:22:36.000000000 -0800
++++ b/drivers/infiniband/hw/ipath/ipath_rc.c	2009-02-24 14:57:34.000000000 -0800
+@@ -694,7 +693,8 @@ static void send_rc_ack(struct ipath_qp 
+ 	hdr.lrh[0] = cpu_to_be16(lrh0);
+ 	hdr.lrh[1] = cpu_to_be16(qp->remote_ah_attr.dlid);
+ 	hdr.lrh[2] = cpu_to_be16(hwords + SIZE_OF_CRC);
+-	hdr.lrh[3] = cpu_to_be16(dd->ipath_lid);
++	hdr.lrh[3] = cpu_to_be16(dd->ipath_lid |
++				 qp->remote_ah_attr.src_path_bits);
+ 	ohdr->bth[0] = cpu_to_be32(bth0);
+ 	ohdr->bth[1] = cpu_to_be32(qp->remote_qpn);
+ 	ohdr->bth[2] = cpu_to_be32(qp->r_ack_psn & IPATH_PSN_MASK);
+--- a/drivers/infiniband/hw/ipath/ipath_ruc.c	2009-02-23 12:22:36.000000000 -0800
++++ b/drivers/infiniband/hw/ipath/ipath_ruc.c	2009-02-24 15:23:48.000000000 -0800
+@@ -647,7 +647,8 @@ void ipath_make_ruc_header(struct ipath_
+ 	qp->s_hdr.lrh[0] = cpu_to_be16(lrh0);
+ 	qp->s_hdr.lrh[1] = cpu_to_be16(qp->remote_ah_attr.dlid);
+ 	qp->s_hdr.lrh[2] = cpu_to_be16(qp->s_hdrwords + nwords + SIZE_OF_CRC);
+-	qp->s_hdr.lrh[3] = cpu_to_be16(dev->dd->ipath_lid);
++	qp->s_hdr.lrh[3] = cpu_to_be16(dev->dd->ipath_lid |
++				       qp->remote_ah_attr.src_path_bits);
+ 	bth0 |= ipath_get_pkey(dev->dd, qp->s_pkey_index);
+ 	bth0 |= extra_bytes << 20;
+ 	ohdr->bth[0] = cpu_to_be32(bth0 | (1 << 22));

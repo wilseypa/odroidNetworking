@@ -1,0 +1,539 @@
+---
+ drivers/infiniband/hw/ipath/ipath_driver.c     |   29 ++++++++++++++--
+ drivers/infiniband/hw/ipath/ipath_file_ops.c   |   17 ++++++++-
+ drivers/infiniband/hw/ipath/ipath_init_chip.c  |    6 ++-
+ drivers/infiniband/hw/ipath/ipath_sysfs.c      |   44 -------------------------
+ drivers/infiniband/hw/ipath/ipath_user_pages.c |    2 -
+ 5 files changed, 46 insertions(+), 52 deletions(-)
+
+Index: ofed_kernel/drivers/infiniband/hw/ipath/ipath_driver.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/hw/ipath/ipath_driver.c
++++ ofed_kernel/drivers/infiniband/hw/ipath/ipath_driver.c
+@@ -642,7 +642,7 @@ bail_irqsetup:
+ 		free_irq(pdev->irq, dd);
+ 
+ bail_iounmap:
+-	iounmap((volatile void __iomem *) dd->ipath_kregbase);
++	iounmap((void __iomem *) dd->ipath_kregbase);
+ 
+ bail_regions:
+ 	pci_release_regions(pdev);
+@@ -684,6 +684,7 @@ static void __devexit cleanup_device(str
+ 			 dd->ipath_spectriggerhit);
+ 
+ 	if (dd->ipath_pioavailregs_dma) {
++		ClearPageReserved(virt_to_page(dd->ipath_pioavailregs_dma));
+ 		dma_free_coherent(&dd->pcidev->dev, PAGE_SIZE,
+ 				  (void *) dd->ipath_pioavailregs_dma,
+ 				  dd->ipath_pioavailregs_phys);
+@@ -808,7 +809,7 @@ static void __devexit ipath_remove_one(s
+ 		dd->ipath_f_cleanup(dd);
+ 
+ 	ipath_cdbg(VERBOSE, "Unmapping kregbase %p\n", dd->ipath_kregbase);
+-	iounmap((volatile void __iomem *) dd->ipath_kregbase);
++	iounmap((void __iomem *) dd->ipath_kregbase);
+	if (dd->ipath_piobase) {
+		ipath_cdbg(VERBOSE, "Unmapping piobase %p\n",
+			   dd->ipath_piobase);
+@@ -1796,7 +1797,7 @@ int ipath_create_rcvhdrq(struct ipath_de
+ 
+ 	if (!pd->port_rcvhdrq) {
+ 		dma_addr_t phys_hdrqtail;
+-		gfp_t gfp_flags = GFP_USER | __GFP_COMP;
++		gfp_t gfp_flags = GFP_USER | __GFP_REPEAT;
+ 		int amt = ALIGN(dd->ipath_rcvhdrcnt * dd->ipath_rcvhdrentsize *
+ 				sizeof(u32), PAGE_SIZE);
+ 
+@@ -1831,6 +1832,16 @@ int ipath_create_rcvhdrq(struct ipath_de
+ 			ipath_cdbg(VERBOSE, "port %d hdrtailaddr, %llx "
+ 				   "physical\n", pd->port_port,
+ 				   (unsigned long long) phys_hdrqtail);
++
++			SetPageReserved(virt_to_page(pd->port_rcvhdrtail_kvaddr));
++		}
++
++		{
++				void *base = pd->port_rcvhdrq;
++				size_t i;
++
++				for (i = 0; i < amt; i+= PAGE_SIZE)
++					SetPageReserved(virt_to_page(base + i));
+ 		}
+ 
+ 		pd->port_rcvhdrq_size = amt;
+@@ -2462,6 +2473,14 @@ void ipath_free_pddata(struct ipath_devd
+ 		return;
+ 
+ 	if (pd->port_rcvhdrq) {
++		void *base = pd->port_rcvhdrq;
++		size_t i;
++
++		for (i = 0; i < pd->port_rcvhdrq_size; i += PAGE_SIZE)
++			ClearPageReserved(virt_to_page(base + i));
++		if(pd->port_rcvhdrtail_kvaddr)
++			ClearPageReserved(virt_to_page(pd->port_rcvhdrtail_kvaddr));
++
+ 		ipath_cdbg(VERBOSE, "free closed port %d rcvhdrq @ %p "
+ 			   "(size=%lu)\n", pd->port_port, pd->port_rcvhdrq,
+ 			   (unsigned long) pd->port_rcvhdrq_size);
+@@ -2481,6 +2500,10 @@ void ipath_free_pddata(struct ipath_devd
+ 		for (e = 0; e < pd->port_rcvegrbuf_chunks; e++) {
+ 			void *base = pd->port_rcvegrbuf[e];
+ 			size_t size = pd->port_rcvegrbuf_size;
++			size_t i;
++
++			for (i = 0; i < size; i+= PAGE_SIZE)
++				ClearPageReserved(virt_to_page(base + i));
+ 
+ 			ipath_cdbg(VERBOSE, "egrbuf free(%p, %lu), "
+ 				   "chunk %u/%u\n", base,
+Index: ofed_kernel/drivers/infiniband/hw/ipath/ipath_file_ops.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/hw/ipath/ipath_file_ops.c
++++ ofed_kernel/drivers/infiniband/hw/ipath/ipath_file_ops.c
+@@ -892,7 +892,7 @@ static int ipath_create_user_egr(struct 
+ 	 * heavy filesystem activity makes these fail, and we can
+ 	 * use compound pages.
+ 	 */
+-	gfp_flags = __GFP_WAIT | __GFP_IO | __GFP_COMP;
++	gfp_flags = __GFP_WAIT | __GFP_IO;
+ 
+ 	egrcnt = dd->ipath_rcvegrcnt;
+ 	/* TID number offset for this port */
+@@ -927,6 +927,14 @@ static int ipath_create_user_egr(struct 
+ 			ret = -ENOMEM;
+ 			goto bail_rcvegrbuf_phys;
+ 		}
++
++		{
++			void *base = pd->port_rcvegrbuf[e];
++			size_t i;
++
++			for (i = 0; i < size; i+= PAGE_SIZE)
++				SetPageReserved(virt_to_page(base + i));
++		}
+ 	}
+ 
+ 	pd->port_rcvegr_phys = pd->port_rcvegrbuf_phys[0];
+@@ -953,6 +961,11 @@ static int ipath_create_user_egr(struct 
+ bail_rcvegrbuf_phys:
+ 	for (e = 0; e < pd->port_rcvegrbuf_chunks &&
+ 		pd->port_rcvegrbuf[e]; e++) {
++		void *base = pd->port_rcvegrbuf[e];
++		size_t i;
++
++		for (i = 0; i < size; i+= PAGE_SIZE)
++			ClearPageReserved(virt_to_page(base + i));
+ 		dma_free_coherent(&dd->pcidev->dev, size,
+ 				  pd->port_rcvegrbuf[e],
+ 				  pd->port_rcvegrbuf_phys[e]);
+@@ -2460,7 +2473,7 @@ static int init_cdev(int minor, char *na
+ 		goto err_cdev;
+ 	}
+ 
+-	class_dev = class_device_create(ipath_class, NULL, dev, NULL, name);
++	class_dev = class_device_create(ipath_class, dev, NULL, name);
+ 
+ 	if (IS_ERR(class_dev)) {
+ 		ret = PTR_ERR(class_dev);
+Index: ofed_kernel/drivers/infiniband/hw/ipath/ipath_init_chip.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/hw/ipath/ipath_init_chip.c
++++ ofed_kernel/drivers/infiniband/hw/ipath/ipath_init_chip.c
+@@ -394,7 +394,7 @@ static int init_pioavailregs(struct ipat
+ 
+ 	dd->ipath_pioavailregs_dma = dma_alloc_coherent(
+ 		&dd->pcidev->dev, PAGE_SIZE, &dd->ipath_pioavailregs_phys,
+-		GFP_KERNEL);
++		GFP_KERNEL | __GFP_REPEAT);
+ 	if (!dd->ipath_pioavailregs_dma) {
+ 		ipath_dev_err(dd, "failed to allocate PIOavail reg area "
+ 			      "in memory\n");
+@@ -402,6 +402,8 @@ static int init_pioavailregs(struct ipat
+ 		goto done;
+ 	}
+ 
++	SetPageReserved(virt_to_page(dd->ipath_pioavailregs_dma));
++
+ 	/*
+ 	 * we really want L2 cache aligned, but for current CPUs of
+ 	 * interest, they are the same.
+@@ -711,7 +713,7 @@ int ipath_init_chip(struct ipath_devdata
+ 	u32 piobufs, uports;
+ 	u64 val;
+ 	struct ipath_portdata *pd;
+-	gfp_t gfp_flags = GFP_USER | __GFP_COMP;
++	gfp_t gfp_flags = GFP_USER | __GFP_REPEAT;
+ 
+ 	ret = init_housekeeping(dd, reinit);
+ 	if (ret)
+Index: ofed_kernel/drivers/infiniband/hw/ipath/ipath_sysfs.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/hw/ipath/ipath_sysfs.c
++++ ofed_kernel/drivers/infiniband/hw/ipath/ipath_sysfs.c
+@@ -85,7 +85,6 @@ static ssize_t show_num_units(struct dev
+ }
+ 
+ static ssize_t show_status(struct device *dev,
+-			   struct device_attribute *attr,
+ 			   char *buf)
+ {
+ 	struct ipath_devdata *dd = dev_get_drvdata(dev);
+@@ -118,7 +117,6 @@ static const char *ipath_status_str[] = 
+ };
+ 
+ static ssize_t show_status_str(struct device *dev,
+-			       struct device_attribute *attr,
+ 			       char *buf)
+ {
+ 	struct ipath_devdata *dd = dev_get_drvdata(dev);
+@@ -156,7 +154,6 @@ bail:
+ }
+ 
+ static ssize_t show_boardversion(struct device *dev,
+-			       struct device_attribute *attr,
+ 			       char *buf)
+ {
+ 	struct ipath_devdata *dd = dev_get_drvdata(dev);
+@@ -165,7 +162,6 @@ static ssize_t show_boardversion(struct 
+ }
+ 
+ static ssize_t show_localbus_info(struct device *dev,
+-			       struct device_attribute *attr,
+ 			       char *buf)
+ {
+ 	struct ipath_devdata *dd = dev_get_drvdata(dev);
+@@ -174,7 +170,6 @@ static ssize_t show_localbus_info(struct
+ }
+ 
+ static ssize_t show_lmc(struct device *dev,
+-			struct device_attribute *attr,
+ 			char *buf)
+ {
+ 	struct ipath_devdata *dd = dev_get_drvdata(dev);
+@@ -183,7 +178,6 @@ static ssize_t show_lmc(struct device *d
+ }
+ 
+ static ssize_t store_lmc(struct device *dev,
+-			 struct device_attribute *attr,
+ 			 const char *buf,
+ 			 size_t count)
+ {
+@@ -210,7 +204,6 @@ bail:
+ }
+ 
+ static ssize_t show_lid(struct device *dev,
+-			struct device_attribute *attr,
+ 			char *buf)
+ {
+ 	struct ipath_devdata *dd = dev_get_drvdata(dev);
+@@ -219,7 +212,6 @@ static ssize_t show_lid(struct device *d
+ }
+ 
+ static ssize_t store_lid(struct device *dev,
+-			 struct device_attribute *attr,
+ 			  const char *buf,
+ 			  size_t count)
+ {
+@@ -246,7 +238,6 @@ bail:
+ }
+ 
+ static ssize_t show_mlid(struct device *dev,
+-			 struct device_attribute *attr,
+ 			 char *buf)
+ {
+ 	struct ipath_devdata *dd = dev_get_drvdata(dev);
+@@ -255,7 +246,6 @@ static ssize_t show_mlid(struct device *
+ }
+ 
+ static ssize_t store_mlid(struct device *dev,
+-			 struct device_attribute *attr,
+ 			  const char *buf,
+ 			  size_t count)
+ {
+@@ -277,7 +267,6 @@ bail:
+ }
+ 
+ static ssize_t show_guid(struct device *dev,
+-			 struct device_attribute *attr,
+ 			 char *buf)
+ {
+ 	struct ipath_devdata *dd = dev_get_drvdata(dev);
+@@ -292,7 +281,6 @@ static ssize_t show_guid(struct device *
+ }
+ 
+ static ssize_t store_guid(struct device *dev,
+-			 struct device_attribute *attr,
+ 			  const char *buf,
+ 			  size_t count)
+ {
+@@ -336,7 +324,6 @@ bail:
+ }
+ 
+ static ssize_t show_nguid(struct device *dev,
+-			  struct device_attribute *attr,
+ 			  char *buf)
+ {
+ 	struct ipath_devdata *dd = dev_get_drvdata(dev);
+@@ -345,7 +332,6 @@ static ssize_t show_nguid(struct device 
+ }
+ 
+ static ssize_t show_nports(struct device *dev,
+-			   struct device_attribute *attr,
+ 			   char *buf)
+ {
+ 	struct ipath_devdata *dd = dev_get_drvdata(dev);
+@@ -355,7 +341,6 @@ static ssize_t show_nports(struct device
+ }
+ 
+ static ssize_t show_serial(struct device *dev,
+-			   struct device_attribute *attr,
+ 			   char *buf)
+ {
+ 	struct ipath_devdata *dd = dev_get_drvdata(dev);
+@@ -367,7 +352,6 @@ static ssize_t show_serial(struct device
+ }
+ 
+ static ssize_t show_unit(struct device *dev,
+-			 struct device_attribute *attr,
+ 			 char *buf)
+ {
+ 	struct ipath_devdata *dd = dev_get_drvdata(dev);
+@@ -376,7 +360,6 @@ static ssize_t show_unit(struct device *
+ }
+ 
+ static ssize_t show_jint_max_packets(struct device *dev,
+-				     struct device_attribute *attr,
+ 				     char *buf)
+ {
+ 	struct ipath_devdata *dd = dev_get_drvdata(dev);
+@@ -385,7 +368,6 @@ static ssize_t show_jint_max_packets(str
+ }
+ 
+ static ssize_t store_jint_max_packets(struct device *dev,
+-				      struct device_attribute *attr,
+ 				      const char *buf,
+ 				      size_t count)
+ {
+@@ -403,7 +385,6 @@ static ssize_t store_jint_max_packets(st
+ }
+ 
+ static ssize_t show_jint_idle_ticks(struct device *dev,
+-				    struct device_attribute *attr,
+ 				    char *buf)
+ {
+ 	struct ipath_devdata *dd = dev_get_drvdata(dev);
+@@ -412,7 +393,6 @@ static ssize_t show_jint_idle_ticks(stru
+ }
+ 
+ static ssize_t store_jint_idle_ticks(struct device *dev,
+-				     struct device_attribute *attr,
+ 				     const char *buf,
+ 				     size_t count)
+ {
+@@ -431,7 +411,6 @@ static ssize_t store_jint_idle_ticks(str
+ 
+ #define DEVICE_COUNTER(name, attr) \
+ 	static ssize_t show_counter_##name(struct device *dev, \
+-					   struct device_attribute *attr, \
+ 					   char *buf) \
+ 	{ \
+ 		struct ipath_devdata *dd = dev_get_drvdata(dev); \
+@@ -536,7 +515,6 @@ static struct attribute_group dev_counte
+ };
+ 
+ static ssize_t store_reset(struct device *dev,
+-			 struct device_attribute *attr,
+ 			  const char *buf,
+ 			  size_t count)
+ {
+@@ -564,7 +542,6 @@ bail:
+ }
+ 
+ static ssize_t store_link_state(struct device *dev,
+-			 struct device_attribute *attr,
+ 			  const char *buf,
+ 			  size_t count)
+ {
+@@ -590,7 +567,6 @@ bail:
+ }
+ 
+ static ssize_t show_mtu(struct device *dev,
+-			 struct device_attribute *attr,
+ 			 char *buf)
+ {
+ 	struct ipath_devdata *dd = dev_get_drvdata(dev);
+@@ -598,7 +574,6 @@ static ssize_t show_mtu(struct device *d
+ }
+ 
+ static ssize_t store_mtu(struct device *dev,
+-			 struct device_attribute *attr,
+ 			  const char *buf,
+ 			  size_t count)
+ {
+@@ -623,7 +598,6 @@ bail:
+ }
+ 
+ static ssize_t show_enabled(struct device *dev,
+-			 struct device_attribute *attr,
+ 			 char *buf)
+ {
+ 	struct ipath_devdata *dd = dev_get_drvdata(dev);
+@@ -632,7 +606,6 @@ static ssize_t show_enabled(struct devic
+ }
+ 
+ static ssize_t store_enabled(struct device *dev,
+-			 struct device_attribute *attr,
+ 			  const char *buf,
+ 			  size_t count)
+ {
+@@ -673,7 +646,6 @@ bail:
+ }
+ 
+ static ssize_t store_rx_pol_inv(struct device *dev,
+-			  struct device_attribute *attr,
+ 			  const char *buf,
+ 			  size_t count)
+ {
+@@ -699,7 +671,6 @@ bail:
+ }
+ 
+ static ssize_t store_led_override(struct device *dev,
+-			  struct device_attribute *attr,
+ 			  const char *buf,
+ 			  size_t count)
+ {
+@@ -716,7 +687,6 @@ static ssize_t store_led_override(struct
+ }
+ 
+ static ssize_t show_logged_errs(struct device *dev,
+-				struct device_attribute *attr,
+ 				char *buf)
+ {
+ 	struct ipath_devdata *dd = dev_get_drvdata(dev);
+@@ -743,7 +713,6 @@ static ssize_t show_logged_errs(struct d
+  * Get/Set heartbeat enable. Or of 1=enabled, 2=auto
+  */
+ static ssize_t show_hrtbt_enb(struct device *dev,
+-			 struct device_attribute *attr,
+ 			 char *buf)
+ {
+ 	struct ipath_devdata *dd = dev_get_drvdata(dev);
+@@ -756,7 +725,6 @@ static ssize_t show_hrtbt_enb(struct dev
+ }
+ 
+ static ssize_t store_hrtbt_enb(struct device *dev,
+-			  struct device_attribute *attr,
+ 			  const char *buf,
+ 			  size_t count)
+ {
+@@ -796,7 +764,6 @@ bail:
+  * _not_ the particular encoding of any given chip)
+  */
+ static ssize_t show_lwid_enb(struct device *dev,
+-			 struct device_attribute *attr,
+ 			 char *buf)
+ {
+ 	struct ipath_devdata *dd = dev_get_drvdata(dev);
+@@ -809,7 +776,6 @@ static ssize_t show_lwid_enb(struct devi
+ }
+ 
+ static ssize_t store_lwid_enb(struct device *dev,
+-			  struct device_attribute *attr,
+ 			  const char *buf,
+ 			  size_t count)
+ {
+@@ -836,7 +802,6 @@ bail:
+ 
+ /* Get current link width */
+ static ssize_t show_lwid(struct device *dev,
+-			 struct device_attribute *attr,
+ 			 char *buf)
+ 
+ {
+@@ -853,7 +818,6 @@ static ssize_t show_lwid(struct device *
+  * Get/Set Link-speeds enabled. Or of 1=SDR 2=DDR.
+  */
+ static ssize_t show_spd_enb(struct device *dev,
+-			 struct device_attribute *attr,
+ 			 char *buf)
+ {
+ 	struct ipath_devdata *dd = dev_get_drvdata(dev);
+@@ -866,7 +830,6 @@ static ssize_t show_spd_enb(struct devic
+ }
+ 
+ static ssize_t store_spd_enb(struct device *dev,
+-			  struct device_attribute *attr,
+ 			  const char *buf,
+ 			  size_t count)
+ {
+@@ -893,7 +856,6 @@ bail:
+ 
+ /* Get current link speed */
+ static ssize_t show_spd(struct device *dev,
+-			 struct device_attribute *attr,
+ 			 char *buf)
+ {
+ 	struct ipath_devdata *dd = dev_get_drvdata(dev);
+@@ -909,7 +871,6 @@ static ssize_t show_spd(struct device *d
+  * Get/Set RX polarity-invert enable. 0=no, 1=yes.
+  */
+ static ssize_t show_rx_polinv_enb(struct device *dev,
+-			 struct device_attribute *attr,
+ 			 char *buf)
+ {
+ 	struct ipath_devdata *dd = dev_get_drvdata(dev);
+@@ -922,7 +883,6 @@ static ssize_t show_rx_polinv_enb(struct
+ }
+ 
+ static ssize_t store_rx_polinv_enb(struct device *dev,
+-			  struct device_attribute *attr,
+ 			  const char *buf,
+ 			  size_t count)
+ {
+@@ -950,7 +910,6 @@ bail:
+  * Get/Set RX lane-reversal enable. 0=no, 1=yes.
+  */
+ static ssize_t show_lanerev_enb(struct device *dev,
+-			 struct device_attribute *attr,
+ 			 char *buf)
+ {
+ 	struct ipath_devdata *dd = dev_get_drvdata(dev);
+@@ -963,7 +922,6 @@ static ssize_t show_lanerev_enb(struct d
+ }
+ 
+ static ssize_t store_lanerev_enb(struct device *dev,
+-			  struct device_attribute *attr,
+ 			  const char *buf,
+ 			  size_t count)
+ {
+@@ -1001,7 +959,6 @@ static struct attribute_group driver_att
+ };
+ 
+ static ssize_t store_tempsense(struct device *dev,
+-			       struct device_attribute *attr,
+ 			       const char *buf,
+ 			       size_t count)
+ {
+@@ -1042,7 +999,6 @@ bail:
+  * dump tempsense regs. in decimal, to ease shell-scripts.
+  */
+ static ssize_t show_tempsense(struct device *dev,
+-			      struct device_attribute *attr,
+ 			      char *buf)
+ {
+ 	struct ipath_devdata *dd = dev_get_drvdata(dev);
+Index: ofed_kernel/drivers/infiniband/hw/ipath/ipath_user_pages.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/hw/ipath/ipath_user_pages.c
++++ ofed_kernel/drivers/infiniband/hw/ipath/ipath_user_pages.c
+@@ -58,7 +58,7 @@ static int __get_user_pages(unsigned lon
+ 	size_t got;
+ 	int ret;
+ 
+-	lock_limit = current->signal->rlim[RLIMIT_MEMLOCK].rlim_cur >>
++	lock_limit = current->rlim[RLIMIT_MEMLOCK].rlim_cur >>
+ 		PAGE_SHIFT;
+ 
+ 	if (num_pages > lock_limit) {

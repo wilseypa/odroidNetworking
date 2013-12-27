@@ -1,0 +1,107 @@
+RDMA/CMA: Allocate PS_TCP ports from the host TCP port space.
+
+RDMA/CMA: Allocate PS_TCP ports from the host TCP port space.
+
+This is needed for iwarp providers that support native and rdma
+connections over the same interface.
+
+Optionally turned on by the new rdma_cm unify_tcp_port_space module
+option.
+
+Signed-off-by: Steve Wise <swise@opengridcomputing.com>
+Signed-off-by: Faisal Latif <faisal.latif@intel.com>
+Signed-off-by: Chien Tung <chien.tin.tung@intel.com>
+---
+
+ drivers/infiniband/core/cma.c |   43 +++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 42 insertions(+), 1 deletion(-)
+
+Index: ofa_kernel-1.4/drivers/infiniband/core/cma.c
+===================================================================
+--- ofa_kernel-1.4.orig/drivers/infiniband/core/cma.c
++++ ofa_kernel-1.4/drivers/infiniband/core/cma.c
+@@ -58,6 +58,11 @@ static int tavor_quirk = 0;
+ module_param_named(tavor_quirk, tavor_quirk, int, 0644);
+ MODULE_PARM_DESC(tavor_quirk, "Tavor performance quirk: limit MTU to 1K if > 0");
+ 
++int unify_tcp_port_space = 0;
++module_param(unify_tcp_port_space, int, 0644);
++MODULE_PARM_DESC(unify_tcp_port_space, "Unify the host TCP and RDMA port "
++		 "space allocation (default=0)");
++
+ #define CMA_CM_RESPONSE_TIMEOUT 20
+ #define CMA_MAX_CM_RETRIES 15
+ #define CMA_CM_MRA_SETTING (IB_CM_MRA_FLAG_DELAY | 24)
+@@ -125,6 +130,7 @@ struct rdma_id_private {
+ 	struct rdma_cm_id	id;
+ 
+ 	struct rdma_bind_list	*bind_list;
++	struct socket		*sock;
+ 	struct hlist_node	node;
+ 	struct list_head	list; /* listen_any_list or cma_device.list */
+ 	struct list_head	listen_list; /* per device listens */
+@@ -815,6 +821,8 @@ static void cma_release_port(struct rdma
+ 		kfree(bind_list);
+ 	}
+ 	mutex_unlock(&lock);
++	if (id_priv->sock)
++		sock_release(id_priv->sock);
+ }
+ 
+ static void cma_leave_mc_groups(struct rdma_id_private *id_priv)
+@@ -2049,6 +2057,34 @@ static int cma_use_port(struct idr *ps, 
+ 	return 0;
+ }
+ 
++static int cma_get_tcp_port(struct rdma_id_private *id_priv)
++{
++	int ret;
++	int size;
++	struct socket *sock;
++
++	ret = sock_create_kern(AF_INET, SOCK_STREAM, IPPROTO_TCP, &sock);
++	if (ret)
++		return ret;
++	ret = sock->ops->bind(sock,
++			(struct sockaddr *) &id_priv->id.route.addr.src_addr,
++			ip_addr_size((struct sockaddr *) &id_priv->id.route.addr.src_addr));
++	if (ret) {
++		sock_release(sock);
++		return ret;
++	}
++	size = ip_addr_size((struct sockaddr *) &id_priv->id.route.addr.src_addr);
++	ret = sock->ops->getname(sock,
++			(struct sockaddr *) &id_priv->id.route.addr.src_addr,
++			&size, 0);
++	if (ret) {
++		sock_release(sock);
++		return ret;
++	}
++	id_priv->sock = sock;
++	return 0;
++}
++
+ static int cma_get_port(struct rdma_id_private *id_priv)
+ {
+ 	struct idr *ps;
+@@ -2060,6 +2096,11 @@ static int cma_get_port(struct rdma_id_p
+ 		break;
+ 	case RDMA_PS_TCP:
+ 		ps = &tcp_ps;
++		if (unify_tcp_port_space) {
++			ret = cma_get_tcp_port(id_priv);
++			if (ret)
++				goto out;
++		}
+ 		break;
+ 	case RDMA_PS_UDP:
+ 		ps = &udp_ps;
+@@ -2077,7 +2118,7 @@ static int cma_get_port(struct rdma_id_p
+ 	else
+ 		ret = cma_use_port(ps, id_priv);
+ 	mutex_unlock(&lock);
+-
++out:
+ 	return ret;
+ }
+ 

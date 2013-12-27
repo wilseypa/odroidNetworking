@@ -1,0 +1,12 @@
+Index: ofed_kernel/drivers/infiniband/hw/cxgb3/iwch.h
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/hw/cxgb3/iwch.h	2009-12-16 16:37:11.000000000 +0200
++++ ofed_kernel/drivers/infiniband/hw/cxgb3/iwch.h	2009-12-17 10:59:44.000000000 +0200
+@@ -36,6 +36,7 @@
+ #include <linux/spinlock.h>
+ #include <linux/idr.h>
+ #include <linux/workqueue.h>
++#include <linux/sched.h>
+ 
+ #include <rdma/ib_verbs.h>
+ 

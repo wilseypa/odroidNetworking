@@ -1,0 +1,27 @@
+Index: ofa_1_5_dev_kernel-20100831-1219_linux-2.6.16.60-0.54.5-smp_check/drivers/infiniband/ulp/ipoib/ipoib_main.c
+===================================================================
+--- ofa_1_5_dev_kernel-20100831-1219_linux-2.6.16.60-0.54.5-smp_check.orig/drivers/infiniband/ulp/ipoib/ipoib_main.c	2010-08-31 12:27:15.000000000 +0300
++++ ofa_1_5_dev_kernel-20100831-1219_linux-2.6.16.60-0.54.5-smp_check/drivers/infiniband/ulp/ipoib/ipoib_main.c	2010-08-31 12:49:55.000000000 +0300
+@@ -1136,6 +1136,12 @@ static ssize_t show_pkey(struct class_de
+ }
+ static CLASS_DEVICE_ATTR(pkey, S_IRUGO, show_pkey, NULL);
+ 
++static ssize_t show_dev_id(struct class_device *d, char *buf)
++{
++	return sprintf(buf, "%d\n", to_net_dev(d)->dev_id);
++}
++static CLASS_DEVICE_ATTR(dev_id, S_IRUGO, show_dev_id, NULL);
++
+ static ssize_t show_umcast(struct class_device *dev, char *buf)
+ {
+ 	struct ipoib_dev_priv *priv = netdev_priv(to_net_dev(dev));
+@@ -1344,6 +1350,9 @@ static struct net_device *ipoib_add_port
+ 	if (class_device_create_file(&priv->dev->class_dev,
+ 				     &class_device_attr_delete_child))
+ 		goto sysfs_failed;
++	if (class_device_create_file(&priv->dev->class_dev,
++				     &class_device_attr_dev_id))
++		goto sysfs_failed;
+ 
+ 	return priv->dev;
+ 

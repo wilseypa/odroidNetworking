@@ -1,0 +1,29 @@
+commit 6303e74c699d6ba8bd3d44ec6898b2d6aa55d788
+Author: Joachim Fenkes <fenkes@de.ibm.com>
+Date:   Sat Sep 5 20:22:55 2009 -0700
+
+    IB/ehca: Fix CQE flags reporting
+    
+    The driver was reporting CQE flags in the wrong bit positions, causing
+    consumers to miss incoming immediate data.
+    
+    Signed-off-by: Joachim Fenkes <fenkes@de.ibm.com>
+    Signed-off-by: Roland Dreier <rolandd@cisco.com>
+
+diff --git a/drivers/infiniband/hw/ehca/ehca_reqs.c b/drivers/infiniband/hw/ehca/ehca_reqs.c
+index 5a3d96f..8fd88cd 100644
+--- a/drivers/infiniband/hw/ehca/ehca_reqs.c
++++ b/drivers/infiniband/hw/ehca/ehca_reqs.c
+@@ -786,7 +786,11 @@ repoll:
+ 	wc->slid = cqe->rlid;
+ 	wc->dlid_path_bits = cqe->dlid;
+ 	wc->src_qp = cqe->remote_qp_number;
+-	wc->wc_flags = cqe->w_completion_flags;
++	/*
++	 * HW has "Immed data present" and "GRH present" in bits 6 and 5.
++	 * SW defines those in bits 1 and 0, so we can just shift and mask.
++	 */
++	wc->wc_flags = (cqe->w_completion_flags >> 5) & 3;
+ 	wc->ex.imm_data = cpu_to_be32(cqe->immediate_data);
+ 	wc->sl = cqe->service_level;
+ 

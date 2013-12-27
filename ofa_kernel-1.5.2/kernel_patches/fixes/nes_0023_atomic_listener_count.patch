@@ -1,0 +1,66 @@
+diff --git a/drivers/infiniband/hw/nes/nes.h b/drivers/infiniband/hw/nes/nes.h
+index 9884056..cffdac4 100644
+--- a/drivers/infiniband/hw/nes/nes.h
++++ b/drivers/infiniband/hw/nes/nes.h
+@@ -193,8 +193,8 @@ extern u32 cm_packets_created;
+ extern u32 cm_packets_received;
+ extern u32 cm_packets_dropped;
+ extern u32 cm_packets_retrans;
+-extern u32 cm_listens_created;
+-extern u32 cm_listens_destroyed;
++extern atomic_t cm_listens_created;
++extern atomic_t cm_listens_destroyed;
+ extern u32 cm_backlog_drops;
+ extern atomic_t cm_loopbacks;
+ extern atomic_t cm_nodes_created;
+diff --git a/drivers/infiniband/hw/nes/nes_cm.c b/drivers/infiniband/hw/nes/nes_cm.c
+index 5e55067..74544fe 100644
+--- a/drivers/infiniband/hw/nes/nes_cm.c
++++ b/drivers/infiniband/hw/nes/nes_cm.c
+@@ -67,8 +67,8 @@ u32 cm_packets_dropped;
+ u32 cm_packets_retrans;
+ u32 cm_packets_created;
+ u32 cm_packets_received;
+-u32 cm_listens_created;
+-u32 cm_listens_destroyed;
++atomic_t cm_listens_created;
++atomic_t cm_listens_destroyed;
+ u32 cm_backlog_drops;
+ atomic_t cm_loopbacks;
+ atomic_t cm_nodes_created;
+@@ -1042,7 +1042,7 @@ static int mini_cm_dec_refcnt_listen(struct nes_cm_core *cm_core,
+ 		kfree(listener);
+ 		listener = NULL;
+ 		ret = 0;
+-		cm_listens_destroyed++;
++		atomic_inc(&cm_listens_destroyed);
+ 	} else {
+ 		spin_unlock_irqrestore(&cm_core->listen_list_lock, flags);
+ 	}
+@@ -3166,7 +3166,7 @@ int nes_create_listen(struct iw_cm_id *cm_id, int backlog)
+ 			g_cm_core->api->stop_listener(g_cm_core, (void *)cm_node);
+ 			return err;
+ 		}
+-		cm_listens_created++;
++		atomic_inc(&cm_listens_created);
+ 	}
+
+ 	cm_id->add_ref(cm_id);
+diff --git a/drivers/infiniband/hw/nes/nes_nic.c b/drivers/infiniband/hw/nes/nes_nic.c
+index 3ad8208..5cf293f 100644
+--- a/drivers/infiniband/hw/nes/nes_nic.c
++++ b/drivers/infiniband/hw/nes/nes_nic.c
+@@ -1221,8 +1221,8 @@ static void nes_netdev_get_ethtool_stats(struct net_device *netdev,
+ 	target_stat_values[++index] = cm_packets_received;
+ 	target_stat_values[++index] = cm_packets_dropped;
+ 	target_stat_values[++index] = cm_packets_retrans;
+-	target_stat_values[++index] = cm_listens_created;
+-	target_stat_values[++index] = cm_listens_destroyed;
++	target_stat_values[++index] = atomic_read(&cm_listens_created);
++	target_stat_values[++index] = atomic_read(&cm_listens_destroyed);
+ 	target_stat_values[++index] = cm_backlog_drops;
+ 	target_stat_values[++index] = atomic_read(&cm_loopbacks);
+ 	target_stat_values[++index] = atomic_read(&cm_nodes_created);
+--
+1.5.3.3
+

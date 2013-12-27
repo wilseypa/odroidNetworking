@@ -1,0 +1,44 @@
+BACKPORT - Use writev instead of aio_write in 2.6.18 and older kernels
+
+Signed-off-by: Ralph Campbell <ralph.campbell@qlogic.com>
+
+---
+ drivers/infiniband/hw/ipath/ipath_file_ops.c |   11 +++++------
+ 1 file changed, 5 insertions(+), 6 deletions(-)
+
+Index: ofed_kernel/drivers/infiniband/hw/ipath/ipath_file_ops.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/hw/ipath/ipath_file_ops.c
++++ ofed_kernel/drivers/infiniband/hw/ipath/ipath_file_ops.c
+@@ -50,15 +50,15 @@ static int ipath_open(struct inode *, st
+ static int ipath_close(struct inode *, struct file *);
+ static ssize_t ipath_write(struct file *, const char __user *, size_t,
+ 			   loff_t *);
+-static ssize_t ipath_writev(struct kiocb *, const struct iovec *,
+-			    unsigned long , loff_t);
++static ssize_t ipath_writev(struct file *, const struct iovec *,
++			    unsigned long , loff_t *);
+ static unsigned int ipath_poll(struct file *, struct poll_table_struct *);
+ static int ipath_mmap(struct file *, struct vm_area_struct *);
+ 
+ static const struct file_operations ipath_file_ops = {
+ 	.owner = THIS_MODULE,
+ 	.write = ipath_write,
+-	.aio_write = ipath_writev,
++	.writev = ipath_writev,
+ 	.open = ipath_open,
+ 	.release = ipath_close,
+ 	.poll = ipath_poll,
+@@ -2416,10 +2416,9 @@ bail:
+ 	return ret;
+ }
+ 
+-static ssize_t ipath_writev(struct kiocb *iocb, const struct iovec *iov,
+-			    unsigned long dim, loff_t off)
++static ssize_t ipath_writev(struct file *filp, const struct iovec *iov,
++			    unsigned long dim, loff_t *off)
+ {
+-	struct file *filp = iocb->ki_filp;
+ 	struct ipath_filedata *fp = filp->private_data;
+ 	struct ipath_portdata *pd = port_fp(filp);
+ 	struct ipath_user_sdma_queue *pq = fp->pq;

@@ -1,0 +1,88 @@
+diff -up a/include/rdma/ib_mad.h b/include/rdma/ib_mad.h
+--- a/include/rdma/ib_mad.h	2009-07-01 14:22:10.000000000 -0700
++++ b/include/rdma/ib_mad.h	2009-07-01 17:16:42.000000000 -0700
+@@ -73,7 +73,7 @@
+ #define IB_MGMT_METHOD_TRAP_REPRESS		0x07
+ 
+ #define IB_MGMT_METHOD_RESP			0x80
+-#define IB_BM_ATTR_MOD_RESP			cpu_to_be32(1)
++#define IB_BM_ATTR_MOD_RESP			__constant_cpu_to_be32(1)
+ 
+ #define IB_MGMT_MAX_METHODS			128
+ 
+@@ -107,7 +107,7 @@
+ #define	IB_MGMT_RMPP_STATUS_ABORT_MAX		127
+ 
+ #define IB_QP0		0
+-#define IB_QP1		cpu_to_be32(1)
++#define IB_QP1		__constant_cpu_to_be32(1)
+ #define IB_QP1_QKEY	0x80010000
+ #define IB_QP_SET_QKEY	0x80000000
+ 
+@@ -151,7 +151,7 @@ struct ib_rmpp_hdr {
+ 
+ typedef u64 __bitwise ib_sa_comp_mask;
+ 
+-#define IB_SA_COMP_MASK(n) ((__force ib_sa_comp_mask) cpu_to_be64(1ull << n))
++#define IB_SA_COMP_MASK(n) ((__force ib_sa_comp_mask) __constant_cpu_to_be64(1ull << n))
+ 
+ /*
+  * ib_sa_hdr and ib_sa_mad structures must be packed because they have
+diff -up a/include/rdma/ib_smi.h b/include/rdma/ib_smi.h
+--- a/include/rdma/ib_smi.h	2009-07-01 14:22:10.000000000 -0700
++++ b/include/rdma/ib_smi.h	2009-07-01 17:17:05.000000000 -0700
+@@ -63,25 +63,25 @@ struct ib_smp {
+ 	u8	return_path[IB_SMP_MAX_PATH_HOPS];
+ } __attribute__ ((packed));
+ 
+-#define IB_SMP_DIRECTION			cpu_to_be16(0x8000)
++#define IB_SMP_DIRECTION			__constant_cpu_to_be16(0x8000)
+ 
+ /* Subnet management attributes */
+-#define IB_SMP_ATTR_NOTICE			cpu_to_be16(0x0002)
+-#define IB_SMP_ATTR_NODE_DESC			cpu_to_be16(0x0010)
+-#define IB_SMP_ATTR_NODE_INFO			cpu_to_be16(0x0011)
+-#define IB_SMP_ATTR_SWITCH_INFO			cpu_to_be16(0x0012)
+-#define IB_SMP_ATTR_GUID_INFO			cpu_to_be16(0x0014)
+-#define IB_SMP_ATTR_PORT_INFO			cpu_to_be16(0x0015)
+-#define IB_SMP_ATTR_PKEY_TABLE			cpu_to_be16(0x0016)
+-#define IB_SMP_ATTR_SL_TO_VL_TABLE		cpu_to_be16(0x0017)
+-#define IB_SMP_ATTR_VL_ARB_TABLE		cpu_to_be16(0x0018)
+-#define IB_SMP_ATTR_LINEAR_FORWARD_TABLE	cpu_to_be16(0x0019)
+-#define IB_SMP_ATTR_RANDOM_FORWARD_TABLE	cpu_to_be16(0x001A)
+-#define IB_SMP_ATTR_MCAST_FORWARD_TABLE		cpu_to_be16(0x001B)
+-#define IB_SMP_ATTR_SM_INFO			cpu_to_be16(0x0020)
+-#define IB_SMP_ATTR_VENDOR_DIAG			cpu_to_be16(0x0030)
+-#define IB_SMP_ATTR_LED_INFO			cpu_to_be16(0x0031)
+-#define IB_SMP_ATTR_VENDOR_MASK			cpu_to_be16(0xFF00)
++#define IB_SMP_ATTR_NOTICE			__constant_cpu_to_be16(0x0002)
++#define IB_SMP_ATTR_NODE_DESC			__constant_cpu_to_be16(0x0010)
++#define IB_SMP_ATTR_NODE_INFO			__constant_cpu_to_be16(0x0011)
++#define IB_SMP_ATTR_SWITCH_INFO			__constant_cpu_to_be16(0x0012)
++#define IB_SMP_ATTR_GUID_INFO			__constant_cpu_to_be16(0x0014)
++#define IB_SMP_ATTR_PORT_INFO			__constant_cpu_to_be16(0x0015)
++#define IB_SMP_ATTR_PKEY_TABLE			__constant_cpu_to_be16(0x0016)
++#define IB_SMP_ATTR_SL_TO_VL_TABLE		__constant_cpu_to_be16(0x0017)
++#define IB_SMP_ATTR_VL_ARB_TABLE		__constant_cpu_to_be16(0x0018)
++#define IB_SMP_ATTR_LINEAR_FORWARD_TABLE	__constant_cpu_to_be16(0x0019)
++#define IB_SMP_ATTR_RANDOM_FORWARD_TABLE	__constant_cpu_to_be16(0x001A)
++#define IB_SMP_ATTR_MCAST_FORWARD_TABLE		__constant_cpu_to_be16(0x001B)
++#define IB_SMP_ATTR_SM_INFO			__constant_cpu_to_be16(0x0020)
++#define IB_SMP_ATTR_VENDOR_DIAG			__constant_cpu_to_be16(0x0030)
++#define IB_SMP_ATTR_LED_INFO			__constant_cpu_to_be16(0x0031)
++#define IB_SMP_ATTR_VENDOR_MASK			__constant_cpu_to_be16(0xFF00)
+ 
+ struct ib_port_info {
+ 	__be64 mkey;
+diff -up a/include/rdma/ib_verbs.h b/include/rdma/ib_verbs.h
+--- a/include/rdma/ib_verbs.h	2009-07-01 14:22:22.000000000 -0700
++++ b/include/rdma/ib_verbs.h	2009-07-01 17:23:29.000000000 -0700
+@@ -396,7 +396,7 @@ enum {
+ 	IB_MULTICAST_QPN = 0xffffff
+ };
+ 
+-#define IB_LID_PERMISSIVE	cpu_to_be16(0xFFFF)
++#define IB_LID_PERMISSIVE	__constant_cpu_to_be16(0xFFFF)
+ 
+ enum ib_ah_flags {
+ 	IB_AH_GRH	= 1

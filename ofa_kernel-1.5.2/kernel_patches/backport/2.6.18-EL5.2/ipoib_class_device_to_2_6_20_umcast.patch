@@ -1,0 +1,54 @@
+This patch is the buddy of ipoib_class_device_to_2_6_20.patch, namely it handles
+the same issue in the same method for the /sys/class/net/$dev/umcast sysfs entry
+
+Hence it  needs to go to all the directories under kernel_patches/backport that 
+contain the ipoib_class_device_to_2_6_20.patch
+
+---
+
+backport kernel_patches/fixes/zzz_ipoib_allow_umcast.patch to older kernels
+
+Signed-off-by: Or Gerlitz <ogerlitz@voltaire.com>
+
+---
+ drivers/infiniband/ulp/ipoib/ipoib_main.c |   11 +++++------
+ 1 file changed, 5 insertions(+), 6 deletions(-)
+
+Index: ofed_kernel/drivers/infiniband/ulp/ipoib/ipoib_main.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/ipoib/ipoib_main.c
++++ ofed_kernel/drivers/infiniband/ulp/ipoib/ipoib_main.c
+@@ -1133,16 +1133,14 @@ static ssize_t show_pkey(struct class_de
+ }
+ static CLASS_DEVICE_ATTR(pkey, S_IRUGO, show_pkey, NULL);
+ 
+-static ssize_t show_umcast(struct device *dev,
+-			   struct device_attribute *attr, char *buf)
++static ssize_t show_umcast(struct class_device *dev, char *buf)
+ {
+ 	struct ipoib_dev_priv *priv = netdev_priv(to_net_dev(dev));
+ 
+ 	return sprintf(buf, "%d\n", test_bit(IPOIB_FLAG_UMCAST, &priv->flags));
+ }
+ 
+-static ssize_t set_umcast(struct device *dev,
+-			  struct device_attribute *attr,
++static ssize_t set_umcast(struct class_device *dev,
+ 			  const char *buf, size_t count)
+ {
+ 	struct ipoib_dev_priv *priv = netdev_priv(to_net_dev(dev));
+@@ -1157,11 +1155,12 @@ static ssize_t set_umcast(struct device 
+ 
+ 	return count;
+ }
+-static DEVICE_ATTR(umcast, S_IWUSR | S_IRUGO, show_umcast, set_umcast);
++static CLASS_DEVICE_ATTR(umcast, S_IWUSR | S_IRUGO, show_umcast, set_umcast);
+ 
+ int ipoib_add_umcast_attr(struct net_device *dev)
+ {
+-	return device_create_file(&dev->dev, &dev_attr_umcast);
++	return class_device_create_file(&dev->class_dev,
++					&class_device_attr_umcast);
+ }
+ 
+ static ssize_t create_child(struct class_device *dev,

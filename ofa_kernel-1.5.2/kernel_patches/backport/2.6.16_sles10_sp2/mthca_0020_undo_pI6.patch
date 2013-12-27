@@ -1,0 +1,47 @@
+mthca: Undo %pI6 for printing gids
+
+(commit 8867cd7c8678ff2d9d0382dbbfbcc7a3e7e61cbc)
+    
+Signed-off-by: Jack Morgenstein <jackm@dev.mellanox.co.il>
+
+Index: ofed_kernel-fixes/drivers/infiniband/hw/mthca/mthca_mcg.c
+===================================================================
+--- ofed_kernel-fixes.orig/drivers/infiniband/hw/mthca/mthca_mcg.c	2009-07-20 13:50:08.000000000 +0300
++++ ofed_kernel-fixes/drivers/infiniband/hw/mthca/mthca_mcg.c	2009-07-20 13:55:05.000000000 +0300
+@@ -87,7 +87,17 @@ static int find_mgm(struct mthca_dev *de
+ 	}
+ 
+ 	if (0)
+-		mthca_dbg(dev, "Hash for %pI6 is %04x\n", gid, *hash);
++		mthca_dbg(dev, "Hash for %04x:%04x:%04x:%04x:"
++			  "%04x:%04x:%04x:%04x is %04x\n",
++			  be16_to_cpu(((__be16 *) gid)[0]),
++			  be16_to_cpu(((__be16 *) gid)[1]),
++			  be16_to_cpu(((__be16 *) gid)[2]),
++			  be16_to_cpu(((__be16 *) gid)[3]),
++			  be16_to_cpu(((__be16 *) gid)[4]),
++			  be16_to_cpu(((__be16 *) gid)[5]),
++			  be16_to_cpu(((__be16 *) gid)[6]),
++			  be16_to_cpu(((__be16 *) gid)[7]),
++			  *hash);
+ 
+ 	*index = *hash;
+ 	*prev  = -1;
+@@ -254,7 +264,16 @@ int mthca_multicast_detach(struct ib_qp 
+ 		goto out;
+ 
+ 	if (index == -1) {
+-		mthca_err(dev, "MGID %pI6 not found\n", gid->raw);
++		mthca_err(dev, "MGID %04x:%04x:%04x:%04x:%04x:%04x:%04x:%04x "
++			  "not found\n",
++			  be16_to_cpu(((__be16 *) gid->raw)[0]),
++			  be16_to_cpu(((__be16 *) gid->raw)[1]),
++			  be16_to_cpu(((__be16 *) gid->raw)[2]),
++			  be16_to_cpu(((__be16 *) gid->raw)[3]),
++			  be16_to_cpu(((__be16 *) gid->raw)[4]),
++			  be16_to_cpu(((__be16 *) gid->raw)[5]),
++			  be16_to_cpu(((__be16 *) gid->raw)[6]),
++			  be16_to_cpu(((__be16 *) gid->raw)[7]));
+ 		err = -EINVAL;
+ 		goto out;
+ 	}

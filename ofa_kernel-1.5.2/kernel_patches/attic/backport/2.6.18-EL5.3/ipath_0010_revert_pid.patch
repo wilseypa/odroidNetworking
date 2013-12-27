@@ -1,0 +1,141 @@
+Signed-off-by: Dave Olson <dave.olson@qlogic.com>
+---
+
+diff -upr ofed_kernel-fixes-orig/drivers/infiniband/hw/ipath/ipath_driver.c ofed_kernel-fixes/drivers/infiniband/hw/ipath/ipath_driver.c
+--- ofed_kernel-fixes-orig/drivers/infiniband/hw/ipath/ipath_driver.c	2008-10-28 12:27:04.000000000 -0700
++++ ofed_kernel-fixes/drivers/infiniband/hw/ipath/ipath_driver.c	2008-10-28 12:31:40.000000000 -0700
+@@ -2622,7 +2622,7 @@ int ipath_reset_device(int unit)
+ 				ipath_dbg("unit %u port %d is in use "
+ 					  "(PID %u cmd %s), can't reset\n",
+ 					  unit, i,
+-					  pid_nr(dd->ipath_pd[i]->port_pid),
++					  dd->ipath_pd[i]->port_pid,
+ 					  dd->ipath_pd[i]->port_comm);
+ 				ret = -EBUSY;
+ 				goto bail;
+@@ -2661,7 +2661,7 @@ bail:
+ static int ipath_signal_procs(struct ipath_devdata *dd, int sig)
+ {
+ 	int i, sub, any = 0;
+-	struct pid *pid;
++	pid_t pid;
+ 	unsigned long flags;
+ 	
+ 	if (!dd->ipath_pd)
+@@ -2669,7 +2669,8 @@ static int ipath_signal_procs(struct ipa
+ 
+ 	spin_lock_irqsave(&dd->ipath_uctxt_lock, flags);
+ 	for (i = 1; i < dd->ipath_cfgports; i++) {
+-		if (!dd->ipath_pd[i] || !dd->ipath_pd[i]->port_cnt)
++		if (!dd->ipath_pd[i] || !dd->ipath_pd[i]->port_cnt ||
++		    !dd->ipath_pd[i]->port_pid)
+ 			continue;
+ 		pid = dd->ipath_pd[i]->port_pid;
+ 		if (!pid)
+@@ -2677,8 +2678,8 @@ static int ipath_signal_procs(struct ipa
+ 
+ 		dev_info(&dd->pcidev->dev, "context %d in use "
+ 			  "(PID %u), sending signal %d\n",
+-			  i, pid_nr(pid), sig);
+-		kill_pid(pid, sig, 1);
++			  i, pid, sig);
++		kill_proc(pid, sig, 1);
+ 		any++;
+ 		for (sub = 0; sub < INFINIPATH_MAX_SUBPORT; sub++) {
+ 			pid = dd->ipath_pd[i]->port_subpid[sub];
+@@ -2686,8 +2687,8 @@ static int ipath_signal_procs(struct ipa
+ 				continue;
+ 			dev_info(&dd->pcidev->dev, "sub-context "
+ 				"%d:%d in use (PID %u), sending "
+-				"signal %d\n", i, sub, pid_nr(pid), sig);
+-			kill_pid(pid, sig, 1);
++				"signal %d\n", i, sub, pid, sig);
++			kill_proc(pid, sig, 1);
+ 			any++;
+ 		}
+ 	}
+diff -upr ofed_kernel-fixes-orig/drivers/infiniband/hw/ipath/ipath_file_ops.c ofed_kernel-fixes/drivers/infiniband/hw/ipath/ipath_file_ops.c
+--- ofed_kernel-fixes-orig/drivers/infiniband/hw/ipath/ipath_file_ops.c	2008-10-28 12:27:04.000000000 -0700
++++ ofed_kernel-fixes/drivers/infiniband/hw/ipath/ipath_file_ops.c	2008-10-28 12:46:09.000000000 -0700
+@@ -556,7 +556,7 @@ static int ipath_tid_free(struct ipath_p
+ 			p = dd->ipath_pageshadow[porttid + tid];
+ 			dd->ipath_pageshadow[porttid + tid] = NULL;
+ 			ipath_cdbg(VERBOSE, "PID %u freeing TID %u\n",
+-				   pid_nr(pd->port_pid), tid);
++				   pd->port_pid, tid);
+ 			dd->ipath_f_put_tid(dd, &tidbase[tid],
+ 					    RCVHQ_RCV_TYPE_EXPECTED,
+ 					    dd->ipath_tidinvalid);
+@@ -1610,7 +1610,7 @@ static int try_alloc_port(struct ipath_d
+ 			   port);
+ 		pd->port_cnt = 1;
+ 		port_fp(fp) = pd;
+-		pd->port_pid = get_pid(task_pid(current));
++		pd->port_pid = current->pid;
+ 		strncpy(pd->port_comm, current->comm, sizeof(pd->port_comm));
+ 		ipath_stats.sps_ports++;
+ 		ret = 0;
+@@ -1794,15 +1794,14 @@ static int find_shared_port(struct file 
+ 			}
+ 			port_fp(fp) = pd;
+ 			subport_fp(fp) = pd->port_cnt++;
+-			pd->port_subpid[subport_fp(fp)] =
+-				get_pid(task_pid(current));
++			pd->port_subpid[subport_fp(fp)] = current->pid;
+ 			tidcursor_fp(fp) = 0;
+ 			pd->active_slaves |= 1 << subport_fp(fp);
+ 			ipath_cdbg(PROC,
+ 				   "%s[%u] %u sharing %s[%u] unit:port %u:%u\n",
+ 				   current->comm, current->pid,
+ 				   subport_fp(fp),
+-				   pd->port_comm, pid_nr(pd->port_pid),
++				   pd->port_comm, pd->port_pid,
+ 				   dd->ipath_unit, pd->port_port);
+ 			ret = 1;
+ 			goto done;
+@@ -2043,7 +2042,7 @@ static int ipath_close(struct inode *in,
+ 	struct ipath_devdata *dd;
+ 	unsigned long flags;
+ 	unsigned port;
+-	struct pid *pid;
++	pid_t pid;
+ 
+ 	ipath_cdbg(VERBOSE, "close on dev %lx, private data %p\n",
+ 		   (long)in->i_rdev, fp->private_data);
+@@ -2071,8 +2070,7 @@ static int ipath_close(struct inode *in,
+ 		 * the slave(s) don't wait for receive data forever.
+ 		 */
+ 		pd->active_slaves &= ~(1 << fd->subport);
+-		put_pid(pd->port_subpid[fd->subport]);
+-		pd->port_subpid[fd->subport] = NULL;
++		pd->port_subpid[fd->subport] = 0;
+ 		mutex_unlock(&ipath_mutex);
+ 		goto bail;
+ 	}
+@@ -2139,11 +2137,10 @@ static int ipath_close(struct inode *in,
+ 			unlock_expected_tids(pd);
+ 		ipath_stats.sps_ports--;
+ 		ipath_cdbg(PROC, "%s[%u] closed port %u:%u\n",
+-			   pd->port_comm, pid_nr(pid),
++			   pd->port_comm, pid,
+ 			   dd->ipath_unit, port);
+ 	}
+ 
+-	put_pid(pid);
+ 	mutex_unlock(&ipath_mutex);
+ 	ipath_free_pddata(dd, pd); /* after releasing the mutex */
+ 
+diff -upr ofed_kernel-fixes-orig/drivers/infiniband/hw/ipath/ipath_kernel.h ofed_kernel-fixes/drivers/infiniband/hw/ipath/ipath_kernel.h
+--- ofed_kernel-fixes-orig/drivers/infiniband/hw/ipath/ipath_kernel.h	2008-10-28 12:27:04.000000000 -0700
++++ ofed_kernel-fixes/drivers/infiniband/hw/ipath/ipath_kernel.h	2008-10-28 12:29:17.000000000 -0700
+@@ -159,8 +159,8 @@ struct ipath_portdata {
+ 	/* saved total number of polled urgent packets for poll edge trigger */
+ 	u32 port_urgent_poll;
+ 	/* pid of process using this port */
+-	struct pid *port_pid;
+-	struct pid *port_subpid[INFINIPATH_MAX_SUBPORT];
++	pid_t port_pid;
++	pid_t port_subpid[INFINIPATH_MAX_SUBPORT];
+ 	/* same size as task_struct .comm[] */
+ 	char port_comm[16];
+ 	/* pkeys set by this use of this port */

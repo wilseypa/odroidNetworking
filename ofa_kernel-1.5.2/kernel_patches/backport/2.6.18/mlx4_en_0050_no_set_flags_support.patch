@@ -1,0 +1,26 @@
+From 9e8b37de6c50238ded500d77e7a6317798842fc5 Mon Sep 17 00:00:00 2001
+From: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+Date: Sun, 31 May 2009 15:17:17 +0300
+Subject: [PATCH 5/8] mlx4_en: no set_flag support
+
+Signed-off-by: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+---
+ drivers/net/mlx4/en_ethtool.c |    2 --
+ 1 files changed, 0 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/mlx4/en_ethtool.c b/drivers/net/mlx4/en_ethtool.c
+index 397ceb9..a30ba2c 100644
+--- a/drivers/net/mlx4/en_ethtool.c
++++ b/drivers/net/mlx4/en_ethtool.c
+@@ -414,8 +414,6 @@ const struct ethtool_ops mlx4_en_ethtool_ops = {
+ 	.set_pauseparam = mlx4_en_set_pauseparam,
+ 	.get_ringparam = mlx4_en_get_ringparam,
+ 	.set_ringparam = mlx4_en_set_ringparam,
+-	.get_flags = ethtool_op_get_flags,
+-	.set_flags = ethtool_op_set_flags,
+ };
+ 
+ 
+-- 
+1.6.1.3
+

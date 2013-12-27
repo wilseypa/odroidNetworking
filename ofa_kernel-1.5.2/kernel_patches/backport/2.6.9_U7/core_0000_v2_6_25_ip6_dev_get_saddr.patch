@@ -1,0 +1,21 @@
+Backport patches for rdma cm patches
+
+Backport for ipv6_dev_get_saddr() for kernel v2.6.25 and earlier.
+
+Signed-of-by: David Wilder <dwilder@us.ibm.com>
+---
+diff -Naurp ofa_kernel.orig/drivers/infiniband/core/addr.c ofa_kernel/drivers/infiniband/core/addr.c
+--- ofa_kernel.orig/drivers/infiniband/core/addr.c	2009-12-10 11:45:06.000000000 -0600
++++ ofa_kernel/drivers/infiniband/core/addr.c	2009-12-10 11:57:33.000000000 -0600
+@@ -248,8 +248,7 @@ static int addr6_resolve(struct sockaddr
+ 		goto put;
+ 
+ 	if (ipv6_addr_any(&fl.fl6_src)) {
+-		ret = ipv6_dev_get_saddr(&init_net, ip6_dst_idev(dst)->dev,
+-					 &fl.fl6_dst, 0, &fl.fl6_src);
++		ret = ipv6_get_saddr(dst, &fl.fl6_dst, &fl.fl6_src);
+ 		if (ret)
+ 			goto put;
+ 
+
+

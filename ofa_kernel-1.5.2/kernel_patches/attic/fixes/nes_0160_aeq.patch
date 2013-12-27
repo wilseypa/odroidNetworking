@@ -1,0 +1,28 @@
+diff --git a/drivers/infiniband/hw/nes/nes_hw.c b/drivers/infiniband/hw/nes/nes_hw.c
+index 8cd76f9..56ef919 100644
+--- a/drivers/infiniband/hw/nes/nes_hw.c
++++ b/drivers/infiniband/hw/nes/nes_hw.c
+@@ -2269,6 +2269,8 @@ static void nes_process_aeq(struct nes_device *nesdev, struct nes_hw_aeq *aeq)
+ 
+ 		if (++head >= aeq_size)
+ 			head = 0;
++
++		nes_write32(nesdev->regs+NES_AEQ_ALLOC, 1 << 16);
+ 	}
+ 	while (1);
+ 	aeq->aeq_head = head;
+diff --git a/drivers/infiniband/hw/nes/nes_hw.h b/drivers/infiniband/hw/nes/nes_hw.h
+index 6f8712d..bf7ecfa 100644
+--- a/drivers/infiniband/hw/nes/nes_hw.h
++++ b/drivers/infiniband/hw/nes/nes_hw.h
+@@ -61,6 +61,7 @@ enum pci_regs {
+ 	NES_CQ_ACK = 0x0034,
+ 	NES_WQE_ALLOC = 0x0040,
+ 	NES_CQE_ALLOC = 0x0044,
++	NES_AEQ_ALLOC = 0x0048
+ };
+ 
+ enum indexed_regs {
+-- 
+1.5.3.3
+

@@ -1,0 +1,25 @@
+From 7ef1f7881a8f660654e7d1567213638b37adbbb5 Mon Sep 17 00:00:00 2001
+From: Stefan Roscher <stefan.roscher@de.ibm.com>
+Date: Wed, 6 Aug 2008 16:27:25 +0200
+Subject: [PATCH] Revert "infiniband: use performance variant for_each_cpu_mask_nr"
+
+This reverts commit 5d7bfd0c4d463d288422032c9903d0452dee141d.
+---
+ drivers/infiniband/hw/ehca/ehca_irq.c |    4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+Index: ofed_kernel/drivers/infiniband/hw/ehca/ehca_irq.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/hw/ehca/ehca_irq.c
++++ ofed_kernel/drivers/infiniband/hw/ehca/ehca_irq.c
+@@ -650,8 +650,8 @@ static inline int find_next_online_cpu(s
+ 		ehca_dmp(&cpu_online_map, sizeof(cpumask_t), "");
+ 
+ 	spin_lock_irqsave(&pool->last_cpu_lock, flags);
+-	cpu = next_cpu_nr(pool->last_cpu, cpu_online_map);
+-	if (cpu >= nr_cpu_ids)
++	cpu = next_cpu(pool->last_cpu, cpu_online_map);
++	if (cpu == NR_CPUS)
+ 		cpu = first_cpu(cpu_online_map);
+ 	pool->last_cpu = cpu;
+ 	spin_unlock_irqrestore(&pool->last_cpu_lock, flags);

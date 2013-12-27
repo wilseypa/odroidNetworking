@@ -1,0 +1,120 @@
+dev_translate_for_fcoib.patch
+
+Signed-off-by: Ella Podvalny <ella@mellanox.co.il>
+diff --git a/drivers/infiniband/hw/mlx4/main.c b/drivers/infiniband/hw/mlx4/main.c
+index 5362277..983bb14 100644
+--- a/drivers/infiniband/hw/mlx4/main.c
++++ b/drivers/infiniband/hw/mlx4/main.c
+@@ -66,6 +66,12 @@ static const char mlx4_ib_version[] =
+        DRV_NAME ": Mellanox ConnectX InfiniBand driver v"
+        DRV_VERSION " (" DRV_RELDATE ")\n";
+
++static void *get_ibdev(struct mlx4_dev *dev, void *ctx, u8 port)
++{
++       struct mlx4_ib_dev *mlxibdev = ctx;
++       return &mlxibdev->ib_dev;
++}
++
+ static void init_query_mad(struct ib_smp *mad)
+ {
+        mad->base_version  = 1;
+@@ -986,7 +992,9 @@ static void mlx4_ib_event(struct mlx4_dev *dev, void *ibdev_ptr,
+ static struct mlx4_interface mlx4_ib_interface = {
+        .add    = mlx4_ib_add,
+        .remove = mlx4_ib_remove,
+-       .event  = mlx4_ib_event
++       .event  = mlx4_ib_event,
++       .get_prot_dev = get_ibdev,
++       .protocol     = MLX4_PROT_IB,
+ };
+
+ static int __init mlx4_ib_init(void)
+Index: linux-2.6/drivers/net/mlx4/intf.c
+===================================================================
+--- linux-2.6.orig/drivers/net/mlx4/intf.c
++++ linux-2.6/drivers/net/mlx4/intf.c
+@@ -189,3 +189,23 @@ void mlx4_unregister_device(struct mlx4_
+ 
+ 	mutex_unlock(&intf_mutex);
+ }
++
++void *mlx4_find_get_prot_dev(struct mlx4_dev *dev, enum mlx4_prot proto, int port)
++{
++	struct mlx4_priv *priv = mlx4_priv(dev);
++	struct mlx4_device_context *dev_ctx;
++	unsigned long flags;
++	void *result = NULL;
++
++	spin_lock_irqsave(&priv->ctx_lock, flags);
++
++	list_for_each_entry(dev_ctx, &priv->ctx_list, list)
++		if (dev_ctx->intf->protocol == proto && dev_ctx->intf->get_prot_dev) {
++			result = dev_ctx->intf->get_prot_dev(dev, dev_ctx->context, port);
++			break;
++	}
++
++	spin_unlock_irqrestore(&priv->ctx_lock, flags);
++
++	return result;
++}
+Index: linux-2.6/drivers/net/mlx4/main.c
+===================================================================
+--- linux-2.6.orig/drivers/net/mlx4/main.c
++++ linux-2.6/drivers/net/mlx4/main.c
+@@ -178,6 +178,12 @@ static void mlx4_config_cleanup(void)
+ 	}
+ }
+ 
++void *mlx4_get_prot_dev(struct mlx4_dev *dev, enum mlx4_prot proto, int port)
++{
++	return mlx4_find_get_prot_dev(dev, proto, port);
++}
++EXPORT_SYMBOL(mlx4_get_prot_dev);
++
+ int mlx4_check_port_params(struct mlx4_dev *dev,
+ 			   enum mlx4_port_type *port_type)
+ {
+Index: linux-2.6/drivers/net/mlx4/mlx4.h
+===================================================================
+--- linux-2.6.orig/drivers/net/mlx4/mlx4.h
++++ linux-2.6/drivers/net/mlx4/mlx4.h
+@@ -372,6 +372,7 @@ int mlx4_restart_one(struct pci_dev *pde
+ int mlx4_register_device(struct mlx4_dev *dev);
+ void mlx4_unregister_device(struct mlx4_dev *dev);
+ void mlx4_dispatch_event(struct mlx4_dev *dev, enum mlx4_dev_event type, int port);
++void *mlx4_find_get_prot_dev(struct mlx4_dev *dev, enum mlx4_prot proto, int port);
+ 
+ struct mlx4_dev_cap;
+ struct mlx4_init_hca_param;
+Index: linux-2.6/include/linux/mlx4/driver.h
+===================================================================
+--- linux-2.6.orig/include/linux/mlx4/driver.h
++++ linux-2.6/include/linux/mlx4/driver.h
+@@ -49,17 +49,27 @@ enum mlx4_query_reply {
+ 	MLX4_QUERY_MINE_NOPORT 	= 0
+ };
+ 
++enum mlx4_prot {
++	MLX4_PROT_IB,
++	MLX4_PROT_EN,
++};
++
+ struct mlx4_interface {
+ 	void *			(*add)	 (struct mlx4_dev *dev);
+ 	void			(*remove)(struct mlx4_dev *dev, void *context);
+ 	void			(*event) (struct mlx4_dev *dev, void *context,
+ 					  enum mlx4_dev_event event, int port);
++	void *  (*get_prot_dev) (struct mlx4_dev *dev, void *context, u8 port);
++	enum mlx4_prot          protocol;
++
+ 	enum mlx4_query_reply	(*query) (void *context, void *);
+ 	struct list_head	list;
+ };
+ 
+ int mlx4_register_interface(struct mlx4_interface *intf);
+ void mlx4_unregister_interface(struct mlx4_interface *intf);
++void *mlx4_get_prot_dev(struct mlx4_dev *dev, enum mlx4_prot proto, int port);
++
+ struct mlx4_dev *mlx4_query_interface(void *, int *port);
+ 
+ #endif /* MLX4_DRIVER_H */

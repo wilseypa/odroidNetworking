@@ -1,0 +1,15 @@
+From: Sven-Thorsten Dietrich <sdietrich@suse.de>
+Subject: use updated mutex_init.
+
+Signed-off-by: Sven-Thorsten Dietrich <sdietrich@suse.de>
+--- a/drivers/infiniband/core/user_mad.c	2009-11-24 07:52:27.000000000 -0800
++++ b/drivers/infiniband/core//user_mad.c	2012-09-01 13:06:26.000000000 -0700
+@@ -1003,7 +1003,7 @@
+ 
+ 	port->ib_dev   = device;
+ 	port->port_num = port_num;
+-	init_MUTEX(&port->sm_sem);
++	sema_init(&port->sm_sem, 1);
+ 	mutex_init(&port->file_mutex);
+ 	INIT_LIST_HEAD(&port->file_list);
+ 

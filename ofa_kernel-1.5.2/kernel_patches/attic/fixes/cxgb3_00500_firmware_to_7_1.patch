@@ -1,0 +1,12 @@
+diff --git a/drivers/net/cxgb3/version.h b/drivers/net/cxgb3/version.h
+index 29db711..fa699c9 100644
+--- a/drivers/net/cxgb3/version.h
++++ b/drivers/net/cxgb3/version.h
+@@ -39,6 +39,6 @@
+ 
+ /* Firmware version */
+ #define FW_VERSION_MAJOR 7
+-#define FW_VERSION_MINOR 0
++#define FW_VERSION_MINOR 1
+ #define FW_VERSION_MICRO 0
+ #endif				/* __CHELSIO_VERSION_H */

@@ -1,0 +1,27 @@
+Index: ofed_kernel-2.6.25/drivers/infiniband/core/sysfs.c
+===================================================================
+--- ofed_kernel-2.6.25.orig/drivers/infiniband/core/sysfs.c
++++ ofed_kernel-2.6.25/drivers/infiniband/core/sysfs.c
+@@ -769,7 +769,7 @@ int ib_device_register_sysfs(struct ib_d
+ 	class_dev->class      = &ib_class;
+ 	class_dev->driver_data = device;
+ 	class_dev->parent     = device->dma_device;
+-	dev_set_name(class_dev, device->name);
++	strlcpy(class_dev->bus_id, device->name, BUS_ID_SIZE);
+ 
+ 	INIT_LIST_HEAD(&device->port_list);
+ 
+Index: ofed_kernel-2.6.25/drivers/infiniband/core/ucm.c
+===================================================================
+--- ofed_kernel-2.6.25.orig/drivers/infiniband/core/ucm.c
++++ ofed_kernel-2.6.25/drivers/infiniband/core/ucm.c
+@@ -1266,7 +1266,8 @@ static void ib_ucm_add_one(struct ib_dev
+ 	ucm_dev->dev.parent = device->dma_device;
+ 	ucm_dev->dev.devt = ucm_dev->cdev.dev;
+ 	ucm_dev->dev.release = ib_ucm_release_dev;
+-	dev_set_name(&ucm_dev->dev, "ucm%d", ucm_dev->devnum);
++	snprintf(ucm_dev->dev.bus_id, BUS_ID_SIZE, "ucm%d",
++		 ucm_dev->devnum);
+ 	if (device_register(&ucm_dev->dev))
+ 		goto err_cdev;
+ 

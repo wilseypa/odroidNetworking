@@ -1,0 +1,37 @@
+nfsd: Add lockd up/down logic for transports created in the kernel.
+
+From: Steve Wise <swise@opengridcomputing.com>
+
+The nfsd transport initialization logic also starts and stops the lockd. Add
+logic to start and stop the daemon for transports added from kernel-space
+as well as user-space.
+
+signed-off-by: Steve Wise <swise@opengridcomputing.com>
+---
+
+ fs/nfsd/nfsctl.c |    4 ++++
+ 1 files changed, 4 insertions(+), 0 deletions(-)
+
+
+diff --git a/fs/nfsd/nfsctl.c b/fs/nfsd/nfsctl.c
+index af16849..eb6973c 100644
+--- a/fs/nfsd/nfsctl.c
++++ b/fs/nfsd/nfsctl.c
+@@ -980,6 +980,9 @@ static ssize_t __write_ports(struct file *file, char *buf, size_t size)
+ 					/* Give a reasonable perror msg for
+ 					 * bad transport string */
+ 					err = -EPROTONOSUPPORT;
++				if (err >= 0)
++					lockd_up();
++				nfsd_serv->sv_nrthreads--;
+ 			}
+ 			return err < 0 ? err : 0;
+ 		}
+@@ -1002,6 +1005,7 @@ static ssize_t __write_ports(struct file *file, char *buf, size_t size)
+ 					svc_close_xprt(xprt);
+ 					svc_xprt_put(xprt);
+ 					err = 0;
++					lockd_down();
+ 				} else
+ 					err = -ENOTCONN;
+ 			}

@@ -1,0 +1,62 @@
+commit a7f18a776785aecb5eb9967aef6f0f603b698ba0
+Author: Doug Ledford <dledford@redhat.com>
+Date:   Thu Jul 16 12:47:55 2009 -0400
+
+    [mthca] Fix attempts to use kmalloc on overly large allocations
+    
+    Signed-off-by: Doug Ledford <dledford@redhat.com>
+
+diff --git a/drivers/infiniband/hw/mthca/mthca_mr.c b/drivers/infiniband/hw/mthca/mthca_mr.c
+index d606edf..312e18d 100644
+--- a/drivers/infiniband/hw/mthca/mthca_mr.c
++++ b/drivers/infiniband/hw/mthca/mthca_mr.c
+@@ -152,8 +152,11 @@ static int mthca_buddy_init(struct mthca_buddy *buddy, int max_order)
+ 		goto err_out;
+ 
+ 	for (i = 0; i <= buddy->max_order; ++i) {
+-		s = BITS_TO_LONGS(1 << (buddy->max_order - i));
+-		buddy->bits[i] = kmalloc(s * sizeof (long), GFP_KERNEL);
++		s = BITS_TO_LONGS(1 << (buddy->max_order - i)) * sizeof(long);
++		if(s > PAGE_SIZE)
++			buddy->bits[i] = (unsigned long *)__get_free_pages(GFP_KERNEL, get_order(s));
++		else 
++			buddy->bits[i] = kmalloc(s, GFP_KERNEL);
+ 		if (!buddy->bits[i])
+ 			goto err_out_free;
+ 		bitmap_zero(buddy->bits[i],
+@@ -166,9 +169,13 @@ static int mthca_buddy_init(struct mthca_buddy *buddy, int max_order)
+ 	return 0;
+ 
+ err_out_free:
+-	for (i = 0; i <= buddy->max_order; ++i)
+-		kfree(buddy->bits[i]);
+-
++	for (i = 0; i <= buddy->max_order; ++i){
++		s = BITS_TO_LONGS(1 << (buddy->max_order - i)) * sizeof(long);
++		if(s > PAGE_SIZE)
++			free_pages((unsigned long)buddy->bits[i], get_order(s));
++		else
++			kfree(buddy->bits[i]);
++	}
+ err_out:
+ 	kfree(buddy->bits);
+ 	kfree(buddy->num_free);
+@@ -178,10 +185,15 @@ err_out:
+ 
+ static void mthca_buddy_cleanup(struct mthca_buddy *buddy)
+ {
+-	int i;
++	int i, s;
+ 
+-	for (i = 0; i <= buddy->max_order; ++i)
+-		kfree(buddy->bits[i]);
++	for (i = 0; i <= buddy->max_order; ++i){
++		s = BITS_TO_LONGS(1 << (buddy->max_order - i)) * sizeof(long);
++		if(s > PAGE_SIZE)
++			free_pages((unsigned long)buddy->bits[i], get_order(s));
++		else
++			kfree(buddy->bits[i]);
++	}
+ 
+ 	kfree(buddy->bits);
+ 	kfree(buddy->num_free);

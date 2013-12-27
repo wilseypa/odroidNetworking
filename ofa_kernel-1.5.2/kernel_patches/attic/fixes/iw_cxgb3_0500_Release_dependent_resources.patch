@@ -1,0 +1,105 @@
+commit e332d8e1bde9f013c9ee2c45e0708637251c9828
+Author: Steve Wise <swise@opengridcomputing.com>
+Date:   Fri Mar 27 09:34:21 2009 -0500
+
+    RDMA/cxgb3: Release dependent resources only when endpoint memory is freed.
+    
+    The cxgb3 l2t entry, hwtid, and dst entry were being released before
+    all the iwch_ep references were released.  This can cause a crash in
+    t3_l2t_send_slow() and other places where the l2t entry is used.
+    
+    The fix is to defer releasing these resources until all endpoint
+    references are gone.
+    
+    Details:
+    
+    - move flags field to the iwch_ep_common struct.
+    - add a flag indicating resources are to be released.
+    - release resources at endpoint free time instead of close/abort time.
+    
+    Signed-off-by: Steve Wise <swise@opengridcomputing.com>
+
+diff --git a/drivers/infiniband/hw/cxgb3/iwch_cm.c b/drivers/infiniband/hw/cxgb3/iwch_cm.c
+index c325c44..3c382f9 100644
+--- a/drivers/infiniband/hw/cxgb3/iwch_cm.c
++++ b/drivers/infiniband/hw/cxgb3/iwch_cm.c
+@@ -252,18 +252,22 @@ static void *alloc_ep(int size, gfp_t gfp)
+ 
+ void __free_ep(struct kref *kref)
+ {
+-	struct iwch_ep_common *epc;
+-	epc = container_of(kref, struct iwch_ep_common, kref);
+-	PDBG("%s ep %p state %s\n", __func__, epc, states[state_read(epc)]);
+-	kfree(epc);
++	struct iwch_ep *ep;
++	ep = container_of(container_of(kref, struct iwch_ep_common, kref),
++			  struct iwch_ep, com);
++	PDBG("%s ep %p state %s\n", __func__, ep, states[state_read(&ep->com)]);
++	if (ep->com.flags & RELEASE_RESOURCES) {
++		cxgb3_remove_tid(ep->com.tdev, (void *)ep, ep->hwtid);
++		dst_release(ep->dst);
++		l2t_release(L2DATA(ep->com.tdev), ep->l2t);
++	}
++	kfree(ep);
+ }
+ 
+ static void release_ep_resources(struct iwch_ep *ep)
+ {
+ 	PDBG("%s ep %p tid %d\n", __func__, ep, ep->hwtid);
+-	cxgb3_remove_tid(ep->com.tdev, (void *)ep, ep->hwtid);
+-	dst_release(ep->dst);
+-	l2t_release(L2DATA(ep->com.tdev), ep->l2t);
++	ep->com.flags |= RELEASE_RESOURCES;
+ 	put_ep(&ep->com);
+ }
+ 
+@@ -1127,8 +1131,8 @@ static int abort_rpl(struct t3cdev *tdev, struct sk_buff *skb, void *ctx)
+ 	 * We get 2 abort replies from the HW.  The first one must
+ 	 * be ignored except for scribbling that we need one more.
+ 	 */
+-	if (!(ep->flags & ABORT_REQ_IN_PROGRESS)) {
+-		ep->flags |= ABORT_REQ_IN_PROGRESS;
++	if (!(ep->com.flags & ABORT_REQ_IN_PROGRESS)) {
++		ep->com.flags |= ABORT_REQ_IN_PROGRESS;
+ 		return CPL_RET_BUF_DONE;
+ 	}
+ 
+@@ -1534,8 +1538,8 @@ static int peer_abort(struct t3cdev *tdev, struct sk_buff *skb, void *ctx)
+ 	 * We get 2 peer aborts from the HW.  The first one must
+ 	 * be ignored except for scribbling that we need one more.
+ 	 */
+-	if (!(ep->flags & PEER_ABORT_IN_PROGRESS)) {
+-		ep->flags |= PEER_ABORT_IN_PROGRESS;
++	if (!(ep->com.flags & PEER_ABORT_IN_PROGRESS)) {
++		ep->com.flags |= PEER_ABORT_IN_PROGRESS;
+ 		return CPL_RET_BUF_DONE;
+ 	}
+ 
+diff --git a/drivers/infiniband/hw/cxgb3/iwch_cm.h b/drivers/infiniband/hw/cxgb3/iwch_cm.h
+index d7c7e09..43c0aea 100644
+--- a/drivers/infiniband/hw/cxgb3/iwch_cm.h
++++ b/drivers/infiniband/hw/cxgb3/iwch_cm.h
+@@ -147,6 +147,7 @@ enum iwch_ep_state {
+ enum iwch_ep_flags {
+ 	PEER_ABORT_IN_PROGRESS	= (1 << 0),
+ 	ABORT_REQ_IN_PROGRESS	= (1 << 1),
++	RELEASE_RESOURCES	= (1 << 2),
+ };
+ 
+ struct iwch_ep_common {
+@@ -161,6 +162,7 @@ struct iwch_ep_common {
+ 	wait_queue_head_t waitq;
+ 	int rpl_done;
+ 	int rpl_err;
++	u32 flags;
+ };
+ 
+ struct iwch_listen_ep {
+@@ -188,7 +190,6 @@ struct iwch_ep {
+ 	u16 plen;
+ 	u32 ird;
+ 	u32 ord;
+-	u32 flags;
+ };
+ 
+ static inline struct iwch_ep *to_ep(struct iw_cm_id *cm_id)

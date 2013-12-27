@@ -1,0 +1,64 @@
+---
+ drivers/infiniband/core/cm.c    |    8 ++++----
+ drivers/infiniband/core/sysfs.c |    8 +++++---
+ 2 files changed, 9 insertions(+), 7 deletions(-)
+
+Index: ofed_kernel/drivers/infiniband/core/cm.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/core/cm.c
++++ ofed_kernel/drivers/infiniband/core/cm.c
+@@ -3696,8 +3696,8 @@ static int cm_create_port_fs(struct cm_p
+ 
+ error:
+ 	while (i--)
+-		kobject_put(&port->counter_group[i].obj);
+-	kobject_put(&port->port_obj);
++		kobject_unregister(&port->counter_group[i].obj);
++	kobject_unregister(&port->port_obj);
+ 	return ret;
+ 
+ }
+@@ -3707,9 +3707,9 @@ static void cm_remove_port_fs(struct cm_
+ 	int i;
+ 
+ 	for (i = 0; i < CM_COUNTER_GROUPS; i++)
+-		kobject_put(&port->counter_group[i].obj);
++		kobject_unregister(&port->counter_group[i].obj);
+ 
+-	kobject_put(&port->port_obj);
++	kobject_unregister(&port->port_obj);
+ }
+ 
+ static void cm_add_one(struct ib_device *ib_device)
+Index: ofed_kernel/drivers/infiniband/core/sysfs.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/core/sysfs.c
++++ ofed_kernel/drivers/infiniband/core/sysfs.c
+@@ -838,11 +838,11 @@ err_put:
+ 			sysfs_remove_group(p, &pma_group);
+ 			sysfs_remove_group(p, &port->pkey_group);
+ 			sysfs_remove_group(p, &port->gid_group);
+-			kobject_put(p);
++			kobject_unregister(p);
+ 		}
+ 	}
+ 
+-	kobject_put(&class_dev->kobj);
++	kobject_unregister(&class_dev->kobj);
+ 
+ err_unregister:
+ 	device_unregister(class_dev);
+@@ -862,10 +862,12 @@ void ib_device_unregister_sysfs(struct i
+ 		sysfs_remove_group(p, &pma_group);
+ 		sysfs_remove_group(p, &port->pkey_group);
+ 		sysfs_remove_group(p, &port->gid_group);
+-		kobject_put(p);
++		kobject_unregister(p);
+ 	}
+ 
+ 	kobject_put(device->ports_parent);
++	/* WA for memory leak */
++	kfree(device->ports_parent);
+ 	device_unregister(&device->dev);
+ }
+ 

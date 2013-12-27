@@ -1,0 +1,27 @@
+From 926449ba66ce2a45c619bbe755b00d6bdbf0d83e Mon Sep 17 00:00:00 2001
+From: Tom Talpey <talpey@netapp.com>
+Date: Thu, 9 Oct 2008 15:01:21 -0400
+Subject: [PATCH] RPC/RDMA: return a consistent error, when connect fails.
+
+The xprt_connect call path does not expect such errors as ECONNREFUSED
+to be returned from failed transport connection attempts, otherwise it
+translates them to EIO and signals fatal errors. For example, mount.nfs
+prints simply "internal error". Translate all such errors to ENOTCONN
+from RPC/RDMA to match sockets behavior.
+
+Signed-off-by: Tom Talpey <talpey@netapp.com>
+Signed-off-by: Trond Myklebust <Trond.Myklebust@netapp.com>
+
+diff --git a/net/sunrpc/xprtrdma/rpc_rdma.c b/net/sunrpc/xprtrdma/rpc_rdma.c
+index d245c0b..94ecf1b 100644
+--- a/net/sunrpc/xprtrdma/rpc_rdma.c
++++ b/net/sunrpc/xprtrdma/rpc_rdma.c
+@@ -699,7 +699,7 @@ rpcrdma_conn_func(struct rpcrdma_ep *ep)
+ 			xprt_wake_pending_tasks(xprt, 0);
+ 	} else {
+ 		if (xprt_test_and_clear_connected(xprt))
+-			xprt_wake_pending_tasks(xprt, ep->rep_connected);
++			xprt_wake_pending_tasks(xprt, -ENOTCONN);
+ 	}
+ 	spin_unlock_bh(&xprt->transport_lock);
+ }

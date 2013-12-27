@@ -1,0 +1,15 @@
+diff --git a/drivers/infiniband/hw/nes/nes_nic.c b/drivers/infiniband/hw/nes/nes_nic.c
+index 95f5a3f..d8f2d04 100644
+--- a/drivers/infiniband/hw/nes/nes_nic.c
++++ b/drivers/infiniband/hw/nes/nes_nic.c
+@@ -1628,7 +1628,6 @@ struct net_device *nes_netdev_init(struct nes_device *nesdev,
+ 	netdev->dev_addr[3] = (u8)(u64temp>>16);
+ 	netdev->dev_addr[4] = (u8)(u64temp>>8);
+ 	netdev->dev_addr[5] = (u8)u64temp;
+-	memcpy(netdev->perm_addr, netdev->dev_addr, 6);
+ 
+ 	if ((nesvnic->logical_port < 2) || (nesdev->nesadapter->hw_rev != NE020_REV)) {
+ 		netdev->features |= NETIF_F_TSO | NETIF_F_SG | NETIF_F_IP_CSUM;
+-- 
+1.5.3.3
+

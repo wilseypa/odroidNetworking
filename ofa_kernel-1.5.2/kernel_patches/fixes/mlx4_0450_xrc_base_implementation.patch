@@ -1,0 +1,704 @@
+mlx4: Implements XRC support.
+
+Rev 2:
+Do not allocate an RQ for an XRC QP.
+
+V3:  Checkpatch.pl cleanups.
+
+Signed-off-by: Jack Morgenstein <jackm@dev.mellanox.co.il>
+---
+ drivers/infiniband/hw/mlx4/main.c    |   52 ++++++++++++++++++++++++++
+ drivers/infiniband/hw/mlx4/mlx4_ib.h |   16 ++++++++
+ drivers/infiniband/hw/mlx4/qp.c      |   41 ++++++++++++++------
+ drivers/infiniband/hw/mlx4/srq.c     |   23 +++++++++--
+ drivers/net/mlx4/Makefile            |    2 -
+ drivers/net/mlx4/fw.c                |    7 +++
+ drivers/net/mlx4/fw.h                |    2 +
+ drivers/net/mlx4/main.c              |   18 ++++++++-
+ drivers/net/mlx4/mlx4.h              |    3 +
+ drivers/net/mlx4/qp.c                |    4 +-
+ drivers/net/mlx4/srq.c               |   20 +++++-----
+ drivers/net/mlx4/xrcd.c              |   70 +++++++++++++++++++++++++++++++++++
+ include/linux/mlx4/device.h          |   10 ++++-
+ include/linux/mlx4/qp.h              |    3 +
+ 14 files changed, 240 insertions(+), 31 deletions(-)
+ create mode 100644 drivers/net/mlx4/xrcd.c
+
+Index: ofed_kernel/drivers/infiniband/hw/mlx4/main.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/hw/mlx4/main.c
++++ ofed_kernel/drivers/infiniband/hw/mlx4/main.c
+@@ -120,6 +120,8 @@ static int mlx4_ib_query_device(struct i
+ 	    (dev->dev->caps.bmme_flags & MLX4_BMME_FLAG_REMOTE_INV) &&
+ 	    (dev->dev->caps.bmme_flags & MLX4_BMME_FLAG_FAST_REG_WR))
+ 		props->device_cap_flags |= IB_DEVICE_MEM_MGT_EXTENSIONS;
++	if (dev->dev->caps.flags & MLX4_DEV_CAP_FLAG_XRC)
++		props->device_cap_flags |= IB_DEVICE_XRC;
+ 
+ 	props->vendor_id	   = be32_to_cpup((__be32 *) (out_mad->data + 36)) &
+ 		0xffffff;
+@@ -468,6 +470,46 @@ static int mlx4_ib_mcg_detach(struct ib_
+ 				     &to_mqp(ibqp)->mqp, gid->raw);
+ }
+ 
++static struct ib_xrcd *mlx4_ib_alloc_xrcd(struct ib_device *ibdev,
++					  struct ib_ucontext *context,
++					  struct ib_udata *udata)
++{
++	struct mlx4_ib_xrcd *xrcd;
++	struct mlx4_ib_dev *mdev = to_mdev(ibdev);
++	int err;
++
++	if (!(mdev->dev->caps.flags & MLX4_DEV_CAP_FLAG_XRC))
++		return ERR_PTR(-ENOSYS);
++
++	xrcd = kmalloc(sizeof *xrcd, GFP_KERNEL);
++	if (!xrcd)
++		return ERR_PTR(-ENOMEM);
++
++	err = mlx4_xrcd_alloc(mdev->dev, &xrcd->xrcdn);
++	if (err) {
++		kfree(xrcd);
++		return ERR_PTR(err);
++	}
++
++	if (context)
++		if (ib_copy_to_udata(udata, &xrcd->xrcdn, sizeof(__u32))) {
++			mlx4_xrcd_free(mdev->dev, xrcd->xrcdn);
++			kfree(xrcd);
++			return ERR_PTR(-EFAULT);
++		}
++
++	return &xrcd->ibxrcd;
++}
++
++static int mlx4_ib_dealloc_xrcd(struct ib_xrcd *xrcd)
++{
++	mlx4_xrcd_free(to_mdev(xrcd->device)->dev, to_mxrcd(xrcd)->xrcdn);
++	kfree(xrcd);
++
++	return 0;
++}
++
++
+ static int init_node_data(struct mlx4_ib_dev *dev)
+ {
+ 	struct ib_smp *in_mad  = NULL;
+@@ -794,6 +836,16 @@ static void *mlx4_ib_add(struct mlx4_dev
+ 	ibdev->ib_dev.map_phys_fmr	= mlx4_ib_map_phys_fmr;
+ 	ibdev->ib_dev.unmap_fmr		= mlx4_ib_unmap_fmr;
+ 	ibdev->ib_dev.dealloc_fmr	= mlx4_ib_fmr_dealloc;
++	if (dev->caps.flags & MLX4_DEV_CAP_FLAG_XRC) {
++		ibdev->ib_dev.create_xrc_srq = mlx4_ib_create_xrc_srq;
++		ibdev->ib_dev.alloc_xrcd = mlx4_ib_alloc_xrcd;
++		ibdev->ib_dev.dealloc_xrcd = mlx4_ib_dealloc_xrcd;
++		ibdev->ib_dev.uverbs_cmd_mask |=
++			(1ull << IB_USER_VERBS_CMD_CREATE_XRC_SRQ)	|
++			(1ull << IB_USER_VERBS_CMD_OPEN_XRC_DOMAIN)	|
++			(1ull << IB_USER_VERBS_CMD_CLOSE_XRC_DOMAIN);
++	}
++
+ 
+ 	if (init_node_data(ibdev))
+ 		goto err_map;
+Index: ofed_kernel/drivers/infiniband/hw/mlx4/mlx4_ib.h
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/hw/mlx4/mlx4_ib.h
++++ ofed_kernel/drivers/infiniband/hw/mlx4/mlx4_ib.h
+@@ -82,6 +82,11 @@ struct mlx4_ib_pd {
+ 	u32			pdn;
+ };
+ 
++struct mlx4_ib_xrcd {
++	struct ib_xrcd	ibxrcd;
++	u32		xrcdn;
++};
++
+ struct mlx4_ib_cq_buf {
+ 	struct mlx4_buf		buf;
+ 	struct mlx4_mtt		mtt;
+@@ -157,6 +162,7 @@ struct mlx4_ib_qp {
+ 	int			buf_size;
+ 	struct mutex		mutex;
+ 	u32			flags;
++	u16			xrcdn;
+ 	u8			port;
+ 	u8			alt_port;
+ 	u8			atomic_rd_en;
+@@ -218,6 +224,11 @@ static inline struct mlx4_ib_pd *to_mpd(
+ 	return container_of(ibpd, struct mlx4_ib_pd, ibpd);
+ }
+ 
++static inline struct mlx4_ib_xrcd *to_mxrcd(struct ib_xrcd *ibxrcd)
++{
++	return container_of(ibxrcd, struct mlx4_ib_xrcd, ibxrcd);
++}
++
+ static inline struct mlx4_ib_cq *to_mcq(struct ib_cq *ibcq)
+ {
+ 	return container_of(ibcq, struct mlx4_ib_cq, ibcq);
+@@ -302,6 +313,11 @@ int mlx4_ib_destroy_ah(struct ib_ah *ah)
+ struct ib_srq *mlx4_ib_create_srq(struct ib_pd *pd,
+ 				  struct ib_srq_init_attr *init_attr,
+ 				  struct ib_udata *udata);
++struct ib_srq *mlx4_ib_create_xrc_srq(struct ib_pd *pd,
++				      struct ib_cq *xrc_cq,
++				      struct ib_xrcd *xrcd,
++				      struct ib_srq_init_attr *init_attr,
++				      struct ib_udata *udata);
+ int mlx4_ib_modify_srq(struct ib_srq *ibsrq, struct ib_srq_attr *attr,
+ 		       enum ib_srq_attr_mask attr_mask, struct ib_udata *udata);
+ int mlx4_ib_query_srq(struct ib_srq *srq, struct ib_srq_attr *srq_attr);
+Index: ofed_kernel/drivers/infiniband/hw/mlx4/qp.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/hw/mlx4/qp.c
++++ ofed_kernel/drivers/infiniband/hw/mlx4/qp.c
+@@ -286,7 +286,7 @@ static int send_wqe_overhead(enum ib_qp_
+ }
+ 
+ static int set_rq_size(struct mlx4_ib_dev *dev, struct ib_qp_cap *cap,
+-		       int is_user, int has_srq, struct mlx4_ib_qp *qp)
++		       int is_user, int has_srq_or_is_xrc, struct mlx4_ib_qp *qp)
+ {
+ 	/* Sanity check RQ size before proceeding */
+ 	if (cap->max_recv_wr > dev->dev->caps.max_wqes - MLX4_IB_SQ_MAX_SPARE ||
+@@ -296,7 +296,7 @@ static int set_rq_size(struct mlx4_ib_de
+ 		return -EINVAL;
+ 	}
+ 
+-	if (has_srq) {
++	if (has_srq_or_is_xrc) {
+ 		/* QPs attached to an SRQ should have no RQ */
+ 		if (cap->max_recv_wr) {
+ 			mlx4_ib_dbg("non-zero RQ size for QP using SRQ");
+@@ -488,7 +488,8 @@ static int create_qp_common(struct mlx4_
+ 	if (init_attr->sq_sig_type == IB_SIGNAL_ALL_WR)
+ 		qp->sq_signal_bits = cpu_to_be32(MLX4_WQE_CTRL_CQ_UPDATE);
+ 
+-	err = set_rq_size(dev, &init_attr->cap, !!pd->uobject, !!init_attr->srq, qp);
++	err = set_rq_size(dev, &init_attr->cap, !!pd->uobject,
++			  !!init_attr->srq || !!init_attr->xrc_domain , qp);
+ 	if (err)
+ 		goto err;
+ 
+@@ -527,7 +528,7 @@ static int create_qp_common(struct mlx4_
+ 			goto err_mtt;
+ 		}
+ 
+-		if (!init_attr->srq) {
++		if (!init_attr->srq && init_attr->qp_type != IB_QPT_XRC) {
+ 			err = mlx4_ib_db_map_user(to_mucontext(pd->uobject->context),
+ 						  ucmd.db_addr, &qp->db);
+ 			if (err) {
+@@ -548,7 +549,7 @@ static int create_qp_common(struct mlx4_
+ 		if (err)
+ 			goto err;
+ 
+-		if (!init_attr->srq) {
++		if (!init_attr->srq && init_attr->qp_type != IB_QPT_XRC) {
+ 			err = mlx4_db_alloc(dev->dev, &qp->db, 0);
+ 			if (err)
+ 				goto err;
+@@ -594,6 +595,9 @@ static int create_qp_common(struct mlx4_
+ 	if (err)
+ 		goto err_qpn;
+ 
++	if (init_attr->qp_type == IB_QPT_XRC)
++		qp->mqp.qpn |= (1 << 23);
++
+ 	/*
+ 	 * Hardware wants QPN written in big-endian order (after
+ 	 * shifting) for send doorbell.  Precompute this value to save
+@@ -607,7 +611,7 @@ static int create_qp_common(struct mlx4_
+ 
+ err_wrid:
+ 	if (pd->uobject) {
+-		if (!init_attr->srq)
++		if (!init_attr->srq && init_attr->qp_type != IB_QPT_XRC)
+ 			mlx4_ib_db_unmap_user(to_mucontext(pd->uobject->context),
+ 					      &qp->db);
+ 	} else {
+@@ -625,7 +629,7 @@ err_buf:
+ 		mlx4_buf_free(dev->dev, qp->buf_size, &qp->buf);
+ 
+ err_db:
+-	if (!pd->uobject && !init_attr->srq)
++	if (!pd->uobject && !init_attr->srq && init_attr->qp_type != IB_QPT_XRC)
+ 		mlx4_db_free(dev->dev, &qp->db);
+ 
+ err:
+@@ -707,7 +711,7 @@ static void destroy_qp_common(struct mlx
+ 	mlx4_mtt_cleanup(dev->dev, &qp->mtt);
+ 
+ 	if (is_user) {
+-		if (!qp->ibqp.srq)
++		if (!qp->ibqp.srq && qp->ibqp.qp_type != IB_QPT_XRC)
+ 			mlx4_ib_db_unmap_user(to_mucontext(qp->ibqp.uobject->context),
+ 					      &qp->db);
+ 		ib_umem_release(qp->umem);
+@@ -715,7 +719,7 @@ static void destroy_qp_common(struct mlx
+ 		kfree(qp->sq.wrid);
+ 		kfree(qp->rq.wrid);
+ 		mlx4_buf_free(dev->dev, qp->buf_size, &qp->buf);
+-		if (!qp->ibqp.srq)
++		if (!qp->ibqp.srq && qp->ibqp.qp_type != IB_QPT_XRC)
+ 			mlx4_db_free(dev->dev, &qp->db);
+ 	}
+ }
+@@ -742,6 +746,9 @@ struct ib_qp *mlx4_ib_create_qp(struct i
+ 		return ERR_PTR(-EINVAL);
+ 
+ 	switch (init_attr->qp_type) {
++	case IB_QPT_XRC:
++		if (!(dev->dev->caps.flags & MLX4_DEV_CAP_FLAG_XRC))
++			return ERR_PTR(-ENOSYS);
+ 	case IB_QPT_RC:
+ 	case IB_QPT_UC:
+ 	case IB_QPT_UD:
+@@ -756,6 +763,11 @@ struct ib_qp *mlx4_ib_create_qp(struct i
+ 			return ERR_PTR(err);
+ 		}
+ 
++		if (init_attr->qp_type == IB_QPT_XRC)
++			qp->xrcdn = to_mxrcd(init_attr->xrc_domain)->xrcdn;
++		else
++			qp->xrcdn = 0;
++
+ 		qp->ibqp.qp_num = qp->mqp.qpn;
+ 
+ 		break;
+@@ -824,6 +836,7 @@ static int to_mlx4_st(enum ib_qp_type ty
+ 	case IB_QPT_RC:		return MLX4_QP_ST_RC;
+ 	case IB_QPT_UC:		return MLX4_QP_ST_UC;
+ 	case IB_QPT_UD:		return MLX4_QP_ST_UD;
++	case IB_QPT_XRC:	return MLX4_QP_ST_XRC;
+ 	case IB_QPT_SMI:
+ 	case IB_QPT_GSI:	return MLX4_QP_ST_MLX;
+ 	default:		return -1;
+@@ -974,8 +987,11 @@ static int __mlx4_ib_modify_qp(struct ib
+ 		context->sq_size_stride = ilog2(qp->sq.wqe_cnt) << 3;
+ 	context->sq_size_stride |= qp->sq.wqe_shift - 4;
+ 
+-	if (cur_state == IB_QPS_RESET && new_state == IB_QPS_INIT)
++	if (cur_state == IB_QPS_RESET && new_state == IB_QPS_INIT) {
+ 		context->sq_size_stride |= !!qp->sq_no_prefetch << 7;
++		if (ibqp->qp_type == IB_QPT_XRC)
++			context->xrcd = cpu_to_be32((u32) qp->xrcdn);
++	}
+ 
+ 	if (qp->ibqp.uobject)
+ 		context->usr_page = cpu_to_be32(to_mucontext(ibqp->uobject->context)->uar.index);
+@@ -1103,7 +1119,8 @@ static int __mlx4_ib_modify_qp(struct ib
+ 	if (ibqp->srq)
+ 		context->srqn = cpu_to_be32(1 << 24 | to_msrq(ibqp->srq)->msrq.srqn);
+ 
+-	if (!ibqp->srq && cur_state == IB_QPS_RESET && new_state == IB_QPS_INIT)
++	if (!ibqp->srq && ibqp->qp_type != IB_QPT_XRC &&
++	    cur_state == IB_QPS_RESET && new_state == IB_QPS_INIT)
+ 		context->db_rec_addr = cpu_to_be64(qp->db.dma);
+ 
+ 	if (cur_state == IB_QPS_INIT &&
+@@ -1193,7 +1210,7 @@ static int __mlx4_ib_modify_qp(struct ib
+ 		qp->sq.head = 0;
+ 		qp->sq.tail = 0;
+ 		qp->sq_next_wqe = 0;
+-		if (!ibqp->srq)
++		if (!ibqp->srq && ibqp->qp_type != IB_QPT_XRC)
+ 			*qp->db.db  = 0;
+ 	}
+ 
+Index: ofed_kernel/drivers/infiniband/hw/mlx4/srq.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/hw/mlx4/srq.c
++++ ofed_kernel/drivers/infiniband/hw/mlx4/srq.c
+@@ -67,13 +67,17 @@ static void mlx4_ib_srq_event(struct mlx
+ 	}
+ }
+ 
+-struct ib_srq *mlx4_ib_create_srq(struct ib_pd *pd,
+-				  struct ib_srq_init_attr *init_attr,
+-				  struct ib_udata *udata)
++struct ib_srq *mlx4_ib_create_xrc_srq(struct ib_pd *pd,
++				      struct ib_cq *xrc_cq,
++				      struct ib_xrcd *xrcd,
++				      struct ib_srq_init_attr *init_attr,
++				      struct ib_udata *udata)
+ {
+ 	struct mlx4_ib_dev *dev = to_mdev(pd->device);
+ 	struct mlx4_ib_srq *srq;
+ 	struct mlx4_wqe_srq_next_seg *next;
++	u32	cqn;
++	u16	xrcdn;
+ 	int desc_size;
+ 	int buf_size;
+ 	int err;
+@@ -171,7 +175,11 @@ struct ib_srq *mlx4_ib_create_srq(struct
+ 		}
+ 	}
+ 
+-	err = mlx4_srq_alloc(dev->dev, to_mpd(pd)->pdn, &srq->mtt,
++	cqn = xrc_cq ? (u32) (to_mcq(xrc_cq)->mcq.cqn) : 0;
++	xrcdn = xrcd ? (u16) (to_mxrcd(xrcd)->xrcdn) :
++		(u16) dev->dev->caps.reserved_xrcds;
++
++	err = mlx4_srq_alloc(dev->dev, to_mpd(pd)->pdn, cqn, xrcdn, &srq->mtt,
+ 			     srq->db.dma, &srq->msrq);
+ 	if (err)
+ 		goto err_wrid;
+@@ -243,6 +251,13 @@ int mlx4_ib_modify_srq(struct ib_srq *ib
+ 	return 0;
+ }
+ 
++struct ib_srq *mlx4_ib_create_srq(struct ib_pd *pd,
++				  struct ib_srq_init_attr *init_attr,
++				  struct ib_udata *udata)
++{
++	return mlx4_ib_create_xrc_srq(pd, NULL, NULL, init_attr, udata);
++}
++
+ int mlx4_ib_query_srq(struct ib_srq *ibsrq, struct ib_srq_attr *srq_attr)
+ {
+ 	struct mlx4_ib_dev *dev = to_mdev(ibsrq->device);
+Index: ofed_kernel/drivers/net/mlx4/Makefile
+===================================================================
+--- ofed_kernel.orig/drivers/net/mlx4/Makefile
++++ ofed_kernel/drivers/net/mlx4/Makefile
+@@ -1,7 +1,7 @@
+ obj-$(CONFIG_MLX4_CORE)		+= mlx4_core.o
+ 
+ mlx4_core-y :=	alloc.o catas.o cmd.o cq.o eq.o fw.o icm.o intf.o main.o mcg.o \
+-		mr.o pd.o port.o profile.o qp.o reset.o sense.o srq.o
++		mr.o pd.o port.o profile.o qp.o reset.o sense.o srq.o xrcd.o
+ 
+ obj-$(CONFIG_MLX4_EN)               += mlx4_en.o
+ 
+Index: ofed_kernel/drivers/net/mlx4/fw.c
+===================================================================
+--- ofed_kernel.orig/drivers/net/mlx4/fw.c
++++ ofed_kernel/drivers/net/mlx4/fw.c
+@@ -192,6 +192,8 @@ int mlx4_QUERY_DEV_CAP(struct mlx4_dev *
+ #define QUERY_DEV_CAP_MAX_MCG_OFFSET		0x63
+ #define QUERY_DEV_CAP_RSVD_PD_OFFSET		0x64
+ #define QUERY_DEV_CAP_MAX_PD_OFFSET		0x65
++#define QUERY_DEV_CAP_RSVD_XRC_OFFSET		0x66
++#define QUERY_DEV_CAP_MAX_XRC_OFFSET		0x67
+ #define QUERY_DEV_CAP_RDMARC_ENTRY_SZ_OFFSET	0x80
+ #define QUERY_DEV_CAP_QPC_ENTRY_SZ_OFFSET	0x82
+ #define QUERY_DEV_CAP_AUX_ENTRY_SZ_OFFSET	0x84
+@@ -302,6 +304,11 @@ int mlx4_QUERY_DEV_CAP(struct mlx4_dev *
+ 	MLX4_GET(field, outbox, QUERY_DEV_CAP_MAX_PD_OFFSET);
+ 	dev_cap->max_pds = 1 << (field & 0x3f);
+ 
++	MLX4_GET(field, outbox, QUERY_DEV_CAP_RSVD_XRC_OFFSET);
++	dev_cap->reserved_xrcds = field >> 4;
++	MLX4_GET(field, outbox, QUERY_DEV_CAP_MAX_XRC_OFFSET);
++	dev_cap->max_xrcds = 1 << (field & 0x1f);
++
+ 	MLX4_GET(size, outbox, QUERY_DEV_CAP_RDMARC_ENTRY_SZ_OFFSET);
+ 	dev_cap->rdmarc_entry_sz = size;
+ 	MLX4_GET(size, outbox, QUERY_DEV_CAP_QPC_ENTRY_SZ_OFFSET);
+Index: ofed_kernel/drivers/net/mlx4/fw.h
+===================================================================
+--- ofed_kernel.orig/drivers/net/mlx4/fw.h
++++ ofed_kernel/drivers/net/mlx4/fw.h
+@@ -89,6 +89,8 @@ struct mlx4_dev_cap {
+ 	int max_mcgs;
+ 	int reserved_pds;
+ 	int max_pds;
++	int reserved_xrcds;
++	int max_xrcds;
+ 	int qpc_entry_sz;
+ 	int rdmarc_entry_sz;
+ 	int altc_entry_sz;
+Index: ofed_kernel/drivers/net/mlx4/main.c
+===================================================================
+--- ofed_kernel.orig/drivers/net/mlx4/main.c
++++ ofed_kernel/drivers/net/mlx4/main.c
+@@ -273,6 +273,10 @@ static int mlx4_dev_cap(struct mlx4_dev 
+ 	dev->caps.reserved_lkey	     = dev_cap->reserved_lkey;
+ 	dev->caps.stat_rate_support  = dev_cap->stat_rate_support;
+ 	dev->caps.max_gso_sz	     = dev_cap->max_gso_sz;
++	dev->caps.reserved_xrcds     = (dev->caps.flags & MLX4_DEV_CAP_FLAG_XRC) ?
++		dev_cap->reserved_xrcds : 0;
++	dev->caps.max_xrcds	     = (dev->caps.flags & MLX4_DEV_CAP_FLAG_XRC) ?
++		dev_cap->max_xrcds : 0;
+ 
+ 	dev->caps.log_num_macs  = log_num_mac;
+ 	dev->caps.log_num_vlans = log_num_vlan;
+@@ -871,11 +875,18 @@ static int mlx4_setup_hca(struct mlx4_de
+ 		goto err_kar_unmap;
+ 	}
+ 
++	err = mlx4_init_xrcd_table(dev);
++	if (err) {
++		mlx4_err(dev, "Failed to initialize extended "
++			 "reliably connected domain table, aborting.\n");
++		goto err_pd_table_free;
++	}
++
+ 	err = mlx4_init_mr_table(dev);
+ 	if (err) {
+ 		mlx4_err(dev, "Failed to initialize "
+ 			 "memory region table, aborting.\n");
+-		goto err_pd_table_free;
++		goto err_xrcd_table_free;
+ 	}
+ 
+ 	err = mlx4_init_eq_table(dev);
+@@ -971,6 +982,9 @@ err_eq_table_free:
+ err_mr_table_free:
+ 	mlx4_cleanup_mr_table(dev);
+ 
++err_xrcd_table_free:
++	mlx4_cleanup_xrcd_table(dev);
++
+ err_pd_table_free:
+ 	mlx4_cleanup_pd_table(dev);
+ 
+@@ -1228,6 +1242,7 @@ err_port:
+ 	mlx4_cmd_use_polling(dev);
+ 	mlx4_cleanup_eq_table(dev);
+ 	mlx4_cleanup_mr_table(dev);
++	mlx4_cleanup_xrcd_table(dev);
+ 	mlx4_cleanup_pd_table(dev);
+ 	mlx4_cleanup_uar_table(dev);
+ 
+@@ -1288,6 +1303,7 @@ static void mlx4_remove_one(struct pci_d
+ 		mlx4_cmd_use_polling(dev);
+ 		mlx4_cleanup_eq_table(dev);
+ 		mlx4_cleanup_mr_table(dev);
++		mlx4_cleanup_xrcd_table(dev);
+ 		mlx4_cleanup_pd_table(dev);
+ 
+ 		iounmap(priv->kar);
+Index: ofed_kernel/drivers/net/mlx4/mlx4.h
+===================================================================
+--- ofed_kernel.orig/drivers/net/mlx4/mlx4.h
++++ ofed_kernel/drivers/net/mlx4/mlx4.h
+@@ -313,6 +313,7 @@ struct mlx4_priv {
+ 	struct mlx4_cmd		cmd;
+ 
+ 	struct mlx4_bitmap	pd_bitmap;
++	struct mlx4_bitmap	xrcd_bitmap;
+ 	struct mlx4_uar_table	uar_table;
+ 	struct mlx4_mr_table	mr_table;
+ 	struct mlx4_cq_table	cq_table;
+@@ -351,6 +352,7 @@ void mlx4_bitmap_cleanup(struct mlx4_bit
+ int mlx4_reset(struct mlx4_dev *dev);
+ 
+ int mlx4_init_pd_table(struct mlx4_dev *dev);
++int mlx4_init_xrcd_table(struct mlx4_dev *dev);
+ int mlx4_init_uar_table(struct mlx4_dev *dev);
+ int mlx4_init_mr_table(struct mlx4_dev *dev);
+ int mlx4_init_eq_table(struct mlx4_dev *dev);
+@@ -367,6 +369,7 @@ void mlx4_cleanup_cq_table(struct mlx4_d
+ void mlx4_cleanup_qp_table(struct mlx4_dev *dev);
+ void mlx4_cleanup_srq_table(struct mlx4_dev *dev);
+ void mlx4_cleanup_mcg_table(struct mlx4_dev *dev);
++void mlx4_cleanup_xrcd_table(struct mlx4_dev *dev);
+ 
+ void mlx4_start_catas_poll(struct mlx4_dev *dev);
+ void mlx4_stop_catas_poll(struct mlx4_dev *dev);
+Index: ofed_kernel/drivers/net/mlx4/qp.c
+===================================================================
+--- ofed_kernel.orig/drivers/net/mlx4/qp.c
++++ ofed_kernel/drivers/net/mlx4/qp.c
+@@ -282,6 +282,8 @@ int mlx4_init_qp_table(struct mlx4_dev *
+ 	 * We reserve 2 extra QPs per port for the special QPs.  The
+ 	 * block of special QPs must be aligned to a multiple of 8, so
+ 	 * round up.
++	 * We also reserve the MSB of the 24-bit QP number to indicate
++	 * an XRC qp.
+ 	 */
+ 	dev->caps.sqp_start =
+ 		ALIGN(dev->caps.reserved_qps_cnt[MLX4_QP_REGION_FW], 8);
+Index: ofed_kernel/drivers/net/mlx4/srq.c
+===================================================================
+--- ofed_kernel.orig/drivers/net/mlx4/srq.c
++++ ofed_kernel/drivers/net/mlx4/srq.c
+@@ -41,20 +41,20 @@
+ struct mlx4_srq_context {
+ 	__be32			state_logsize_srqn;
+ 	u8			logstride;
+-	u8			reserved1[3];
+-	u8			pg_offset;
+-	u8			reserved2[3];
+-	u32			reserved3;
++	u8			reserved1;
++	__be16			xrc_domain;
++	__be32			pg_offset_cqn;
++	u32			reserved2;
+ 	u8			log_page_size;
+-	u8			reserved4[2];
++	u8			reserved3[2];
+ 	u8			mtt_base_addr_h;
+ 	__be32			mtt_base_addr_l;
+ 	__be32			pd;
+ 	__be16			limit_watermark;
+ 	__be16			wqe_cnt;
+-	u16			reserved5;
++	u16			reserved4;
+ 	__be16			wqe_counter;
+-	u32			reserved6;
++	u32			reserved5;
+ 	__be64			db_rec_addr;
+ };
+ 
+@@ -110,8 +110,8 @@ static int mlx4_QUERY_SRQ(struct mlx4_de
+ 			    MLX4_CMD_TIME_CLASS_A);
+ }
+ 
+-int mlx4_srq_alloc(struct mlx4_dev *dev, u32 pdn, struct mlx4_mtt *mtt,
+-		   u64 db_rec, struct mlx4_srq *srq)
++int mlx4_srq_alloc(struct mlx4_dev *dev, u32 pdn, u32 cqn, u16 xrcd,
++		   struct mlx4_mtt *mtt, u64 db_rec, struct mlx4_srq *srq)
+ {
+ 	struct mlx4_srq_table *srq_table = &mlx4_priv(dev)->srq_table;
+ 	struct mlx4_cmd_mailbox *mailbox;
+@@ -149,6 +149,8 @@ int mlx4_srq_alloc(struct mlx4_dev *dev,
+ 	srq_context->state_logsize_srqn = cpu_to_be32((ilog2(srq->max) << 24) |
+ 						      srq->srqn);
+ 	srq_context->logstride          = srq->wqe_shift - 4;
++	srq_context->xrc_domain		= cpu_to_be16(xrcd);
++	srq_context->pg_offset_cqn	= cpu_to_be32(cqn & 0xffffff);
+ 	srq_context->log_page_size      = mtt->page_shift - MLX4_ICM_PAGE_SHIFT;
+ 
+ 	mtt_addr = mlx4_mtt_addr(dev, mtt);
+Index: ofed_kernel/drivers/net/mlx4/xrcd.c
+===================================================================
+--- /dev/null
++++ ofed_kernel/drivers/net/mlx4/xrcd.c
+@@ -0,0 +1,70 @@
++/*
++ * Copyright (c) 2006, 2007 Cisco Systems, Inc.  All rights reserved.
++ * Copyright (c) 2007 Mellanox Technologies. All rights reserved.
++ *
++ * This software is available to you under a choice of one of two
++ * licenses.  You may choose to be licensed under the terms of the GNU
++ * General Public License (GPL) Version 2, available from the file
++ * COPYING in the main directory of this source tree, or the
++ * OpenIB.org BSD license below:
++ *
++ *     Redistribution and use in source and binary forms, with or
++ *     without modification, are permitted provided that the following
++ *     conditions are met:
++ *
++ *      - Redistributions of source code must retain the above
++ *        copyright notice, this list of conditions and the following
++ *        disclaimer.
++ *
++ *      - Redistributions in binary form must reproduce the above
++ *        copyright notice, this list of conditions and the following
++ *        disclaimer in the documentation and/or other materials
++ *        provided with the distribution.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
++ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
++ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
++ * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
++ * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
++ * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
++ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++ * SOFTWARE.
++ */
++
++#include <linux/init.h>
++#include <linux/errno.h>
++
++#include "mlx4.h"
++
++int mlx4_xrcd_alloc(struct mlx4_dev *dev, u32 *xrcdn)
++{
++	struct mlx4_priv *priv = mlx4_priv(dev);
++
++	*xrcdn = mlx4_bitmap_alloc(&priv->xrcd_bitmap);
++	if (*xrcdn == -1)
++		return -ENOMEM;
++
++	return 0;
++}
++EXPORT_SYMBOL_GPL(mlx4_xrcd_alloc);
++
++void mlx4_xrcd_free(struct mlx4_dev *dev, u32 xrcdn)
++{
++	mlx4_bitmap_free(&mlx4_priv(dev)->xrcd_bitmap, xrcdn);
++}
++EXPORT_SYMBOL_GPL(mlx4_xrcd_free);
++
++int __devinit mlx4_init_xrcd_table(struct mlx4_dev *dev)
++{
++	struct mlx4_priv *priv = mlx4_priv(dev);
++
++	return mlx4_bitmap_init(&priv->xrcd_bitmap, (1 << 16),
++				(1 << 16) - 1, dev->caps.reserved_xrcds + 1, 0);
++}
++
++void mlx4_cleanup_xrcd_table(struct mlx4_dev *dev)
++{
++	mlx4_bitmap_cleanup(&mlx4_priv(dev)->xrcd_bitmap);
++}
++
++
+Index: ofed_kernel/include/linux/mlx4/device.h
+===================================================================
+--- ofed_kernel.orig/include/linux/mlx4/device.h
++++ ofed_kernel/include/linux/mlx4/device.h
+@@ -56,6 +56,7 @@ enum {
+ 	MLX4_DEV_CAP_FLAG_RC		= 1 <<  0,
+ 	MLX4_DEV_CAP_FLAG_UC		= 1 <<  1,
+ 	MLX4_DEV_CAP_FLAG_UD		= 1 <<  2,
++	MLX4_DEV_CAP_FLAG_XRC		= 1 <<  3,
+ 	MLX4_DEV_CAP_FLAG_SRQ		= 1 <<  6,
+ 	MLX4_DEV_CAP_FLAG_IPOIB_CSUM	= 1 <<  7,
+ 	MLX4_DEV_CAP_FLAG_BAD_PKEY_CNTR	= 1 <<  8,
+@@ -212,6 +213,8 @@ struct mlx4_caps {
+ 	int			num_pds;
+ 	int			reserved_pds;
+ 	int			mtt_entry_sz;
++	int			reserved_xrcds;
++	int			max_xrcds;
+ 	u32			max_msg_sz;
+ 	u32			page_size_cap;
+ 	u32			flags;
+@@ -431,6 +434,9 @@ static inline void *mlx4_buf_offset(stru
+ int mlx4_pd_alloc(struct mlx4_dev *dev, u32 *pdn);
+ void mlx4_pd_free(struct mlx4_dev *dev, u32 pdn);
+ 
++int mlx4_xrcd_alloc(struct mlx4_dev *dev, u32 *xrcdn);
++void mlx4_xrcd_free(struct mlx4_dev *dev, u32 xrcdn);
++
+ int mlx4_uar_alloc(struct mlx4_dev *dev, struct mlx4_uar *uar);
+ void mlx4_uar_free(struct mlx4_dev *dev, struct mlx4_uar *uar);
+ 
+@@ -471,8 +477,8 @@ void mlx4_qp_release_range(struct mlx4_d
+ int mlx4_qp_alloc(struct mlx4_dev *dev, int qpn, struct mlx4_qp *qp);
+ void mlx4_qp_free(struct mlx4_dev *dev, struct mlx4_qp *qp);
+ 
+-int mlx4_srq_alloc(struct mlx4_dev *dev, u32 pdn, struct mlx4_mtt *mtt,
+-		   u64 db_rec, struct mlx4_srq *srq);
++int mlx4_srq_alloc(struct mlx4_dev *dev, u32 pdn, u32 cqn, u16 xrcd,
++		   struct mlx4_mtt *mtt, u64 db_rec, struct mlx4_srq *srq);
+ void mlx4_srq_free(struct mlx4_dev *dev, struct mlx4_srq *srq);
+ int mlx4_srq_arm(struct mlx4_dev *dev, struct mlx4_srq *srq, int limit_watermark);
+ int mlx4_srq_query(struct mlx4_dev *dev, struct mlx4_srq *srq, int *limit_watermark);
+Index: ofed_kernel/include/linux/mlx4/qp.h
+===================================================================
+--- ofed_kernel.orig/include/linux/mlx4/qp.h
++++ ofed_kernel/include/linux/mlx4/qp.h
+@@ -74,6 +74,7 @@ enum {
+ 	MLX4_QP_ST_UC				= 0x1,
+ 	MLX4_QP_ST_RD				= 0x2,
+ 	MLX4_QP_ST_UD				= 0x3,
++	MLX4_QP_ST_XRC				= 0x6,
+ 	MLX4_QP_ST_MLX				= 0x7
+ };
+ 
+@@ -136,7 +137,7 @@ struct mlx4_qp_context {
+ 	__be32			ssn;
+ 	__be32			params2;
+ 	__be32			rnr_nextrecvpsn;
+-	__be32			srcd;
++	__be32			xrcd;
+ 	__be32			cqn_recv;
+ 	__be64			db_rec_addr;
+ 	__be32			qkey;

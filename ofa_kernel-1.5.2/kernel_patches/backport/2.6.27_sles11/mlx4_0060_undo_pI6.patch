@@ -1,0 +1,47 @@
+mlx4: Undo %pI6 for printing gids
+
+(commit 8867cd7c8678ff2d9d0382dbbfbcc7a3e7e61cbc)
+    
+Signed-off-by: Jack Morgenstein <jackm@dev.mellanox.co.il>
+
+Index: ofed_kernel-fixes/drivers/net/mlx4/mcg.c
+===================================================================
+--- ofed_kernel-fixes.orig/drivers/net/mlx4/mcg.c	2009-07-20 13:50:08.000000000 +0300
++++ ofed_kernel-fixes/drivers/net/mlx4/mcg.c	2009-07-20 13:55:05.000000000 +0300
+@@ -118,7 +118,17 @@ static int find_mgm(struct mlx4_dev *dev
+ 		return err;
+ 
+ 	if (0)
+-		mlx4_dbg(dev, "Hash for %pI6 is %04x\n", gid, *hash);
++		mlx4_dbg(dev, "Hash for %04x:%04x:%04x:%04x:"
++			  "%04x:%04x:%04x:%04x is %04x\n",
++			  be16_to_cpu(((__be16 *) gid)[0]),
++			  be16_to_cpu(((__be16 *) gid)[1]),
++			  be16_to_cpu(((__be16 *) gid)[2]),
++			  be16_to_cpu(((__be16 *) gid)[3]),
++			  be16_to_cpu(((__be16 *) gid)[4]),
++			  be16_to_cpu(((__be16 *) gid)[5]),
++			  be16_to_cpu(((__be16 *) gid)[6]),
++			  be16_to_cpu(((__be16 *) gid)[7]),
++			  *hash);
+ 
+ 	*index = *hash;
+ 	*prev  = -1;
+@@ -264,7 +274,16 @@ int mlx4_multicast_detach(struct mlx4_de
+ 		goto out;
+ 
+ 	if (index == -1) {
+-		mlx4_err(dev, "MGID %pI6 not found\n", gid);
++		mlx4_err(dev, "MGID %04x:%04x:%04x:%04x:%04x:%04x:%04x:%04x "
++			  "not found\n",
++			  be16_to_cpu(((__be16 *) gid)[0]),
++			  be16_to_cpu(((__be16 *) gid)[1]),
++			  be16_to_cpu(((__be16 *) gid)[2]),
++			  be16_to_cpu(((__be16 *) gid)[3]),
++			  be16_to_cpu(((__be16 *) gid)[4]),
++			  be16_to_cpu(((__be16 *) gid)[5]),
++			  be16_to_cpu(((__be16 *) gid)[6]),
++			  be16_to_cpu(((__be16 *) gid)[7]));
+ 		err = -EINVAL;
+ 		goto out;
+ 	}

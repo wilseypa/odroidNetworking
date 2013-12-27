@@ -1,0 +1,1415 @@
+diff -up a/drivers/infiniband/hw/qib/Makefile b/drivers/infiniband/hw/qib/Makefile
+--- a/drivers/infiniband/hw/qib/Makefile	2010-04-20 16:01:02.000000000 -0700
++++ b/drivers/infiniband/hw/qib/Makefile	2010-04-20 16:00:56.000000000 -0700
+@@ -1,4 +1,4 @@
+-ccflags-y += -DQIB_KERN_TYPE=0 -DQIB_IDSTR='"QLogic kernel.org driver"'
++EXTRA_CFLAGS += -DQIB_KERN_TYPE=0 -DQIB_IDSTR='"QLogic kernel.org driver"'
+ 
+ obj-$(CONFIG_INFINIBAND_QIB) += ib_qib.o
+ 
+diff -up a/drivers/infiniband/hw/qib/qib_cq.c b/drivers/infiniband/hw/qib/qib_cq.c
+--- a/drivers/infiniband/hw/qib/qib_cq.c	2010-04-20 16:01:02.000000000 -0700
++++ b/drivers/infiniband/hw/qib/qib_cq.c	2010-04-20 16:58:13.000000000 -0700
+@@ -321,7 +321,7 @@ int qib_destroy_cq(struct ib_cq *ibcq)
+ 	struct qib_ibdev *dev = to_idev(ibcq->device);
+ 	struct qib_cq *cq = to_icq(ibcq);
+ 
+-	flush_work(&cq->comptask);
++	flush_workqueue(qib_cq_wq);
+ 	spin_lock(&dev->n_cqs_lock);
+ 	dev->n_cqs_allocated--;
+ 	spin_unlock(&dev->n_cqs_lock);
+diff -up a/drivers/infiniband/hw/qib/qib_diag.c b/drivers/infiniband/hw/qib/qib_diag.c
+--- a/drivers/infiniband/hw/qib/qib_diag.c	2010-04-20 16:01:02.000000000 -0700
++++ b/drivers/infiniband/hw/qib/qib_diag.c	2010-04-20 16:00:56.000000000 -0700
+@@ -46,7 +46,7 @@
+ #include <linux/poll.h>
+ #include <linux/vmalloc.h>
+ #include <linux/fs.h>
+-#include <linux/uaccess.h>
++#include <asm/uaccess.h>
+ 
+ #include "qib.h"
+ #include "qib_common.h"
+@@ -140,7 +140,7 @@ static const struct file_operations diag
+ 
+ static atomic_t diagpkt_count = ATOMIC_INIT(0);
+ static struct cdev *diagpkt_cdev;
+-static struct device *diagpkt_device;
++static struct class_device *diagpkt_class_dev;
+ 
+ static ssize_t qib_diagpkt_write(struct file *fp, const char __user *data,
+ 				 size_t count, loff_t *off);
+@@ -158,7 +158,7 @@ int qib_diag_add(struct qib_devdata *dd)
+ 	if (atomic_inc_return(&diagpkt_count) == 1) {
+ 		ret = qib_cdev_init(QIB_DIAGPKT_MINOR, "ipath_diagpkt",
+ 				    &diagpkt_file_ops, &diagpkt_cdev,
+-				    &diagpkt_device);
++				    &diagpkt_class_dev);
+ 		if (ret)
+ 			goto done;
+ 	}
+@@ -166,7 +166,7 @@ int qib_diag_add(struct qib_devdata *dd)
+ 	snprintf(name, sizeof(name), "ipath_diag%d", dd->unit);
+ 	ret = qib_cdev_init(QIB_DIAG_MINOR_BASE + dd->unit, name,
+ 			    &diag_file_ops, &dd->diag_cdev,
+-			    &dd->diag_device);
++			    &dd->diag_class_dev);
+ done:
+ 	return ret;
+ }
+@@ -178,9 +178,9 @@ void qib_diag_remove(struct qib_devdata 
+ 	struct qib_diag_client *dc;
+ 
+ 	if (atomic_dec_and_test(&diagpkt_count))
+-		qib_cdev_cleanup(&diagpkt_cdev, &diagpkt_device);
++		qib_cdev_cleanup(&diagpkt_cdev, &diagpkt_class_dev);
+ 
+-	qib_cdev_cleanup(&dd->diag_cdev, &dd->diag_device);
++	qib_cdev_cleanup(&dd->diag_cdev, &dd->diag_class_dev);
+ 
+ 	/*
+ 	 * Return all diag_clients of this device. There should be none,
+diff -up a/drivers/infiniband/hw/qib/qib_file_ops.c b/drivers/infiniband/hw/qib/qib_file_ops.c
+--- a/drivers/infiniband/hw/qib/qib_file_ops.c	2010-04-20 16:01:02.000000000 -0700
++++ b/drivers/infiniband/hw/qib/qib_file_ops.c	2010-04-20 16:00:56.000000000 -0700
+@@ -52,15 +52,15 @@
+ static int qib_open(struct inode *, struct file *);
+ static int qib_close(struct inode *, struct file *);
+ static ssize_t qib_write(struct file *, const char __user *, size_t, loff_t *);
+-static ssize_t qib_aio_write(struct kiocb *, const struct iovec *,
+-			     unsigned long, loff_t);
++static ssize_t qib_writev(struct file *, const struct iovec *,
++			  unsigned long , loff_t *);
+ static unsigned int qib_poll(struct file *, struct poll_table_struct *);
+ static int qib_mmapf(struct file *, struct vm_area_struct *);
+ 
+ static const struct file_operations qib_file_ops = {
+ 	.owner = THIS_MODULE,
+ 	.write = qib_write,
+-	.aio_write = qib_aio_write,
++	.writev = qib_writev,
+ 	.open = qib_open,
+ 	.release = qib_close,
+ 	.poll = qib_poll,
+@@ -78,6 +78,8 @@ static u64 cvt_kvaddr(void *p)
+ 	struct page *page;
+ 	u64 paddr = 0;
+ 
++	if (!p)
++		return paddr;
+ 	page = vmalloc_to_page(p);
+ 	if (page)
+ 		paddr = page_to_pfn(page) << PAGE_SHIFT;
+@@ -968,24 +970,33 @@ bail:
+ }
+ 
+ /*
+- * qib_file_vma_fault - handle a VMA page fault.
++ * qib_file_vma_nopage - handle a VMA page fault.
+  */
+-static int qib_file_vma_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
++static struct page *qib_file_vma_nopage(struct vm_area_struct *vma,
++					unsigned long address, int *type)
+ {
+-	struct page *page;
++	unsigned long offset = address - vma->vm_start;
++	struct page *page = NOPAGE_SIGBUS;
++	void *pageptr;
+ 
+-	page = vmalloc_to_page((void *)(vmf->pgoff << PAGE_SHIFT));
++	/*
++	 * Convert the vmalloc address into a struct page.
++	 */
++	pageptr = (void *)(offset + (vma->vm_pgoff << PAGE_SHIFT));
++	page = vmalloc_to_page(pageptr);
+ 	if (!page)
+-		return VM_FAULT_SIGBUS;
++		goto out;
+ 
++	/* Increment the reference count. */
+ 	get_page(page);
+-	vmf->page = page;
+-
+-	return 0;
++	if (type)
++		*type = VM_FAULT_MINOR;
++out:
++	return page;
+ }
+ 
+ static struct vm_operations_struct qib_file_vm_ops = {
+-	.fault = qib_file_vma_fault,
++	.nopage = qib_file_vma_nopage,
+ };
+ 
+ static int mmap_kvaddr(struct vm_area_struct *vma, u64 pgaddr,
+@@ -2341,11 +2352,11 @@ bail:
+ 	return ret;
+ }
+ 
+-static ssize_t qib_aio_write(struct kiocb *iocb, const struct iovec *iov,
+-			     unsigned long dim, loff_t off)
++static ssize_t qib_writev(struct file *filp, const struct iovec *iov,
++			  unsigned long dim, loff_t *off)
+ {
+-	struct qib_filedata *fp = iocb->ki_filp->private_data;
+-	struct qib_ctxtdata *rcd = ctxt_fp(iocb->ki_filp);
++	struct qib_filedata *fp = filp->private_data;
++	struct qib_ctxtdata *rcd = ctxt_fp(filp);
+ 	struct qib_user_sdma_queue *pq = fp->pq;
+ 
+ 	if (!dim || !pq)
+@@ -2354,16 +2365,24 @@ static ssize_t qib_aio_write(struct kioc
+ 	return qib_user_sdma_writev(rcd, pq, iov, dim);
+ }
+ 
++static ssize_t show_dev(struct class_device *class_dev, char *buf)
++{
++	dev_t dev = (dev_t)(unsigned long)class_get_devdata(class_dev);
++
++	return print_dev_t(buf, dev);
++}
++static CLASS_DEVICE_ATTR(dev, S_IRUGO, show_dev, NULL);
++
+ static struct class *qib_class;
+ static dev_t qib_dev;
+ 
+ int qib_cdev_init(int minor, const char *name,
+ 		  const struct file_operations *fops,
+-		  struct cdev **cdevp, struct device **devp)
++		  struct cdev **cdevp, struct class_device **class_devp)
+ {
+ 	const dev_t dev = MKDEV(MAJOR(qib_dev), minor);
+ 	struct cdev *cdev;
+-	struct device *device = NULL;
++	struct class_device *class_dev = NULL;
+ 	int ret;
+ 
+ 	cdev = cdev_alloc();
+@@ -2376,7 +2395,7 @@ int qib_cdev_init(int minor, const char 
+ 	}
+ 
+ 	cdev->owner = THIS_MODULE;
+-	cdev->ops = fops;
++	cdev->ops = (struct file_operations *) fops;
+ 	kobject_set_name(&cdev->kobj, name);
+ 
+ 	ret = cdev_add(cdev, dev, 1);
+@@ -2387,11 +2406,21 @@ int qib_cdev_init(int minor, const char 
+ 		goto err_cdev;
+ 	}
+ 
+-	device = device_create(qib_class, NULL, dev, NULL, name);
+-	if (!IS_ERR(device))
+-		goto done;
+-	ret = PTR_ERR(device);
+-	device = NULL;
++	class_dev = class_device_create(qib_class, dev, NULL, (char *)name);
++	if (IS_ERR(class_dev))
++		goto err_dev;
++
++	class_set_devdata(class_dev, (void *)(unsigned long)dev);
++
++	if (class_device_create_file(class_dev, &class_device_attr_dev))
++		goto err_class;
++	goto done;
++
++err_class:
++	class_device_unregister(class_dev);
++err_dev:
++	ret = PTR_ERR(class_dev);
++	class_dev = NULL;
+ 	printk(KERN_ERR QIB_DRV_NAME ": Could not create "
+ 	       "device for minor %d, %s (err %d)\n",
+ 	       minor, name, -ret);
+@@ -2400,17 +2429,17 @@ err_cdev:
+ 	cdev = NULL;
+ done:
+ 	*cdevp = cdev;
+-	*devp = device;
++	*class_devp = class_dev;
+ 	return ret;
+ }
+ 
+-void qib_cdev_cleanup(struct cdev **cdevp, struct device **devp)
++void qib_cdev_cleanup(struct cdev **cdevp, struct class_device **class_devp)
+ {
+-	struct device *device = *devp;
++	struct class_device *class_dev = *class_devp;
+ 
+-	if (device) {
+-		device_unregister(device);
+-		*devp = NULL;
++	if (class_dev) {
++		class_device_unregister(class_dev);
++		*class_devp = NULL;
+ 	}
+ 
+ 	if (*cdevp) {
+@@ -2420,7 +2449,7 @@ void qib_cdev_cleanup(struct cdev **cdev
+ }
+ 
+ static struct cdev *wildcard_cdev;
+-static struct device *wildcard_device;
++static struct class_device *wildcard_class_dev;
+ 
+ int __init qib_dev_init(void)
+ {
+@@ -2460,9 +2489,9 @@ static atomic_t user_count = ATOMIC_INIT
+ static void qib_user_remove(struct qib_devdata *dd)
+ {
+ 	if (atomic_dec_return(&user_count) == 0)
+-		qib_cdev_cleanup(&wildcard_cdev, &wildcard_device);
++		qib_cdev_cleanup(&wildcard_cdev, &wildcard_class_dev);
+ 
+-	qib_cdev_cleanup(&dd->user_cdev, &dd->user_device);
++	qib_cdev_cleanup(&dd->user_cdev, &dd->user_class_dev);
+ }
+ 
+ static int qib_user_add(struct qib_devdata *dd)
+@@ -2472,14 +2501,14 @@ static int qib_user_add(struct qib_devda
+ 
+ 	if (atomic_inc_return(&user_count) == 1) {
+ 		ret = qib_cdev_init(0, "ipath", &qib_file_ops,
+-				    &wildcard_cdev, &wildcard_device);
++				    &wildcard_cdev, &wildcard_class_dev);
+ 		if (ret)
+ 			goto done;
+ 	}
+ 
+ 	snprintf(name, sizeof(name), "ipath%d", dd->unit);
+ 	ret = qib_cdev_init(dd->unit + 1, name, &qib_file_ops,
+-			    &dd->user_cdev, &dd->user_device);
++			    &dd->user_cdev, &dd->user_class_dev);
+ 	if (ret)
+ 		qib_user_remove(dd);
+ done:
+diff -up a/drivers/infiniband/hw/qib/qib_fs.c b/drivers/infiniband/hw/qib/qib_fs.c
+--- a/drivers/infiniband/hw/qib/qib_fs.c	2010-04-20 16:01:02.000000000 -0700
++++ b/drivers/infiniband/hw/qib/qib_fs.c	2010-04-20 16:00:56.000000000 -0700
+@@ -72,7 +72,7 @@ static int qibfs_mknod(struct inode *dir
+ 		inc_nlink(dir);
+ 	}
+ 
+-	inode->i_fop = fops;
++	inode->i_fop = (struct file_operations *) fops;
+ 
+ 	d_instantiate(dentry, inode);
+ 	error = 0;
+@@ -457,8 +457,10 @@ static int qibfs_fill_super(struct super
+ 	int ret;
+ 
+ 	static struct tree_descr files[] = {
+-		[2] = {"driver_stats", &driver_ops[0], S_IRUGO},
+-		[3] = {"driver_stats_names", &driver_ops[1], S_IRUGO},
++		[2] = {"driver_stats",
++			(struct file_operations *)&driver_ops[0], S_IRUGO},
++		[3] = {"driver_stats_names",
++			(struct file_operations *)&driver_ops[1], S_IRUGO},
+ 		{""},
+ 	};
+ 
+@@ -486,14 +488,12 @@ bail:
+ 	return ret;
+ }
+ 
+-static int qibfs_get_sb(struct file_system_type *fs_type, int flags,
+-			const char *dev_name, void *data, struct vfsmount *mnt)
++static struct super_block *qibfs_get_sb(struct file_system_type *fs_type,
++					int flags, const char *dev_name,
++					void *data)
+ {
+-	int ret = get_sb_single(fs_type, flags, data,
+-				qibfs_fill_super, mnt);
+-	if (ret >= 0)
+-		qib_super = mnt->mnt_sb;
+-	return ret;
++	qib_super = get_sb_single(fs_type, flags, data, qibfs_fill_super);
++	return qib_super;
+ }
+ 
+ static void qibfs_kill_super(struct super_block *s)
+diff -up a/drivers/infiniband/hw/qib/qib.h b/drivers/infiniband/hw/qib/qib.h
+--- a/drivers/infiniband/hw/qib/qib.h	2010-04-20 16:01:02.000000000 -0700
++++ b/drivers/infiniband/hw/qib/qib.h	2010-04-20 16:00:56.000000000 -0700
+@@ -87,7 +87,6 @@ struct qlogic_ib_stats {
+ };
+ 
+ extern struct qlogic_ib_stats qib_stats;
+-extern struct pci_error_handlers qib_pci_err_handler;
+ extern struct pci_driver qib_driver;
+ 
+ #define QIB_CHIP_SWVERSION QIB_CHIP_VERS_MAJ
+@@ -660,8 +659,8 @@ struct qib_devdata {
+ 	struct pci_dev *pcidev;
+ 	struct cdev *user_cdev;
+ 	struct cdev *diag_cdev;
+-	struct device *user_device;
+-	struct device *diag_device;
++	struct class_device *user_class_dev;
++	struct class_device *diag_class_dev;
+ 
+ 	/* mem-mapped pointer to base of chip regs */
+ 	u64 __iomem *kregbase;
+@@ -1054,8 +1053,8 @@ int qib_count_active_units(void);
+ 
+ int qib_cdev_init(int minor, const char *name,
+ 		  const struct file_operations *fops,
+-		  struct cdev **cdevp, struct device **devp);
+-void qib_cdev_cleanup(struct cdev **cdevp, struct device **devp);
++		  struct cdev **cdevp, struct class_device **class_devp);
++void qib_cdev_cleanup(struct cdev **cdevp, struct class_device **class_devp);
+ int qib_dev_init(void);
+ void qib_dev_cleanup(void);
+ 
+@@ -1467,4 +1466,10 @@ struct qib_hwerror_msgs {
+ void qib_format_hwerrors(u64 hwerrs,
+ 			 const struct qib_hwerror_msgs *hwerrmsgs,
+ 			 size_t nhwerrmsgs, char *msg, size_t lmsg);
++
++#define time_after64(a,b)       \
++	(typecheck(__u64, a) && \
++	typecheck(__u64, b) && \
++	((__s64)(b) - (__s64)(a) < 0))
++
+ #endif                          /* _QIB_KERNEL_H */
+Only in b/drivers/infiniband/hw/qib: qib.h.orig
+diff -up a/drivers/infiniband/hw/qib/qib_iba7220.c b/drivers/infiniband/hw/qib/qib_iba7220.c
+--- a/drivers/infiniband/hw/qib/qib_iba7220.c	2010-04-20 16:01:02.000000000 -0700
++++ b/drivers/infiniband/hw/qib/qib_iba7220.c	2010-04-20 16:00:56.000000000 -0700
+@@ -1226,7 +1226,7 @@ static void handle_7220_errors(struct qi
+ 			ibcs[1] = (((u64)ppd->lflags)<<32) | (dd->unit << 24) |
+ 				(ppd->port << 16) | BLOB_7220_IBCHG;
+ 			qib_trace_putblob(qib_trace_buf,
+-					  raw_smp_processor_id(),
++					  smp_processor_id(),
+ 					  get_cycles(), __QIB_LINKVERBDBG,
+ 					  ibcs, sizeof(ibcs));
+ 		}
+diff -up a/drivers/infiniband/hw/qib/qib_iba7322.c b/drivers/infiniband/hw/qib/qib_iba7322.c
+--- a/drivers/infiniband/hw/qib/qib_iba7322.c	2010-04-20 16:01:02.000000000 -0700
++++ b/drivers/infiniband/hw/qib/qib_iba7322.c	2010-04-20 16:00:56.000000000 -0700
+@@ -1383,16 +1383,16 @@ static void flush_fifo(struct qib_pportd
+ 	u64 pbc;
+ 	const unsigned hdrwords = 7;
+ 	static struct qib_ib_header ibhdr = {
+-		.lrh[0] = cpu_to_be16(0xF000 | QIB_LRH_BTH),
++		.lrh[0] = __constant_cpu_to_be16(0xF000 | QIB_LRH_BTH),
+ 		.lrh[1] = IB_LID_PERMISSIVE,
+-		.lrh[2] = cpu_to_be16(hdrwords + SIZE_OF_CRC),
++		.lrh[2] = __constant_cpu_to_be16(hdrwords + SIZE_OF_CRC),
+ 		.lrh[3] = IB_LID_PERMISSIVE,
+-		.u.oth.bth[0] = cpu_to_be32(
++		.u.oth.bth[0] = __constant_cpu_to_be32(
+ 			(IB_OPCODE_UD_SEND_ONLY << 24) | QIB_DEFAULT_P_KEY),
+-		.u.oth.bth[1] = cpu_to_be32(0),
+-		.u.oth.bth[2] = cpu_to_be32(0),
+-		.u.oth.u.ud.deth[0] = cpu_to_be32(0),
+-		.u.oth.u.ud.deth[1] = cpu_to_be32(0),
++		.u.oth.bth[1] = __constant_cpu_to_be32(0),
++		.u.oth.bth[2] = __constant_cpu_to_be32(0),
++		.u.oth.u.ud.deth[0] = __constant_cpu_to_be32(0),
++		.u.oth.u.ud.deth[1] = __constant_cpu_to_be32(0),
+ 	};
+ 
+ 	/*
+@@ -1934,7 +1934,7 @@ static noinline void handle_7322_p_error
+ 			ibcs[1] = (((u64)ppd->lflags)<<32) | (dd->unit << 24) |
+ 				(ppd->port << 16) | BLOB_7322_IBCHG;
+ 			qib_trace_putblob(qib_trace_buf,
+-					  raw_smp_processor_id(),
++					  smp_processor_id(),
+ 					  get_cycles(), __QIB_LINKVERBDBG,
+ 					  ibcs, sizeof(ibcs));
+ 		}
+Only in b/drivers/infiniband/hw/qib: qib_iba7322.c.orig
+diff -up a/drivers/infiniband/hw/qib/qib_init.c b/drivers/infiniband/hw/qib/qib_init.c
+--- a/drivers/infiniband/hw/qib/qib_init.c	2010-04-20 16:01:02.000000000 -0700
++++ b/drivers/infiniband/hw/qib/qib_init.c	2010-04-20 16:00:56.000000000 -0700
+@@ -225,6 +225,7 @@ static int init_pioavailregs(struct qib_
+ 		ret = -ENOMEM;
+ 		goto done;
+ 	}
++	SetPageReserved(virt_to_page(dd->pioavailregs_dma));
+ 
+ 	/*
+ 	 * We really want L2 cache aligned, but for current CPUs of
+@@ -810,13 +811,18 @@ void qib_free_ctxtdata(struct qib_devdat
+ 		return;
+ 
+ 	if (rcd->rcvhdrq) {
++		size_t i;
++
+ 		qib_cdbg(VERBOSE, "free closed ctxt %d rcvhdrq @ %p "
+ 			 "(size=%lu)\n", rcd->ctxt, rcd->rcvhdrq,
+ 			 (unsigned long) rcd->rcvhdrq_size);
++		for (i = 0; i < rcd->rcvhdrq_size; i += PAGE_SIZE)
++			ClearPageReserved(virt_to_page(rcd->rcvhdrq + i));
+ 		dma_free_coherent(&dd->pcidev->dev, rcd->rcvhdrq_size,
+ 				  rcd->rcvhdrq, rcd->rcvhdrq_phys);
+ 		rcd->rcvhdrq = NULL;
+ 		if (rcd->rcvhdrtail_kvaddr) {
++			ClearPageReserved(virt_to_page(rcd->rcvhdrtail_kvaddr));
+ 			dma_free_coherent(&dd->pcidev->dev, PAGE_SIZE,
+ 					  rcd->rcvhdrtail_kvaddr,
+ 					  rcd->rcvhdrqtailaddr_phys);
+@@ -829,11 +835,14 @@ void qib_free_ctxtdata(struct qib_devdat
+ 		for (e = 0; e < rcd->rcvegrbuf_chunks; e++) {
+ 			void *base = rcd->rcvegrbuf[e];
+ 			size_t size = rcd->rcvegrbuf_size;
++			size_t i;
+ 
+ 			qib_cdbg(VERBOSE, "egrbuf free(%p, %lu), "
+ 				 "chunk %u/%u\n", base,
+ 				 (unsigned long) size,
+ 				 e, rcd->rcvegrbuf_chunks);
++			for (i = 0; i < size; i += PAGE_SIZE)
++				ClearPageReserved(virt_to_page(base + i));
+ 			dma_free_coherent(&dd->pcidev->dev, size,
+ 					  base, rcd->rcvegrbuf_phys[e]);
+ 		}
+@@ -1064,7 +1073,6 @@ struct pci_driver qib_driver = {
+ 	.probe = qib_init_one,
+ 	.remove = __devexit_p(qib_remove_one),
+ 	.id_table = qib_pci_tbl,
+-	.err_handler = &qib_pci_err_handler,
+ };
+ 
+ /*
+@@ -1191,6 +1199,7 @@ static void cleanup_device_data(struct q
+ 		qib_disable_wc(dd);
+ 
+ 	if (dd->pioavailregs_dma) {
++		ClearPageReserved(virt_to_page(dd->pioavailregs_dma));
+ 		dma_free_coherent(&dd->pcidev->dev, PAGE_SIZE,
+ 				  (void *) dd->pioavailregs_dma,
+ 				  dd->pioavailregs_phys);
+@@ -1401,6 +1410,7 @@ static void __devexit qib_remove_one(str
+ int qib_create_rcvhdrq(struct qib_devdata *dd, struct qib_ctxtdata *rcd)
+ {
+ 	unsigned amt;
++	size_t i;
+ 
+ 	if (!rcd->rcvhdrq) {
+ 		dma_addr_t phys_hdrqtail;
+@@ -1420,6 +1430,8 @@ int qib_create_rcvhdrq(struct qib_devdat
+ 				    amt, rcd->ctxt);
+ 			goto bail;
+ 		}
++		for (i = 0; i < amt; i += PAGE_SIZE)
++			SetPageReserved(virt_to_page(rcd->rcvhdrq + i));
+ 
+ 		if (rcd->ctxt >= dd->first_user_ctxt) {
+ 			rcd->user_event_mask = vmalloc_user(PAGE_SIZE);
+@@ -1433,6 +1445,7 @@ int qib_create_rcvhdrq(struct qib_devdat
+ 				gfp_flags);
+ 			if (!rcd->rcvhdrtail_kvaddr)
+ 				goto bail_free;
++			SetPageReserved(virt_to_page(rcd->rcvhdrtail_kvaddr));
+ 			rcd->rcvhdrqtailaddr_phys = phys_hdrqtail;
+ 			qib_cdbg(INIT, "ctxt %d hdrtailaddr, %llx "
+ 				 "physical\n", rcd->ctxt,
+@@ -1467,6 +1480,8 @@ bail_free:
+ 	vfree(rcd->user_event_mask);
+ 	rcd->user_event_mask = NULL;
+ bail_free_hdrq:
++	for (i = 0; i < amt; i += PAGE_SIZE)
++		ClearPageReserved(virt_to_page(rcd->rcvhdrq + i));
+ 	dma_free_coherent(&dd->pcidev->dev, amt, rcd->rcvhdrq,
+ 			  rcd->rcvhdrq_phys);
+ 	rcd->rcvhdrq = NULL;
+@@ -1523,6 +1538,8 @@ int qib_setup_eagerbufs(struct qib_ctxtd
+ 			goto bail_rcvegrbuf;
+ 	}
+ 	for (e = 0; e < rcd->rcvegrbuf_chunks; e++) {
++		size_t i;
++
+ 		if (rcd->rcvegrbuf[e])
+ 			continue;
+ 		rcd->rcvegrbuf[e] =
+@@ -1531,6 +1548,8 @@ int qib_setup_eagerbufs(struct qib_ctxtd
+ 					   gfp_flags);
+ 		if (!rcd->rcvegrbuf[e])
+ 			goto bail_rcvegrbuf_phys;
++		for (i = 0; i < size; i += PAGE_SIZE)
++			SetPageReserved(virt_to_page(rcd->rcvegrbuf[e] + i));
+ 	}
+ 
+ 	rcd->rcvegr_phys = rcd->rcvegrbuf_phys[0];
+@@ -1554,9 +1573,14 @@ int qib_setup_eagerbufs(struct qib_ctxtd
+ 	return 0;
+ 
+ bail_rcvegrbuf_phys:
+-	for (e = 0; e < rcd->rcvegrbuf_chunks && rcd->rcvegrbuf[e]; e++)
++	for (e = 0; e < rcd->rcvegrbuf_chunks && rcd->rcvegrbuf[e]; e++) {
++		size_t i;
++
++		for (i = 0; i < size; i += PAGE_SIZE)
++			ClearPageReserved(virt_to_page(rcd->rcvegrbuf[e] + i));
+ 		dma_free_coherent(&dd->pcidev->dev, size,
+ 				  rcd->rcvegrbuf[e], rcd->rcvegrbuf_phys[e]);
++	}
+ 	kfree(rcd->rcvegrbuf_phys);
+ 	rcd->rcvegrbuf_phys = NULL;
+ bail_rcvegrbuf:
+Only in b/drivers/infiniband/hw/qib: qib_init.c.orig
+diff -up a/drivers/infiniband/hw/qib/qib_mad.h b/drivers/infiniband/hw/qib/qib_mad.h
+--- a/drivers/infiniband/hw/qib/qib_mad.h	2010-04-20 16:01:02.000000000 -0700
++++ b/drivers/infiniband/hw/qib/qib_mad.h	2010-04-20 16:00:56.000000000 -0700
+@@ -32,10 +32,10 @@
+  * SOFTWARE.
+  */
+ 
+-#define IB_SMP_UNSUP_VERSION    cpu_to_be16(0x0004)
+-#define IB_SMP_UNSUP_METHOD     cpu_to_be16(0x0008)
+-#define IB_SMP_UNSUP_METH_ATTR  cpu_to_be16(0x000C)
+-#define IB_SMP_INVALID_FIELD    cpu_to_be16(0x001C)
++#define IB_SMP_UNSUP_VERSION    __constant_cpu_to_be16(0x0004)
++#define IB_SMP_UNSUP_METHOD     __constant_cpu_to_be16(0x0008)
++#define IB_SMP_UNSUP_METH_ATTR  __constant_cpu_to_be16(0x000C)
++#define IB_SMP_INVALID_FIELD    __constant_cpu_to_be16(0x001C)
+ 
+ struct ib_node_info {
+ 	u8 base_version;
+@@ -128,22 +128,22 @@ struct ib_mad_notice_attr {
+ /*
+  * Generic trap/notice producers
+  */
+-#define IB_NOTICE_PROD_CA		cpu_to_be16(1)
+-#define IB_NOTICE_PROD_SWITCH		cpu_to_be16(2)
+-#define IB_NOTICE_PROD_ROUTER		cpu_to_be16(3)
+-#define IB_NOTICE_PROD_CLASS_MGR	cpu_to_be16(4)
++#define IB_NOTICE_PROD_CA		__constant_cpu_to_be16(1)
++#define IB_NOTICE_PROD_SWITCH		__constant_cpu_to_be16(2)
++#define IB_NOTICE_PROD_ROUTER		__constant_cpu_to_be16(3)
++#define IB_NOTICE_PROD_CLASS_MGR	__constant_cpu_to_be16(4)
+ 
+ /*
+  * Generic trap/notice numbers
+  */
+-#define IB_NOTICE_TRAP_LLI_THRESH	cpu_to_be16(129)
+-#define IB_NOTICE_TRAP_EBO_THRESH	cpu_to_be16(130)
+-#define IB_NOTICE_TRAP_FLOW_UPDATE	cpu_to_be16(131)
+-#define IB_NOTICE_TRAP_CAP_MASK_CHG	cpu_to_be16(144)
+-#define IB_NOTICE_TRAP_SYS_GUID_CHG	cpu_to_be16(145)
+-#define IB_NOTICE_TRAP_BAD_MKEY		cpu_to_be16(256)
+-#define IB_NOTICE_TRAP_BAD_PKEY		cpu_to_be16(257)
+-#define IB_NOTICE_TRAP_BAD_QKEY		cpu_to_be16(258)
++#define IB_NOTICE_TRAP_LLI_THRESH	__constant_cpu_to_be16(129)
++#define IB_NOTICE_TRAP_EBO_THRESH	__constant_cpu_to_be16(130)
++#define IB_NOTICE_TRAP_FLOW_UPDATE	__constant_cpu_to_be16(131)
++#define IB_NOTICE_TRAP_CAP_MASK_CHG	__constant_cpu_to_be16(144)
++#define IB_NOTICE_TRAP_SYS_GUID_CHG	__constant_cpu_to_be16(145)
++#define IB_NOTICE_TRAP_BAD_MKEY		__constant_cpu_to_be16(256)
++#define IB_NOTICE_TRAP_BAD_PKEY		__constant_cpu_to_be16(257)
++#define IB_NOTICE_TRAP_BAD_QKEY		__constant_cpu_to_be16(258)
+ 
+ /*
+  * Repress trap/notice flags
+@@ -183,17 +183,17 @@ struct ib_vl_weight_elem {
+ /*
+  * PMA class portinfo capability mask bits
+  */
+-#define IB_PMA_CLASS_CAP_ALLPORTSELECT  cpu_to_be16(1 << 8)
+-#define IB_PMA_CLASS_CAP_EXT_WIDTH      cpu_to_be16(1 << 9)
+-#define IB_PMA_CLASS_CAP_XMIT_WAIT      cpu_to_be16(1 << 12)
+-
+-#define IB_PMA_CLASS_PORT_INFO          cpu_to_be16(0x0001)
+-#define IB_PMA_PORT_SAMPLES_CONTROL     cpu_to_be16(0x0010)
+-#define IB_PMA_PORT_SAMPLES_RESULT      cpu_to_be16(0x0011)
+-#define IB_PMA_PORT_COUNTERS            cpu_to_be16(0x0012)
+-#define IB_PMA_PORT_COUNTERS_EXT        cpu_to_be16(0x001D)
+-#define IB_PMA_PORT_SAMPLES_RESULT_EXT  cpu_to_be16(0x001E)
+-#define IB_PMA_PORT_COUNTERS_CONG       cpu_to_be16(0xFF00)
++#define IB_PMA_CLASS_CAP_ALLPORTSELECT  __constant_cpu_to_be16(1 << 8)
++#define IB_PMA_CLASS_CAP_EXT_WIDTH      __constant_cpu_to_be16(1 << 9)
++#define IB_PMA_CLASS_CAP_XMIT_WAIT      __constant_cpu_to_be16(1 << 12)
++
++#define IB_PMA_CLASS_PORT_INFO          __constant_cpu_to_be16(0x0001)
++#define IB_PMA_PORT_SAMPLES_CONTROL     __constant_cpu_to_be16(0x0010)
++#define IB_PMA_PORT_SAMPLES_RESULT      __constant_cpu_to_be16(0x0011)
++#define IB_PMA_PORT_COUNTERS            __constant_cpu_to_be16(0x0012)
++#define IB_PMA_PORT_COUNTERS_EXT        __constant_cpu_to_be16(0x001D)
++#define IB_PMA_PORT_SAMPLES_RESULT_EXT  __constant_cpu_to_be16(0x001E)
++#define IB_PMA_PORT_COUNTERS_CONG       __constant_cpu_to_be16(0xFF00)
+ 
+ struct ib_perf {
+ 	u8 base_version;
+@@ -316,19 +316,19 @@ struct ib_pma_portcounters_cong {
+ /* number of 4nsec cycles equaling 2secs */
+ #define QIB_CONG_TIMER_PSINTERVAL               0x1DCD64EC
+ 
+-#define IB_PMA_SEL_SYMBOL_ERROR                 cpu_to_be16(0x0001)
+-#define IB_PMA_SEL_LINK_ERROR_RECOVERY          cpu_to_be16(0x0002)
+-#define IB_PMA_SEL_LINK_DOWNED                  cpu_to_be16(0x0004)
+-#define IB_PMA_SEL_PORT_RCV_ERRORS              cpu_to_be16(0x0008)
+-#define IB_PMA_SEL_PORT_RCV_REMPHYS_ERRORS      cpu_to_be16(0x0010)
+-#define IB_PMA_SEL_PORT_XMIT_DISCARDS           cpu_to_be16(0x0040)
+-#define IB_PMA_SEL_LOCAL_LINK_INTEGRITY_ERRORS  cpu_to_be16(0x0200)
+-#define IB_PMA_SEL_EXCESSIVE_BUFFER_OVERRUNS    cpu_to_be16(0x0400)
+-#define IB_PMA_SEL_PORT_VL15_DROPPED            cpu_to_be16(0x0800)
+-#define IB_PMA_SEL_PORT_XMIT_DATA               cpu_to_be16(0x1000)
+-#define IB_PMA_SEL_PORT_RCV_DATA                cpu_to_be16(0x2000)
+-#define IB_PMA_SEL_PORT_XMIT_PACKETS            cpu_to_be16(0x4000)
+-#define IB_PMA_SEL_PORT_RCV_PACKETS             cpu_to_be16(0x8000)
++#define IB_PMA_SEL_SYMBOL_ERROR                 __constant_cpu_to_be16(0x0001)
++#define IB_PMA_SEL_LINK_ERROR_RECOVERY          __constant_cpu_to_be16(0x0002)
++#define IB_PMA_SEL_LINK_DOWNED                  __constant_cpu_to_be16(0x0004)
++#define IB_PMA_SEL_PORT_RCV_ERRORS              __constant_cpu_to_be16(0x0008)
++#define IB_PMA_SEL_PORT_RCV_REMPHYS_ERRORS      __constant_cpu_to_be16(0x0010)
++#define IB_PMA_SEL_PORT_XMIT_DISCARDS           __constant_cpu_to_be16(0x0040)
++#define IB_PMA_SEL_LOCAL_LINK_INTEGRITY_ERRORS  __constant_cpu_to_be16(0x0200)
++#define IB_PMA_SEL_EXCESSIVE_BUFFER_OVERRUNS    __constant_cpu_to_be16(0x0400)
++#define IB_PMA_SEL_PORT_VL15_DROPPED            __constant_cpu_to_be16(0x0800)
++#define IB_PMA_SEL_PORT_XMIT_DATA               __constant_cpu_to_be16(0x1000)
++#define IB_PMA_SEL_PORT_RCV_DATA                __constant_cpu_to_be16(0x2000)
++#define IB_PMA_SEL_PORT_XMIT_PACKETS            __constant_cpu_to_be16(0x4000)
++#define IB_PMA_SEL_PORT_RCV_PACKETS             __constant_cpu_to_be16(0x8000)
+ 
+ #define IB_PMA_SEL_CONG_ALL                     0x01
+ #define IB_PMA_SEL_CONG_PORT_DATA               0x02
+@@ -350,14 +350,14 @@ struct ib_pma_portcounters_ext {
+ 	__be64 port_multicast_rcv_packets;
+ } __attribute__ ((packed));
+ 
+-#define IB_PMA_SELX_PORT_XMIT_DATA              cpu_to_be16(0x0001)
+-#define IB_PMA_SELX_PORT_RCV_DATA               cpu_to_be16(0x0002)
+-#define IB_PMA_SELX_PORT_XMIT_PACKETS           cpu_to_be16(0x0004)
+-#define IB_PMA_SELX_PORT_RCV_PACKETS            cpu_to_be16(0x0008)
+-#define IB_PMA_SELX_PORT_UNI_XMIT_PACKETS       cpu_to_be16(0x0010)
+-#define IB_PMA_SELX_PORT_UNI_RCV_PACKETS        cpu_to_be16(0x0020)
+-#define IB_PMA_SELX_PORT_MULTI_XMIT_PACKETS     cpu_to_be16(0x0040)
+-#define IB_PMA_SELX_PORT_MULTI_RCV_PACKETS      cpu_to_be16(0x0080)
++#define IB_PMA_SELX_PORT_XMIT_DATA              __constant_cpu_to_be16(0x0001)
++#define IB_PMA_SELX_PORT_RCV_DATA               __constant_cpu_to_be16(0x0002)
++#define IB_PMA_SELX_PORT_XMIT_PACKETS           __constant_cpu_to_be16(0x0004)
++#define IB_PMA_SELX_PORT_RCV_PACKETS            __constant_cpu_to_be16(0x0008)
++#define IB_PMA_SELX_PORT_UNI_XMIT_PACKETS       __constant_cpu_to_be16(0x0010)
++#define IB_PMA_SELX_PORT_UNI_RCV_PACKETS        __constant_cpu_to_be16(0x0020)
++#define IB_PMA_SELX_PORT_MULTI_XMIT_PACKETS     __constant_cpu_to_be16(0x0040)
++#define IB_PMA_SELX_PORT_MULTI_RCV_PACKETS      __constant_cpu_to_be16(0x0080)
+ 
+ /*
+  * The PortSamplesControl.CounterMasks field is an array of 3 bit fields
+@@ -366,9 +366,9 @@ struct ib_pma_portcounters_ext {
+  */
+ #define COUNTER_MASK(q, n) (q << ((9 - n) * 3))
+ #define COUNTER_MASK0_9 \
+-	cpu_to_be32(COUNTER_MASK(1, 0) | \
+-		    COUNTER_MASK(1, 1) | \
+-		    COUNTER_MASK(1, 2) | \
+-		    COUNTER_MASK(1, 3) | \
+-		    COUNTER_MASK(1, 4))
++	__constant_cpu_to_be32(COUNTER_MASK(1, 0) | \
++			       COUNTER_MASK(1, 1) | \
++			       COUNTER_MASK(1, 2) | \
++			       COUNTER_MASK(1, 3) | \
++			       COUNTER_MASK(1, 4))
+ 
+diff -up a/drivers/infiniband/hw/qib/qib_mmap.c b/drivers/infiniband/hw/qib/qib_mmap.c
+--- a/drivers/infiniband/hw/qib/qib_mmap.c	2010-04-20 16:01:02.000000000 -0700
++++ b/drivers/infiniband/hw/qib/qib_mmap.c	2010-04-20 16:00:56.000000000 -0700
+@@ -74,9 +74,40 @@ static void qib_vma_close(struct vm_area
+ 	kref_put(&ip->ref, qib_release_mmap_info);
+ }
+ 
++/*
++ * qib_vma_nopage - handle a VMA page fault.
++ */
++static struct page *qib_vma_nopage(struct vm_area_struct *vma,
++				     unsigned long address, int *type)
++{
++	struct qib_mmap_info *ip = vma->vm_private_data;
++	unsigned long offset = address - vma->vm_start;
++	struct page *page = NOPAGE_SIGBUS;
++	void *pageptr;
++
++	if (offset >= ip->size)
++		goto out; /* out of range */
++
++	/*
++	 * Convert the vmalloc address into a struct page.
++	 */
++	pageptr = (void *)(offset + ip->obj);
++	page = vmalloc_to_page(pageptr);
++	if (!page)
++		goto out;
++
++	/* Increment the reference count. */
++	get_page(page);
++	if (type)
++		*type = VM_FAULT_MINOR;
++out:
++	return page;
++}
++
+ static struct vm_operations_struct qib_vm_ops = {
+ 	.open =     qib_vma_open,
+ 	.close =    qib_vma_close,
++	.nopage =   qib_vma_nopage,
+ };
+ 
+ /**
+@@ -111,10 +142,10 @@ int qib_mmap(struct ib_ucontext *context
+ 		list_del_init(&ip->pending_mmaps);
+ 		spin_unlock_irq(&dev->pending_lock);
+ 
+-		ret = remap_vmalloc_range(vma, ip->obj, 0);
+-		if (ret)
+-			goto done;
++		ret = 0;
++
+ 		vma->vm_ops = &qib_vm_ops;
++		vma->vm_flags |= VM_RESERVED | VM_DONTEXPAND;
+ 		vma->vm_private_data = ip;
+ 		qib_vma_open(vma);
+ 		goto done;
+diff -up a/drivers/infiniband/hw/qib/qib_pcie.c b/drivers/infiniband/hw/qib/qib_pcie.c
+--- a/drivers/infiniband/hw/qib/qib_pcie.c	2010-04-20 16:01:02.000000000 -0700
++++ b/drivers/infiniband/hw/qib/qib_pcie.c	2010-04-20 16:00:56.000000000 -0700
+@@ -124,7 +124,7 @@ int qib_pcie_init(struct pci_dev *pdev, 
+ 	pci_set_master(pdev);
+ #ifdef CONFIG_PCIEAER
+ 	/* enable basic AER reporting.  Perhaps more later */
+-	if (pci_find_ext_capability(pdev, PCI_EXT_CAP_ID_ERR)) {
++	if (pci_find_aer_capability(pdev)) {
+ 		ret = pci_enable_pcie_error_reporting(pdev);
+ 		if (ret)
+ 			qib_early_err(&pdev->dev,
+@@ -753,98 +753,3 @@ bail:
+ 	return ret;
+ }
+ /* End of PCIe capability tuning */
+-
+-/*
+- * From here through qib_pci_err_handler definition is invoked via
+- * PCI error infrastructure, registered via pci
+- */
+-static pci_ers_result_t
+-qib_pci_error_detected(struct pci_dev *pdev, pci_channel_state_t state)
+-{
+-	struct qib_devdata *dd = pci_get_drvdata(pdev);
+-	pci_ers_result_t ret = PCI_ERS_RESULT_RECOVERED;
+-
+-	switch (state) {
+-	case pci_channel_io_normal:
+-		qib_devinfo(pdev, "State Normal, ignoring\n");
+-		break;
+-
+-	case pci_channel_io_frozen:
+-		qib_devinfo(pdev, "State Frozen, requesting reset\n");
+-		pci_disable_device(pdev);
+-		ret = PCI_ERS_RESULT_NEED_RESET;
+-		break;
+-
+-	case pci_channel_io_perm_failure:
+-		qib_devinfo(pdev, "State Permanent Failure, disabling\n");
+-		if (dd) {
+-			/* no more register accesses! */
+-			dd->flags &= ~QIB_PRESENT;
+-			qib_disable_after_error(dd);
+-		}
+-		 /* else early, or other problem */
+-		ret =  PCI_ERS_RESULT_DISCONNECT;
+-		break;
+-
+-	default: /* shouldn't happen */
+-		qib_devinfo(pdev, "QIB PCI errors detected (state %d)\n",
+-			state);
+-		break;
+-	}
+-	return ret;
+-}
+-
+-static pci_ers_result_t
+-qib_pci_mmio_enabled(struct pci_dev *pdev)
+-{
+-	u64 words = 0U;
+-	struct qib_devdata *dd = pci_get_drvdata(pdev);
+-	pci_ers_result_t ret = PCI_ERS_RESULT_RECOVERED;
+-
+-	if (dd && dd->pport) {
+-		words = dd->f_portcntr(dd->pport, QIBPORTCNTR_WORDRCV);
+-		if (words == ~0ULL)
+-			ret = PCI_ERS_RESULT_NEED_RESET;
+-	}
+-	qib_devinfo(pdev, "QIB mmio_enabled function called, "
+-		 "read wordscntr %Lx, returning %d\n", words, ret);
+-	return  ret;
+-}
+-
+-static pci_ers_result_t
+-qib_pci_slot_reset(struct pci_dev *pdev)
+-{
+-	qib_devinfo(pdev, "QIB link_reset function called, ignored\n");
+-	return PCI_ERS_RESULT_CAN_RECOVER;
+-}
+-
+-static pci_ers_result_t
+-qib_pci_link_reset(struct pci_dev *pdev)
+-{
+-	qib_devinfo(pdev, "QIB link_reset function called, ignored\n");
+-	return PCI_ERS_RESULT_CAN_RECOVER;
+-}
+-
+-static void
+-qib_pci_resume(struct pci_dev *pdev)
+-{
+-	struct qib_devdata *dd = pci_get_drvdata(pdev);
+-	qib_devinfo(pdev, "QIB resume function called\n");
+-#ifdef CONFIG_PCIEAER
+-	pci_cleanup_aer_uncorrect_error_status(pdev);
+-#endif
+-	/*
+-	 * Running jobs will fail, since it's asynchronous
+-	 * unlike sysfs-requested reset.   Better than
+-	 * doing nothing.
+-	 */
+-	qib_init(dd, 1); /* same as re-init after reset */
+-}
+-
+-struct pci_error_handlers qib_pci_err_handler = {
+-	.error_detected = qib_pci_error_detected,
+-	.mmio_enabled = qib_pci_mmio_enabled,
+-	.link_reset = qib_pci_link_reset,
+-	.slot_reset = qib_pci_slot_reset,
+-	.resume = qib_pci_resume,
+-};
+diff -up a/drivers/infiniband/hw/qib/qib_qp.c b/drivers/infiniband/hw/qib/qib_qp.c
+--- a/drivers/infiniband/hw/qib/qib_qp.c	2010-04-20 16:01:02.000000000 -0700
++++ b/drivers/infiniband/hw/qib/qib_qp.c	2010-04-20 16:00:56.000000000 -0700
+@@ -675,7 +675,7 @@ int qib_modify_qp(struct ib_qp *ibqp, st
+ 			qp->s_flags &= ~(QIB_S_TIMER | QIB_S_ANY_WAIT);
+ 			spin_unlock_irq(&qp->s_lock);
+ 			/* Stop the sending work queue and retry timer */
+-			cancel_work_sync(&qp->s_work);
++			flush_workqueue(qib_wq);
+ 			del_timer_sync(&qp->s_timer);
+ 			wait_event(qp->wait_dma, !atomic_read(&qp->s_dma_busy));
+ 			if (qp->s_tx) {
+@@ -1012,7 +1012,7 @@ struct ib_qp *qib_create_qp(struct ib_pd
+ 			sz = (sizeof(struct ib_sge) * qp->r_rq.max_sge) +
+ 				sizeof(struct qib_rwqe);
+ 			qp->r_rq.wq = vmalloc_user(sizeof(struct qib_rwq) +
+-						   qp->r_rq.size * sz);
++					      qp->r_rq.size * sz);
+ 			if (!qp->r_rq.wq) {
+ 				ret = ERR_PTR(-ENOMEM);
+ 				goto bail_qp;
+@@ -1154,7 +1154,7 @@ int qib_destroy_qp(struct ib_qp *ibqp)
+ 		spin_unlock(&dev->pending_lock);
+ 		qp->s_flags &= ~(QIB_S_TIMER | QIB_S_ANY_WAIT);
+ 		spin_unlock_irq(&qp->s_lock);
+-		cancel_work_sync(&qp->s_work);
++		flush_workqueue(qib_wq);
+ 		del_timer_sync(&qp->s_timer);
+ 		wait_event(qp->wait_dma, !atomic_read(&qp->s_dma_busy));
+ 		if (qp->s_tx) {
+diff -up a/drivers/infiniband/hw/qib/qib_sdma.c b/drivers/infiniband/hw/qib/qib_sdma.c
+--- a/drivers/infiniband/hw/qib/qib_sdma.c	2010-04-20 16:01:02.000000000 -0700
++++ b/drivers/infiniband/hw/qib/qib_sdma.c	2010-04-20 16:00:56.000000000 -0700
+@@ -591,7 +591,7 @@ retry:
+ 		dw = (len + 3) >> 2;
+ 		addr = dma_map_single(&ppd->dd->pcidev->dev, sge->vaddr,
+ 				      dw << 2, DMA_TO_DEVICE);
+-		if (dma_mapping_error(&ppd->dd->pcidev->dev, addr))
++		if (dma_mapping_error(addr))
+ 			goto unmap;
+ 		sdmadesc[0] = 0;
+ 		make_sdma_desc(ppd, sdmadesc, (u64) addr, dw, dwoffset);
+diff -up a/drivers/infiniband/hw/qib/qib_sysfs.c b/drivers/infiniband/hw/qib/qib_sysfs.c
+--- a/drivers/infiniband/hw/qib/qib_sysfs.c	2010-04-20 16:01:02.000000000 -0700
++++ b/drivers/infiniband/hw/qib/qib_sysfs.c	2010-04-20 16:00:56.000000000 -0700
+@@ -262,18 +262,12 @@ static ssize_t qib_portattr_store(struct
+ 	return pattr->store(ppd, buf, len);
+ }
+ 
+-static void qib_port_release(struct kobject *kobj)
+-{
+-	/* nothing to do since memory is freed by qib_free_devdata() */
+-}
+-
+ static struct sysfs_ops qib_port_ops = {
+ 	.show = qib_portattr_show,
+ 	.store = qib_portattr_store,
+ };
+ 
+ static struct kobj_type qib_port_ktype = {
+-	.release = qib_port_release,
+ 	.sysfs_ops = &qib_port_ops,
+ 	.default_attrs = port_default_attributes
+ };
+@@ -345,7 +339,6 @@ static struct sysfs_ops qib_sl2vl_ops = 
+ };
+ 
+ static struct kobj_type qib_sl2vl_ktype = {
+-	.release = qib_port_release,
+ 	.sysfs_ops = &qib_sl2vl_ops,
+ 	.default_attrs = sl2vl_default_attributes
+ };
+@@ -356,22 +349,20 @@ static struct kobj_type qib_sl2vl_ktype 
+ 
+ /*
+  * Start of per-unit (or driver, in some cases, but replicated
+- * per unit) functions (these get a device *)
++ * per unit) functions (these get a class_device *)
+  */
+-static ssize_t show_rev(struct device *device, struct device_attribute *attr,
+-			char *buf)
++static ssize_t show_rev(struct class_device *cdev, char *buf)
+ {
+ 	struct qib_ibdev *dev =
+-		container_of(device, struct qib_ibdev, ibdev.dev);
++		container_of(cdev, struct qib_ibdev, ibdev.class_dev);
+ 
+ 	return sprintf(buf, "%x\n", dd_from_dev(dev)->minrev);
+ }
+ 
+-static ssize_t show_hca(struct device *device, struct device_attribute *attr,
+-			char *buf)
++static ssize_t show_hca(struct class_device *cdev, char *buf)
+ {
+ 	struct qib_ibdev *dev =
+-		container_of(device, struct qib_ibdev, ibdev.dev);
++		container_of(cdev, struct qib_ibdev, ibdev.class_dev);
+ 	struct qib_devdata *dd = dd_from_dev(dev);
+ 	int ret;
+ 
+@@ -386,11 +377,10 @@ static const char *qp_type_str[] = {
+ 	"SMI", "GSI", "RC", "UC", "UD",
+ };
+ 
+-static ssize_t show_stats(struct device *device, struct device_attribute *attr,
+-			  char *buf)
++static ssize_t show_stats(struct class_device *cdev, char *buf)
+ {
+ 	struct qib_ibdev *dev =
+-		container_of(device, struct qib_ibdev, ibdev.dev);
++		container_of(cdev, struct qib_ibdev, ibdev.class_dev);
+ 	struct qib_devdata *dd = dd_from_dev(dev);
+ 	unsigned pidx;
+ 	unsigned i;
+@@ -487,18 +477,16 @@ static ssize_t show_stats(struct device 
+ 	return len;
+ }
+ 
+-static ssize_t show_version(struct device *device,
+-			    struct device_attribute *attr, char *buf)
++static ssize_t show_version(struct class_device *cdev, char *buf)
+ {
+ 	/* The string printed here is already newline-terminated. */
+ 	return scnprintf(buf, PAGE_SIZE, "%s", (char *)ib_qib_version);
+ }
+ 
+-static ssize_t show_boardversion(struct device *device,
+-				 struct device_attribute *attr, char *buf)
++static ssize_t show_boardversion(struct class_device *cdev, char *buf)
+ {
+ 	struct qib_ibdev *dev =
+-		container_of(device, struct qib_ibdev, ibdev.dev);
++		container_of(cdev, struct qib_ibdev, ibdev.class_dev);
+ 	struct qib_devdata *dd = dd_from_dev(dev);
+ 
+ 	/* The string printed here is already newline-terminated. */
+@@ -506,11 +494,10 @@ static ssize_t show_boardversion(struct 
+ }
+ 
+ 
+-static ssize_t show_localbus_info(struct device *device,
+-				  struct device_attribute *attr, char *buf)
++static ssize_t show_localbus_info(struct class_device *cdev, char *buf)
+ {
+ 	struct qib_ibdev *dev =
+-		container_of(device, struct qib_ibdev, ibdev.dev);
++		container_of(cdev, struct qib_ibdev, ibdev.class_dev);
+ 	struct qib_devdata *dd = dd_from_dev(dev);
+ 
+ 	/* The string printed here is already newline-terminated. */
+@@ -518,11 +505,10 @@ static ssize_t show_localbus_info(struct
+ }
+ 
+ 
+-static ssize_t show_nctxts(struct device *device,
+-			   struct device_attribute *attr, char *buf)
++static ssize_t show_nctxts(struct class_device *cdev, char *buf)
+ {
+ 	struct qib_ibdev *dev =
+-		container_of(device, struct qib_ibdev, ibdev.dev);
++		container_of(cdev, struct qib_ibdev, ibdev.class_dev);
+ 	struct qib_devdata *dd = dd_from_dev(dev);
+ 
+ 	/* Return the number of user ports (contexts) available. */
+@@ -530,11 +516,10 @@ static ssize_t show_nctxts(struct device
+ 		dd->first_user_ctxt);
+ }
+ 
+-static ssize_t show_serial(struct device *device,
+-			   struct device_attribute *attr, char *buf)
++static ssize_t show_serial(struct class_device *cdev, char *buf)
+ {
+ 	struct qib_ibdev *dev =
+-		container_of(device, struct qib_ibdev, ibdev.dev);
++		container_of(cdev, struct qib_ibdev, ibdev.class_dev);
+ 	struct qib_devdata *dd = dd_from_dev(dev);
+ 
+ 	buf[sizeof dd->serial] = '\0';
+@@ -543,12 +528,11 @@ static ssize_t show_serial(struct device
+ 	return strlen(buf);
+ }
+ 
+-static ssize_t store_chip_reset(struct device *device,
+-				struct device_attribute *attr, const char *buf,
++static ssize_t store_chip_reset(struct class_device *cdev, const char *buf,
+ 				size_t count)
+ {
+ 	struct qib_ibdev *dev =
+-		container_of(device, struct qib_ibdev, ibdev.dev);
++		container_of(cdev, struct qib_ibdev, ibdev.class_dev);
+ 	struct qib_devdata *dd = dd_from_dev(dev);
+ 	int ret;
+ 
+@@ -562,11 +546,10 @@ bail:
+ 	return ret < 0 ? ret : count;
+ }
+ 
+-static ssize_t show_logged_errs(struct device *device,
+-				struct device_attribute *attr, char *buf)
++static ssize_t show_logged_errs(struct class_device *cdev, char *buf)
+ {
+ 	struct qib_ibdev *dev =
+-		container_of(device, struct qib_ibdev, ibdev.dev);
++		container_of(cdev, struct qib_ibdev, ibdev.class_dev);
+ 	struct qib_devdata *dd = dd_from_dev(dev);
+ 	int idx, count;
+ 
+@@ -587,11 +570,10 @@ static ssize_t show_logged_errs(struct d
+ /*
+  * Dump tempsense regs. in decimal, to ease shell-scripts.
+  */
+-static ssize_t show_tempsense(struct device *device,
+-			      struct device_attribute *attr, char *buf)
++static ssize_t show_tempsense(struct class_device *cdev, char *buf)
+ {
+ 	struct qib_ibdev *dev =
+-		container_of(device, struct qib_ibdev, ibdev.dev);
++		container_of(cdev, struct qib_ibdev, ibdev.class_dev);
+ 	struct qib_devdata *dd = dd_from_dev(dev);
+ 	int ret;
+ 	int idx;
+@@ -622,32 +604,32 @@ static ssize_t show_tempsense(struct dev
+  */
+ 
+ /* start of per-unit file structures and support code */
+-static DEVICE_ATTR(hw_rev, S_IRUGO, show_rev, NULL);
+-static DEVICE_ATTR(hca_type, S_IRUGO, show_hca, NULL);
+-static DEVICE_ATTR(board_id, S_IRUGO, show_hca, NULL);
+-static DEVICE_ATTR(stats, S_IRUGO, show_stats, NULL);
+-static DEVICE_ATTR(version, S_IRUGO, show_version, NULL);
+-static DEVICE_ATTR(nctxts, S_IRUGO, show_nctxts, NULL);
+-static DEVICE_ATTR(serial, S_IRUGO, show_serial, NULL);
+-static DEVICE_ATTR(boardversion, S_IRUGO, show_boardversion, NULL);
+-static DEVICE_ATTR(logged_errors, S_IRUGO, show_logged_errs, NULL);
+-static DEVICE_ATTR(tempsense, S_IRUGO, show_tempsense, NULL);
+-static DEVICE_ATTR(localbus_info, S_IRUGO, show_localbus_info, NULL);
+-static DEVICE_ATTR(chip_reset, S_IWUSR, NULL, store_chip_reset);
+-
+-static struct device_attribute *qib_attributes[] = {
+-	&dev_attr_hw_rev,
+-	&dev_attr_hca_type,
+-	&dev_attr_board_id,
+-	&dev_attr_stats,
+-	&dev_attr_version,
+-	&dev_attr_nctxts,
+-	&dev_attr_serial,
+-	&dev_attr_boardversion,
+-	&dev_attr_logged_errors,
+-	&dev_attr_tempsense,
+-	&dev_attr_localbus_info,
+-	&dev_attr_chip_reset,
++static CLASS_DEVICE_ATTR(hw_rev, S_IRUGO, show_rev, NULL);
++static CLASS_DEVICE_ATTR(hca_type, S_IRUGO, show_hca, NULL);
++static CLASS_DEVICE_ATTR(board_id, S_IRUGO, show_hca, NULL);
++static CLASS_DEVICE_ATTR(stats, S_IRUGO, show_stats, NULL);
++static CLASS_DEVICE_ATTR(version, S_IRUGO, show_version, NULL);
++static CLASS_DEVICE_ATTR(nctxts, S_IRUGO, show_nctxts, NULL);
++static CLASS_DEVICE_ATTR(serial, S_IRUGO, show_serial, NULL);
++static CLASS_DEVICE_ATTR(boardversion, S_IRUGO, show_boardversion, NULL);
++static CLASS_DEVICE_ATTR(logged_errors, S_IRUGO, show_logged_errs, NULL);
++static CLASS_DEVICE_ATTR(tempsense, S_IRUGO, show_tempsense, NULL);
++static CLASS_DEVICE_ATTR(localbus_info, S_IRUGO, show_localbus_info, NULL);
++static CLASS_DEVICE_ATTR(chip_reset, S_IWUSR, NULL, store_chip_reset);
++
++static struct class_device_attribute *qib_class_attributes[] = {
++	&class_device_attr_hw_rev,
++	&class_device_attr_hca_type,
++	&class_device_attr_board_id,
++	&class_device_attr_stats,
++	&class_device_attr_version,
++	&class_device_attr_nctxts,
++	&class_device_attr_serial,
++	&class_device_attr_boardversion,
++	&class_device_attr_logged_errors,
++	&class_device_attr_tempsense,
++	&class_device_attr_localbus_info,
++	&class_device_attr_chip_reset,
+ };
+ 
+ static int create_port_files(struct ib_device *ibdev, u8 port_num,
+@@ -682,7 +664,7 @@ static int create_port_files(struct ib_d
+ 			goto bail;
+ 		}
+ 	}
+-	kobject_uevent(&ppd->pport_kobj, KOBJ_ADD);
++	kobject_hotplug("add", &ppd->pport_kobj);
+ 
+ 	ret = kobject_init_and_add(&ppd->sl2vl_kobj, &qib_sl2vl_ktype, kobj,
+ 				   "sl2vl");
+@@ -691,7 +673,7 @@ static int create_port_files(struct ib_d
+ 			    "(err %d) port %u\n", ret, port_num);
+ 		goto bail_sl;
+ 	}
+-	kobject_uevent(&ppd->sl2vl_kobj, KOBJ_ADD);
++	kobject_hotplug("add", &ppd->sl2vl_kobj);
+ 
+ 	return 0;
+ 
+@@ -709,8 +691,9 @@ int qib_verbs_register_sysfs(struct qib_
+ 	struct ib_device *dev = &dd->verbs_dev.ibdev;
+ 	int i, ret;
+ 
+-	for (i = 0; i < ARRAY_SIZE(qib_attributes); ++i)
+-		if (device_create_file(&dev->dev, qib_attributes[i])) {
++	for (i = 0; i < ARRAY_SIZE(qib_class_attributes); ++i)
++		if (class_device_create_file(&dev->class_dev,
++					     qib_class_attributes[i])) {
+ 			ret = 1;
+ 			goto bail;
+ 		}
+diff -up a/drivers/infiniband/hw/qib/qib_trace.c b/drivers/infiniband/hw/qib/qib_trace.c
+--- a/drivers/infiniband/hw/qib/qib_trace.c	2010-04-20 16:01:02.000000000 -0700
++++ b/drivers/infiniband/hw/qib/qib_trace.c	2010-04-20 16:00:56.000000000 -0700
+@@ -39,7 +39,7 @@
+ #include <linux/sched.h>
+ #include <linux/wait.h>
+ #include <linux/vmalloc.h>
+-#include <linux/uaccess.h>
++#include <asm/uaccess.h>
+ #include <linux/notifier.h>
+ 
+ #include "qib.h"
+@@ -245,7 +245,7 @@ struct qib_evt_file {
+ 
+ struct evt_trace_device {
+ 	struct cdev *cdev;
+-	struct device *device;
++	struct class_device *class_dev;
+ };
+ 
+ static int qib_trace_set_bufsize(const char *val, struct kernel_param *kp);
+@@ -1318,7 +1318,7 @@ int __init qib_trace_init(void)
+ 	}
+ 
+ 	ret = qib_cdev_init(QIB_TRACE_MINOR, QIB_TRACE_FILE, &qib_trace_fops,
+-			    &evt_dev.cdev, &evt_dev.device);
++			    &evt_dev.cdev, &evt_dev.class_dev);
+ 	if (ret)
+ 		goto bail_buf;
+ 
+@@ -1341,7 +1341,7 @@ bail:
+ void __exit qib_trace_fini(void)
+ {
+ 	if (qib_trace_buf) {
+-		qib_cdev_cleanup(&evt_dev.cdev, &evt_dev.device);
++		qib_cdev_cleanup(&evt_dev.cdev, &evt_dev.class_dev);
+ 		atomic_notifier_chain_unregister(&panic_notifier_list,
+ 						 &qibtrace_panic_block);
+ 		qib_evt_buf_destroy(qib_trace_buf);
+diff -up a/drivers/infiniband/hw/qib/qib_user_pages.c b/drivers/infiniband/hw/qib/qib_user_pages.c
+--- a/drivers/infiniband/hw/qib/qib_user_pages.c	2010-04-20 16:01:02.000000000 -0700
++++ b/drivers/infiniband/hw/qib/qib_user_pages.c	2010-04-20 16:00:56.000000000 -0700
+@@ -60,7 +60,7 @@ static int __get_user_pages(unsigned lon
+ 	size_t got;
+ 	int ret;
+ 
+-	lock_limit = current->signal->rlim[RLIMIT_MEMLOCK].rlim_cur >>
++	lock_limit = current->rlim[RLIMIT_MEMLOCK].rlim_cur >>
+ 		PAGE_SHIFT;
+ 
+ 	if (num_pages > lock_limit) {
+diff -up a/drivers/infiniband/hw/qib/qib_user_sdma.c b/drivers/infiniband/hw/qib/qib_user_sdma.c
+--- a/drivers/infiniband/hw/qib/qib_user_sdma.c	2010-04-20 16:01:02.000000000 -0700
++++ b/drivers/infiniband/hw/qib/qib_user_sdma.c	2010-04-20 16:00:56.000000000 -0700
+@@ -207,7 +207,7 @@ static int qib_user_sdma_coalesce(const 
+ 
+ 	dma_addr = dma_map_page(&dd->pcidev->dev, page, 0, len,
+ 				DMA_TO_DEVICE);
+-	if (dma_mapping_error(&dd->pcidev->dev, dma_addr)) {
++	if (dma_mapping_error(dma_addr)) {
+ 		ret = -ENOMEM;
+ 		goto free_unmap;
+ 	}
+@@ -305,7 +305,7 @@ static int qib_user_sdma_pin_pages(const
+ 				     pages[j], 0, flen, DMA_TO_DEVICE);
+ 		unsigned long fofs = addr & ~PAGE_MASK;
+ 
+-		if (dma_mapping_error(&dd->pcidev->dev, dma_addr)) {
++		if (dma_mapping_error(dma_addr)) {
+ 			ret = -ENOMEM;
+ 			goto done;
+ 		}
+@@ -516,7 +516,7 @@ static int qib_user_sdma_queue_pkts(cons
+ 		if (page) {
+ 			dma_addr = dma_map_page(&dd->pcidev->dev,
+ 						page, 0, len, DMA_TO_DEVICE);
+-			if (dma_mapping_error(&dd->pcidev->dev, dma_addr)) {
++			if (dma_mapping_error(dma_addr)) {
+ 				ret = -ENOMEM;
+ 				goto free_pbc;
+ 			}
+diff -up a/drivers/infiniband/hw/qib/qib_verbs.c b/drivers/infiniband/hw/qib/qib_verbs.c
+--- a/drivers/infiniband/hw/qib/qib_verbs.c	2010-04-20 16:01:02.000000000 -0700
++++ b/drivers/infiniband/hw/qib/qib_verbs.c	2010-04-20 16:00:56.000000000 -0700
+@@ -1319,7 +1319,7 @@ static int qib_verbs_send_dma(struct qib
+ 
+ 	tx->txreq.addr = dma_map_single(&dd->pcidev->dev, phdr,
+ 					tx->hdr_dwords << 2, DMA_TO_DEVICE);
+-	if (dma_mapping_error(&dd->pcidev->dev, tx->txreq.addr))
++	if (dma_mapping_error(tx->txreq.addr))
+ 		goto map_err;
+ 	tx->align_buf = phdr;
+ 	tx->txreq.flags |= QIB_SDMA_TXREQ_F_FREEBUF;
+@@ -2254,6 +2254,7 @@ int qib_register_ib_device(struct qib_de
+ 	ibdev->phys_port_cnt = dd->num_pports;
+ 	ibdev->num_comp_vectors = 1;
+ 	ibdev->dma_device = &dd->pcidev->dev;
++	ibdev->class_dev.dev = ibdev->dma_device;
+ 	ibdev->query_device = qib_query_device;
+ 	ibdev->modify_device = qib_modify_device;
+ 	ibdev->query_port = qib_query_port;
+Only in b/drivers/infiniband/hw/qib: qib_verbs.c.orig
+diff -up a/drivers/infiniband/hw/qib/qib_verbs.h b/drivers/infiniband/hw/qib/qib_verbs.h
+--- a/drivers/infiniband/hw/qib/qib_verbs.h	2010-04-20 16:01:02.000000000 -0700
++++ b/drivers/infiniband/hw/qib/qib_verbs.h	2010-04-20 16:00:56.000000000 -0700
+@@ -94,13 +94,13 @@ struct qib_verbs_txreq;
+ #define IB_PMA_SAMPLE_STATUS_RUNNING    0x02
+ 
+ /* Mandatory IB performance counter select values. */
+-#define IB_PMA_PORT_XMIT_DATA   cpu_to_be16(0x0001)
+-#define IB_PMA_PORT_RCV_DATA    cpu_to_be16(0x0002)
+-#define IB_PMA_PORT_XMIT_PKTS   cpu_to_be16(0x0003)
+-#define IB_PMA_PORT_RCV_PKTS    cpu_to_be16(0x0004)
+-#define IB_PMA_PORT_XMIT_WAIT   cpu_to_be16(0x0005)
++#define IB_PMA_PORT_XMIT_DATA   __constant_cpu_to_be16(0x0001)
++#define IB_PMA_PORT_RCV_DATA    __constant_cpu_to_be16(0x0002)
++#define IB_PMA_PORT_XMIT_PKTS   __constant_cpu_to_be16(0x0003)
++#define IB_PMA_PORT_RCV_PKTS    __constant_cpu_to_be16(0x0004)
++#define IB_PMA_PORT_XMIT_WAIT   __constant_cpu_to_be16(0x0005)
+ 
+-#define QIB_VENDOR_IPG		cpu_to_be16(0xFFA0)
++#define QIB_VENDOR_IPG		__constant_cpu_to_be16(0xFFA0)
+ 
+ #define IB_BTH_REQ_ACK		(1 << 31)
+ #define IB_BTH_SOLICITED	(1 << 23)
+@@ -812,13 +812,8 @@ extern struct workqueue_struct *qib_wq;
+  */
+ static inline void qib_schedule_send(struct qib_qp *qp)
+ {
+-	if (qib_send_ok(qp)) {
+-		if (qp->processor_id == smp_processor_id())
+-			queue_work(qib_wq, &qp->s_work);
+-		else
+-			queue_work_on(qp->processor_id,
+-				      qib_wq, &qp->s_work);
+-	}
++	if (qib_send_ok(qp))
++		queue_work(qib_wq, &qp->s_work);
+ }
+ 
+ static inline int qib_pkey_ok(u16 pkey1, u16 pkey2)
+diff -up a/drivers/infiniband/hw/qib/qib_verbs_mcast.c b/drivers/infiniband/hw/qib/qib_verbs_mcast.c
+--- a/drivers/infiniband/hw/qib/qib_verbs_mcast.c	2010-04-20 16:01:02.000000000 -0700
++++ b/drivers/infiniband/hw/qib/qib_verbs_mcast.c	2010-04-20 16:00:56.000000000 -0700
+@@ -31,7 +31,8 @@
+  * SOFTWARE.
+  */
+ 
+-#include <linux/rculist.h>
++#include <linux/list.h>
++#include <linux/rcupdate.h>
+ 
+ #include "qib.h"
+ 
+diff -up a/drivers/infiniband/hw/qib/qib_wc_pat.c b/drivers/infiniband/hw/qib/qib_wc_pat.c
+--- a/drivers/infiniband/hw/qib/qib_wc_pat.c	2010-04-20 16:01:02.000000000 -0700
++++ b/drivers/infiniband/hw/qib/qib_wc_pat.c	2010-04-20 16:00:56.000000000 -0700
+@@ -171,7 +171,7 @@ static int read_and_modify_pat(void)
+ 	preempt_disable();
+ 	rd_old_pat(&ret);
+ 	if (!ret)
+-		smp_call_function(rd_old_pat, &ret, 1);
++		smp_call_function(rd_old_pat, &ret, 1, 1);
+ 	if (ret)
+ 		goto out;
+ 
+@@ -182,7 +182,7 @@ static int read_and_modify_pat(void)
+ 	if (ret)
+ 		goto out;
+ 
+-	smp_call_function(wr_new_pat, &ret, 1);
++	smp_call_function(wr_new_pat, &ret, 1, 1);
+ 	BUG_ON(ret); /* have inconsistent PAT state */
+ out:
+ 	preempt_enable();
+@@ -196,7 +196,7 @@ static int restore_pat(void)
+ 	preempt_disable();
+ 	wr_old_pat(&ret);
+ 	if (!ret) {
+-		smp_call_function(wr_old_pat, &ret, 1);
++		smp_call_function(wr_old_pat, &ret, 1, 1);
+ 		BUG_ON(ret); /* have inconsistent PAT state */
+ 	}
+ 
+@@ -206,7 +206,7 @@ static int restore_pat(void)
+ 
+ int qib_enable_wc_pat(void)
+ {
+-	struct cpuinfo_x86 *c = &cpu_data(0);
++	struct cpuinfo_x86 *c = &(cpu_data)[0];
+ 	int ret;
+ 
+ 	if (wc_enabled)
+@@ -246,6 +246,11 @@ pgprot_t pgprot_writecombine(pgprot_t _p
+ 		pgprot_noncached(_prot);
+ }
+ 
++void __iomem *ioremap_wc(unsigned long phys_addr, unsigned long size)
++{
++	return __ioremap(phys_addr, size, QIB_WC_FLAGS);
++}
++
+ int qib_wc_pat_enabled(void)
+ {
+ 	return wc_enabled;
+@@ -261,6 +266,11 @@ pgprot_t pgprot_writecombine(pgprot_t _p
+ 	return pgprot_noncached(_prot);
+ }
+ 
++void __iomem *ioremap_wc(unsigned long phys_addr, unsigned long size)
++{
++	return ioremap_nocache(phys_addr, size);
++}
++
+ int qib_wc_pat_enabled(void)
+ {
+ 	return 0;
+diff -up a/drivers/infiniband/hw/qib/qib_wc_pat.h b/drivers/infiniband/hw/qib/qib_wc_pat.h
+--- a/drivers/infiniband/hw/qib/qib_wc_pat.h	2010-04-20 16:01:02.000000000 -0700
++++ b/drivers/infiniband/hw/qib/qib_wc_pat.h	2010-04-20 16:00:56.000000000 -0700
+@@ -44,5 +44,6 @@ int qib_enable_wc_pat(void);
+ void qib_disable_wc_pat(void);
+ int qib_wc_pat_enabled(void);
+ pgprot_t pgprot_writecombine(pgprot_t _prot);
++void __iomem *ioremap_wc(unsigned long phys_addr, unsigned long size);
+ 
+ #endif

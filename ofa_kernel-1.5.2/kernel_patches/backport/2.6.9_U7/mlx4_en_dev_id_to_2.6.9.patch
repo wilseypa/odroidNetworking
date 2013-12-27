@@ -1,0 +1,12 @@
+Index: ofa_1_5_dev_kernel-20100527-0902_linux-2.6.9-89.ELsmp_check/drivers/net/mlx4/en_netdev.c
+===================================================================
+--- ofa_1_5_dev_kernel-20100527-0902_linux-2.6.9-89.ELsmp_check.orig/drivers/net/mlx4/en_netdev.c	2010-05-27 09:55:05.000000000 +0300
++++ ofa_1_5_dev_kernel-20100527-0902_linux-2.6.9-89.ELsmp_check/drivers/net/mlx4/en_netdev.c	2010-05-27 09:55:16.000000000 +0300
+@@ -992,7 +992,6 @@ int mlx4_en_init_netdev(struct mlx4_en_d
+ 	}
+ 
+ 	SET_NETDEV_DEV(dev, &mdev->dev->pdev->dev);
+-	dev->dev_id =  port - 1;
+ 
+ 	/*
+ 	 * Initialize driver private data

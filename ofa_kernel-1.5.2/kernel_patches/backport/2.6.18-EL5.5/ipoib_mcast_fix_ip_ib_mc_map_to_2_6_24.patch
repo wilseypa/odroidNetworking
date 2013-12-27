@@ -1,0 +1,18 @@
+Index: ofed_kernel/drivers/infiniband/ulp/ipoib/ipoib_multicast.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/ipoib/ipoib_multicast.c	2009-10-27 18:22:28.000000000 +0200
++++ ofed_kernel/drivers/infiniband/ulp/ipoib/ipoib_multicast.c	2009-10-27 18:25:08.000000000 +0200
+@@ -832,6 +832,13 @@
+ 	for (mclist = dev->mc_list; mclist; mclist = mclist->next) {
+ 		union ib_gid mgid;
+ 
++	/* Work around broken ip_ib_mc_map */
++	if (mclist->dmi_addrlen == INFINIBAND_ALEN) {
++		mclist->dmi_addr[5] = 0x10 | (dev->broadcast[5] & 0xF);
++		mclist->dmi_addr[8] = dev->broadcast[8];
++		mclist->dmi_addr[9] = dev->broadcast[9];
++	}
++
+ 		if (!ipoib_mcast_addr_is_valid(mclist->dmi_addr,
+ 					       mclist->dmi_addrlen,
+ 					       dev->broadcast))

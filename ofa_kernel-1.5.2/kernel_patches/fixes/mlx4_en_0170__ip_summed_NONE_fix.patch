@@ -1,0 +1,44 @@
+From c14c3cee01f6e1718a83cbbe7f206691d7ab5326 Mon Sep 17 00:00:00 2001
+From: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+Date: Thu, 11 Feb 2010 19:09:13 +0200
+Subject: [PATCH] mlx4_en: setting skb->ip_summed = NONE when needed
+
+Signed-off-by: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+---
+ drivers/net/mlx4/en_rx.c |    6 ++----
+ 1 files changed, 2 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/net/mlx4/en_rx.c b/drivers/net/mlx4/en_rx.c
+index 5197af2..5c71c4f 100644
+--- a/drivers/net/mlx4/en_rx.c
++++ b/drivers/net/mlx4/en_rx.c
+@@ -698,7 +698,6 @@ int mlx4_en_process_rx_cq_skb(struct net_device *dev,
+ 	int index;
+ 	unsigned int length;
+ 	int polled = 0;
+-	int ip_summed;
+ 
+ 	if (!priv->port_up)
+ 		return 0;
+@@ -745,16 +744,15 @@ int mlx4_en_process_rx_cq_skb(struct net_device *dev,
+ 
+ 		if (likely(priv->rx_csum && cqe->checksum == 0xffff)) {
+ 			priv->port_stats.rx_chksum_good++;
+-			ip_summed = CHECKSUM_UNNECESSARY;
++			skb->ip_summed = CHECKSUM_UNNECESSARY;
+ 		} else {
+ 			priv->port_stats.rx_chksum_none++;
+-			ip_summed = CHECKSUM_NONE;
++			skb->ip_summed = CHECKSUM_NONE;
+ 			if (priv->mdev->profile.ip_reasm &&
+ 			    cqe->status & cpu_to_be16(MLX4_CQE_STATUS_IPV4) &&
+ 			    !mlx4_en_rx_frags(priv, ring, skb, cqe))
+ 				goto next;
+ 		}
+-		skb->ip_summed = ip_summed;
+ 
+ 		/* Push it up the stack */
+ 		if (priv->vlgrp && (be32_to_cpu(cqe->vlan_my_qpn) &
+-- 
+1.5.3.7
+

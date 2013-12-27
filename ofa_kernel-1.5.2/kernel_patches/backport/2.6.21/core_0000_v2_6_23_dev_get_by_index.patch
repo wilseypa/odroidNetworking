@@ -1,0 +1,67 @@
+Backport patches for rdma cm patches
+
+Backport for dev_get_by_index() for v2.6.23 and earlier kernels.
+
+Signed-of-by: David Wilder <dwilder@us.ibm.com>
+---
+Index: ofa_1_5_dev_kernel-20100215-2326_linux-2.6.23_check/drivers/infiniband/core/addr.c
+===================================================================
+--- ofa_1_5_dev_kernel-20100215-2326_linux-2.6.23_check.orig/drivers/infiniband/core/addr.c	2010-02-15 23:26:59.000000000 +0200
++++ ofa_1_5_dev_kernel-20100215-2326_linux-2.6.23_check/drivers/infiniband/core/addr.c	2010-02-15 23:32:17.000000000 +0200
+@@ -107,7 +107,7 @@ int rdma_translate_ip(struct sockaddr *a
+ 	int ret = -EADDRNOTAVAIL;
+ 
+ 	if (dev_addr->bound_dev_if) {
+-		dev = dev_get_by_index(&init_net, dev_addr->bound_dev_if);
++		dev = dev_get_by_index(dev_addr->bound_dev_if);
+ 		if (!dev)
+ 			return -ENODEV;
+ 		ret = rdma_copy_addr(dev_addr, dev, NULL);
+Index: ofa_1_5_dev_kernel-20100215-2326_linux-2.6.23_check/drivers/infiniband/core/cma.c
+===================================================================
+--- ofa_1_5_dev_kernel-20100215-2326_linux-2.6.23_check.orig/drivers/infiniband/core/cma.c	2010-02-15 23:27:29.000000000 +0200
++++ ofa_1_5_dev_kernel-20100215-2326_linux-2.6.23_check/drivers/infiniband/core/cma.c	2010-02-15 23:32:17.000000000 +0200
+@@ -1805,7 +1805,7 @@ static int cma_resolve_iboe_route(struct
+ 	route->num_paths = 1;
+ 
+ 	if (addr->dev_addr.bound_dev_if)
+-		ndev = dev_get_by_index(&init_net, addr->dev_addr.bound_dev_if);
++		ndev = dev_get_by_index(addr->dev_addr.bound_dev_if);
+ 	if (!ndev) {
+ 		ret = -ENODEV;
+ 		goto err2;
+@@ -3027,7 +3027,7 @@ static int cma_iboe_join_multicast(struc
+ 		mc->multicast.ib->rec.qkey = cpu_to_be32(RDMA_UDP_QKEY);
+ 
+ 	if (dev_addr->bound_dev_if)
+-		ndev = dev_get_by_index(&init_net, dev_addr->bound_dev_if);
++		ndev = dev_get_by_index(dev_addr->bound_dev_if);
+ 	if (!ndev) {
+ 		err = -ENODEV;
+ 		goto out2;
+Index: ofa_1_5_dev_kernel-20100215-2326_linux-2.6.23_check/drivers/infiniband/core/ucma.c
+===================================================================
+--- ofa_1_5_dev_kernel-20100215-2326_linux-2.6.23_check.orig/drivers/infiniband/core/ucma.c	2010-02-15 23:27:01.000000000 +0200
++++ ofa_1_5_dev_kernel-20100215-2326_linux-2.6.23_check/drivers/infiniband/core/ucma.c	2010-02-15 23:27:29.000000000 +0200
+@@ -591,7 +591,7 @@ static void ucma_copy_iboe_route(struct 
+ 	switch (route->num_paths) {
+ 	case 0:
+ 		dev_addr = &route->addr.dev_addr;
+-		dev = dev_get_by_index(&init_net, dev_addr->bound_dev_if);
++		dev = dev_get_by_index(dev_addr->bound_dev_if);
+ 		if (dev) {
+ 			vid = vlan_dev_vlan_id(dev);
+ 			dev_put(dev);
+Index: ofa_1_5_dev_kernel-20100215-2326_linux-2.6.23_check/include/rdma/ib_addr.h
+===================================================================
+--- ofa_1_5_dev_kernel-20100215-2326_linux-2.6.23_check.orig/include/rdma/ib_addr.h	2010-02-15 23:32:40.000000000 +0200
++++ ofa_1_5_dev_kernel-20100215-2326_linux-2.6.23_check/include/rdma/ib_addr.h	2010-02-15 23:33:07.000000000 +0200
+@@ -148,7 +148,7 @@ static inline void iboe_addr_get_sgid(st
+ 	struct net_device *dev;
+ 	u16 vid = 0;
+ 
+-	dev = dev_get_by_index(&init_net, dev_addr->bound_dev_if);
++	dev = dev_get_by_index(dev_addr->bound_dev_if);
+ 	if (dev) {
+ 		vid = vlan_dev_vlan_id(dev);
+ 		dev_put(dev);

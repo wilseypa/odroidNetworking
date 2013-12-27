@@ -1,0 +1,70 @@
+srp: Undo %pI6 for printing gids
+
+The "%pI6" construct is not valid with kernels earlier than 2.6.29.
+This patch just rolls back the change.
+Without the patch, you don't get a compilation error -- the %p is
+just interpreted as a pointer and the I6 is ignored.
+
+
+Signed-off-by: Jack Morgenstein <jackm@dev.mellanox.co.il>
+
+Index: ofed_kernel-fixes/drivers/infiniband/ulp/srp/ib_srp.c
+===================================================================
+--- ofed_kernel-fixes.orig/drivers/infiniband/ulp/srp/ib_srp.c	2009-07-20 13:50:08.000000000 +0300
++++ ofed_kernel-fixes/drivers/infiniband/ulp/srp/ib_srp.c	2009-07-20 13:55:05.000000000 +0300
+@@ -1606,7 +1606,15 @@ static ssize_t show_dgid(struct device *
+ 	    target->state == SRP_TARGET_REMOVED)
+ 		return -ENODEV;
+ 
+-	return sprintf(buf, "%pI6\n", target->path.dgid.raw);
++	return sprintf(buf, "%04x:%04x:%04x:%04x:%04x:%04x:%04x:%04x\n",
++		       be16_to_cpu(((__be16 *) target->path.dgid.raw)[0]),
++		       be16_to_cpu(((__be16 *) target->path.dgid.raw)[1]),
++		       be16_to_cpu(((__be16 *) target->path.dgid.raw)[2]),
++		       be16_to_cpu(((__be16 *) target->path.dgid.raw)[3]),
++		       be16_to_cpu(((__be16 *) target->path.dgid.raw)[4]),
++		       be16_to_cpu(((__be16 *) target->path.dgid.raw)[5]),
++		       be16_to_cpu(((__be16 *) target->path.dgid.raw)[6]),
++		       be16_to_cpu(((__be16 *) target->path.dgid.raw)[7]));
+ }
+ 
+ static ssize_t show_orig_dgid(struct device *dev,
+@@ -1618,7 +1626,15 @@ static ssize_t show_orig_dgid(struct dev
+ 	    target->state == SRP_TARGET_REMOVED)
+ 		return -ENODEV;
+ 
+-	return sprintf(buf, "%pI6\n", target->orig_dgid);
++	return sprintf(buf, "%04x:%04x:%04x:%04x:%04x:%04x:%04x:%04x\n",
++		       be16_to_cpu(target->orig_dgid[0]),
++		       be16_to_cpu(target->orig_dgid[1]),
++		       be16_to_cpu(target->orig_dgid[2]),
++		       be16_to_cpu(target->orig_dgid[3]),
++		       be16_to_cpu(target->orig_dgid[4]),
++		       be16_to_cpu(target->orig_dgid[5]),
++		       be16_to_cpu(target->orig_dgid[6]),
++		       be16_to_cpu(target->orig_dgid[7]));
+ }
+ 
+ static ssize_t show_zero_req_lim(struct device *dev,
+@@ -2012,12 +2028,19 @@ static ssize_t srp_create_target(struct 
+ 
+ 	shost_printk(KERN_DEBUG, target->scsi_host, PFX
+ 		     "new target: id_ext %016llx ioc_guid %016llx pkey %04x "
+-		     "service_id %016llx dgid %pI6\n",
++		     "service_id %016llx dgid %04x:%04x:%04x:%04x:%04x:%04x:%04x:%04x\n",
+ 	       (unsigned long long) be64_to_cpu(target->id_ext),
+ 	       (unsigned long long) be64_to_cpu(target->ioc_guid),
+ 	       be16_to_cpu(target->path.pkey),
+ 	       (unsigned long long) be64_to_cpu(target->service_id),
+-	       target->path.dgid.raw);
++	       (int) be16_to_cpu(*(__be16 *) &target->path.dgid.raw[0]),
++	       (int) be16_to_cpu(*(__be16 *) &target->path.dgid.raw[2]),
++	       (int) be16_to_cpu(*(__be16 *) &target->path.dgid.raw[4]),
++	       (int) be16_to_cpu(*(__be16 *) &target->path.dgid.raw[6]),
++	       (int) be16_to_cpu(*(__be16 *) &target->path.dgid.raw[8]),
++	       (int) be16_to_cpu(*(__be16 *) &target->path.dgid.raw[10]),
++	       (int) be16_to_cpu(*(__be16 *) &target->path.dgid.raw[12]),
++	       (int) be16_to_cpu(*(__be16 *) &target->path.dgid.raw[14]));
+ 
+ 	ret = srp_create_target_ib(target);
+ 	if (ret)

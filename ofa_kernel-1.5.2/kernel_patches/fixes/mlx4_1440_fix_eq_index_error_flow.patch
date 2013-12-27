@@ -1,0 +1,29 @@
+From 9dbb40d48154a575ef6f962c04f720394cd2bae5 Mon Sep 17 00:00:00 2001
+From: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+Date: Tue, 16 Mar 2010 10:21:10 +0200
+Subject: [PATCH] mlx4_core: Fix index whed free comletion eqs
+
+Signed-off-by: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+---
+ drivers/net/mlx4/eq.c |    4 +++-
+ 1 files changed, 3 insertions(+), 1 deletions(-)
+
+diff --git a/drivers/net/mlx4/eq.c b/drivers/net/mlx4/eq.c
+index 803bac6..42885c7 100644
+--- a/drivers/net/mlx4/eq.c
++++ b/drivers/net/mlx4/eq.c
+@@ -583,8 +583,10 @@ int mlx4_init_eq_table(struct mlx4_dev *dev)
+ 		err = mlx4_create_eq(dev, dev->caps.num_cqs + MLX4_NUM_SPARE_EQE,
+ 				     (dev->flags & MLX4_FLAG_MSI_X) ? i : 0,
+ 				     &priv->eq_table.eq[i]);
+-		if (err)
++		if (err) {
++			--i;
+ 			goto err_out_unmap;
++		}
+ 	}
+ 
+ 	err = mlx4_create_eq(dev, MLX4_NUM_ASYNC_EQE + MLX4_NUM_SPARE_EQE,
+-- 
+1.5.3.7
+

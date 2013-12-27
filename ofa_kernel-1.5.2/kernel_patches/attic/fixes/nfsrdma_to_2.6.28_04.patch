@@ -1,0 +1,52 @@
+From a5abf4e81545d9c7280c49cae853cc45fd769ddf Mon Sep 17 00:00:00 2001
+From: Tom Tucker <tom@opengridcomputing.com>
+Date: Tue, 30 Sep 2008 14:05:41 -0500
+Subject: [PATCH] svcrdma: Modify post recv path to use local dma key
+
+Update the svc_rdma_post_recv routine to use the adapter's global LKEY
+instead of sc_phys_mr which is only valid when using a DMA MR.
+
+Signed-off-by: Tom Tucker <tom@opengridcomputing.com>
+
+diff --git a/net/sunrpc/xprtrdma/svc_rdma_transport.c b/net/sunrpc/xprtrdma/svc_rdma_transport.c
+index c3e8db0..d9183cb 100644
+--- a/net/sunrpc/xprtrdma/svc_rdma_transport.c
++++ b/net/sunrpc/xprtrdma/svc_rdma_transport.c
+@@ -483,7 +483,7 @@ int svc_rdma_post_recv(struct svcxprt_rdma *xprt)
+ 	struct ib_recv_wr recv_wr, *bad_recv_wr;
+ 	struct svc_rdma_op_ctxt *ctxt;
+ 	struct page *page;
+-	unsigned long pa;
++	dma_addr_t pa;
+ 	int sge_no;
+ 	int buflen;
+ 	int ret;
+@@ -495,13 +495,15 @@ int svc_rdma_post_recv(struct svcxprt_rdma *xprt)
+ 		BUG_ON(sge_no >= xprt->sc_max_sge);
+ 		page = svc_rdma_get_page();
+ 		ctxt->pages[sge_no] = page;
+-		atomic_inc(&xprt->sc_dma_used);
+ 		pa = ib_dma_map_page(xprt->sc_cm_id->device,
+ 				     page, 0, PAGE_SIZE,
+ 				     DMA_FROM_DEVICE);
++		if (ib_dma_mapping_error(xprt->sc_cm_id->device, pa))
++			goto err_put_ctxt;
++		atomic_inc(&xprt->sc_dma_used);
+ 		ctxt->sge[sge_no].addr = pa;
+ 		ctxt->sge[sge_no].length = PAGE_SIZE;
+-		ctxt->sge[sge_no].lkey = xprt->sc_phys_mr->lkey;
++		ctxt->sge[sge_no].lkey = xprt->sc_dma_lkey;
+ 		buflen += PAGE_SIZE;
+ 	}
+ 	ctxt->count = sge_no;
+@@ -517,6 +519,10 @@ int svc_rdma_post_recv(struct svcxprt_rdma *xprt)
+ 		svc_rdma_put_context(ctxt, 1);
+ 	}
+ 	return ret;
++
++ err_put_ctxt:
++	svc_rdma_put_context(ctxt, 1);
++	return -ENOMEM;
+ }
+ 
+ /*

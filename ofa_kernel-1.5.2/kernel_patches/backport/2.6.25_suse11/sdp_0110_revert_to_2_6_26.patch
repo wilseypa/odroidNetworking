@@ -1,0 +1,56 @@
+---
+ drivers/infiniband/ulp/sdp/sdp.h      |    2 +-
+ drivers/infiniband/ulp/sdp/sdp_cma.c  |    1 +
+ drivers/infiniband/ulp/sdp/sdp_main.c |    8 ++++----
+ 3 files changed, 6 insertions(+), 5 deletions(-)
+
+Index: ofed_kernel-2.6.25/drivers/infiniband/ulp/sdp/sdp.h
+===================================================================
+--- ofed_kernel-2.6.25.orig/drivers/infiniband/ulp/sdp/sdp.h	2010-06-01 14:05:28.000000000 +0300
++++ ofed_kernel-2.6.25/drivers/infiniband/ulp/sdp/sdp.h	2010-06-01 14:11:53.000000000 +0300
+@@ -584,7 +584,7 @@
+ 		}
+ 		__kfree_skb(skb);
+ 	} else {
+-		sk->sk_prot->enter_memory_pressure(sk);
++		sk->sk_prot->enter_memory_pressure();
+ 		sk_stream_moderate_sndbuf(sk);
+ 	}
+ 	return NULL;
+Index: ofed_kernel-2.6.25/drivers/infiniband/ulp/sdp/sdp_cma.c
+===================================================================
+--- ofed_kernel-2.6.25.orig/drivers/infiniband/ulp/sdp/sdp_cma.c	2010-06-01 14:05:28.000000000 +0300
++++ ofed_kernel-2.6.25/drivers/infiniband/ulp/sdp/sdp_cma.c	2010-06-01 14:11:53.000000000 +0300
+@@ -31,6 +31,7 @@
+  *
+  * $Id$
+  */
++#include <asm/semaphore.h>
+ #include <linux/device.h>
+ #include <linux/in.h>
+ #include <linux/err.h>
+Index: ofed_kernel-2.6.25/drivers/infiniband/ulp/sdp/sdp_main.c
+===================================================================
+--- ofed_kernel-2.6.25.orig/drivers/infiniband/ulp/sdp/sdp_main.c	2010-06-01 14:06:13.000000000 +0300
++++ ofed_kernel-2.6.25/drivers/infiniband/ulp/sdp/sdp_main.c	2010-06-01 14:11:53.000000000 +0300
+@@ -686,7 +686,7 @@
+ 	if (data_was_unread ||
+ 		(sock_flag(sk, SOCK_LINGER) && !sk->sk_lingertime)) {
+ 		/* Unread data was tossed, zap the connection. */
+-		NET_INC_STATS_USER(sock_net(sk), LINUX_MIB_TCPABORTONCLOSE);
++		NET_INC_STATS_USER(LINUX_MIB_TCPABORTONCLOSE);
+ 		sdp_exch_state(sk, TCPF_CLOSE_WAIT | TCPF_ESTABLISHED,
+ 			       TCP_TIME_WAIT);
+ 
+@@ -2547,9 +2547,9 @@
+ 	return mask;
+ }
+ 
+-static void sdp_enter_memory_pressure(struct sock *sk)
++static void sdp_enter_memory_pressure(void)
+ {
+-	sdp_dbg(sk, "%s\n", __func__);
++	sdp_dbg(NULL, "%s\n", __func__);
+ }
+ 
+ void sdp_urg(struct sdp_sock *ssk, struct sk_buff *skb)

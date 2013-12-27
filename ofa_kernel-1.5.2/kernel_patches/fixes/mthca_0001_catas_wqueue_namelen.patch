@@ -1,0 +1,24 @@
+Need to shorten thread name to 10 or fewer characters in 2.6.12 and
+earlier kernels. Easiest to do it generally.
+
+Signed-off-by: Jack Morgenstein <jackm@dev.mellanox.co.il>
+
+---
+
+---
+ drivers/infiniband/hw/mthca/mthca_catas.c |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+Index: ofed_kernel/drivers/infiniband/hw/mthca/mthca_catas.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/hw/mthca/mthca_catas.c
++++ ofed_kernel/drivers/infiniband/hw/mthca/mthca_catas.c
+@@ -192,7 +192,7 @@ int __init mthca_catas_init(void)
+ {
+ 	INIT_WORK(&catas_work, catas_reset);
+ 
+-	catas_wq = create_singlethread_workqueue("mthca_catas");
++	catas_wq = create_singlethread_workqueue("mthcacatas");
+ 	if (!catas_wq)
+ 		return -ENOMEM;
+ 

@@ -1,0 +1,163 @@
+mlx4_ib: XRC locking fixes, and prevention of null dereference.
+
+Based on feedback from Roland Dreier in his post (for null deref):
+http://www.spinics.net/lists/linux-rdma/msg03675.html
+(can have a null dereference if the xrc_rcv verbs are invoked for a
+ non-xrc_rcv QP by mistake).
+
+Also fixes a kernel Oops seen at a customer site, most likely due to
+insufficient locking on __mlx4_qp_lookup (this is the general QP database).
+(FM 83858).
+
+Signed-off-by: Jack Morgenstein <jackm@dev.mellanox.co.il>
+
+Index: ofed_kernel/drivers/infiniband/hw/mlx4/qp.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/hw/mlx4/qp.c	2010-06-10 15:22:57.040376000 +0300
++++ ofed_kernel/drivers/infiniband/hw/mlx4/qp.c	2010-06-10 15:23:49.669006000 +0300
+@@ -2327,11 +2327,13 @@ int mlx4_ib_create_xrc_rcv_qp(struct ib_
+ 		kfree(ctx_entry);
+ 		return -ENOMEM;
+ 	}
++	mutex_lock(&dev->xrc_reg_mutex);
+ 	qp->flags = MLX4_IB_XRC_RCV;
+ 	qp->xrcdn = to_mxrcd(init_attr->xrc_domain)->xrcdn;
+ 	INIT_LIST_HEAD(&qp->xrc_reg_list);
+ 	err = create_qp_common(dev, xrcd->pd, init_attr, NULL, 0, qp);
+ 	if (err) {
++		mutex_unlock(&dev->xrc_reg_mutex);
+ 		kfree(ctx_entry);
+ 		kfree(qp);
+ 		return err;
+@@ -2352,6 +2354,7 @@ int mlx4_ib_create_xrc_rcv_qp(struct ib_
+ 	ctx_entry->context = init_attr->qp_context;
+ 	list_add_tail(&ctx_entry->list, &qp->xrc_reg_list);
+ 	mutex_unlock(&qp->mutex);
++	mutex_unlock(&dev->xrc_reg_mutex);
+ 	*qp_num = qp->mqp.qpn;
+ 	return 0;
+ }
+@@ -2362,23 +2365,27 @@ int mlx4_ib_modify_xrc_rcv_qp(struct ib_
+ 	struct mlx4_ib_dev *dev = to_mdev(ibxrcd->device);
+ 	struct mlx4_ib_xrcd *xrcd = to_mxrcd(ibxrcd);
+ 	struct mlx4_qp *mqp;
++	struct mlx4_ib_qp *mibqp;
+ 	int err = -EINVAL;
+ 
+ 	if (!(dev->dev->caps.flags & MLX4_DEV_CAP_FLAG_XRC))
+ 		return -ENOSYS;
+ 
+ 	mutex_lock(&dev->xrc_reg_mutex);
+-	mqp = __mlx4_qp_lookup(dev->dev, qp_num);
++	mqp = mlx4_qp_lookup_lock(dev->dev, qp_num);
+ 	if (unlikely(!mqp)) {
+ 		printk(KERN_WARNING "mlx4_ib_reg_xrc_rcv_qp: "
+ 		       "unknown QPN %06x\n", qp_num);
+ 		goto err_out;
+ 	}
+ 
+-	if (xrcd->xrcdn != to_mxrcd(to_mibqp(mqp)->ibqp.xrcd)->xrcdn)
++	mibqp = to_mibqp(mqp);
++
++	if (!(mibqp->flags & MLX4_IB_XRC_RCV) || !mibqp->ibqp.xrcd ||
++	    xrcd->xrcdn != to_mxrcd(mibqp->ibqp.xrcd)->xrcdn)
+ 		goto err_out;
+ 
+-	err = mlx4_ib_modify_qp(&(to_mibqp(mqp)->ibqp), attr, attr_mask, NULL);
++	err = mlx4_ib_modify_qp(&mibqp->ibqp, attr, attr_mask, NULL);
+ 	mutex_unlock(&dev->xrc_reg_mutex);
+ 	return err;
+ 
+@@ -2403,7 +2410,7 @@ int mlx4_ib_query_xrc_rcv_qp(struct ib_x
+ 		return -ENOSYS;
+ 
+ 	mutex_lock(&dev->xrc_reg_mutex);
+-	mqp = __mlx4_qp_lookup(dev->dev, qp_num);
++	mqp = mlx4_qp_lookup_lock(dev->dev, qp_num);
+ 	if (unlikely(!mqp)) {
+ 		printk(KERN_WARNING "mlx4_ib_reg_xrc_rcv_qp: "
+ 		       "unknown QPN %06x\n", qp_num);
+@@ -2411,7 +2418,8 @@ int mlx4_ib_query_xrc_rcv_qp(struct ib_x
+ 	}
+ 
+ 	qp = to_mibqp(mqp);
+-	if (xrcd->xrcdn != to_mxrcd(qp->ibqp.xrcd)->xrcdn)
++	if (!(qp->flags & MLX4_IB_XRC_RCV) || !(qp->ibqp.xrcd) ||
++	    xrcd->xrcdn != to_mxrcd(qp->ibqp.xrcd)->xrcdn)
+ 		goto err_out;
+ 
+ 	if (qp->state == IB_QPS_RESET) {
+@@ -2494,7 +2502,7 @@ int mlx4_ib_reg_xrc_rcv_qp(struct ib_xrc
+ 	int err = -EINVAL;
+ 
+ 	mutex_lock(&to_mdev(xrcd->device)->xrc_reg_mutex);
+-	mqp = __mlx4_qp_lookup(to_mdev(xrcd->device)->dev, qp_num);
++	mqp = mlx4_qp_lookup_lock(to_mdev(xrcd->device)->dev, qp_num);
+ 	if (unlikely(!mqp)) {
+ 		printk(KERN_WARNING "mlx4_ib_reg_xrc_rcv_qp: "
+ 		       "unknown QPN %06x\n", qp_num);
+@@ -2503,7 +2511,8 @@ int mlx4_ib_reg_xrc_rcv_qp(struct ib_xrc
+ 
+ 	mibqp = to_mibqp(mqp);
+ 
+-	if (mxrcd->xrcdn != to_mxrcd(mibqp->ibqp.xrcd)->xrcdn)
++	if (!(mibqp->flags & MLX4_IB_XRC_RCV) || !(mibqp->ibqp.xrcd) ||
++	    mxrcd->xrcdn != to_mxrcd(mibqp->ibqp.xrcd)->xrcdn)
+ 		goto err_out;
+ 
+ 	ctx_entry = kmalloc(sizeof *ctx_entry, GFP_KERNEL);
+@@ -2544,7 +2553,7 @@ int mlx4_ib_unreg_xrc_rcv_qp(struct ib_x
+ 	int err = -EINVAL;
+ 
+ 	mutex_lock(&to_mdev(xrcd->device)->xrc_reg_mutex);
+-	mqp = __mlx4_qp_lookup(to_mdev(xrcd->device)->dev, qp_num);
++	mqp = mlx4_qp_lookup_lock(to_mdev(xrcd->device)->dev, qp_num);
+ 	if (unlikely(!mqp)) {
+ 		printk(KERN_WARNING "mlx4_ib_unreg_xrc_rcv_qp: "
+ 		       "unknown QPN %06x\n", qp_num);
+@@ -2553,7 +2562,8 @@ int mlx4_ib_unreg_xrc_rcv_qp(struct ib_x
+ 
+ 	mibqp = to_mibqp(mqp);
+ 
+-	if (mxrcd->xrcdn != (mibqp->xrcdn & 0xffff))
++	if (!(mibqp->flags & MLX4_IB_XRC_RCV) ||
++	    mxrcd->xrcdn != (mibqp->xrcdn & 0xffff))
+ 		goto err_out;
+ 
+ 	mutex_lock(&mibqp->mutex);
+Index: ofed_kernel/drivers/net/mlx4/qp.c
+===================================================================
+--- ofed_kernel.orig/drivers/net/mlx4/qp.c	2010-06-10 15:22:57.121393000 +0300
++++ ofed_kernel/drivers/net/mlx4/qp.c	2010-06-10 15:23:49.686005000 +0300
+@@ -235,6 +235,19 @@ err_out:
+ }
+ EXPORT_SYMBOL_GPL(mlx4_qp_alloc);
+ 
++struct mlx4_qp *mlx4_qp_lookup_lock(struct mlx4_dev *dev, u32 qpn)
++{
++	struct mlx4_qp_table *qp_table = &mlx4_priv(dev)->qp_table;
++	unsigned long flags;
++	struct mlx4_qp *qp;
++
++	spin_lock_irqsave(&qp_table->lock, flags);
++	qp = radix_tree_lookup(&dev->qp_table_tree, qpn & (dev->caps.num_qps - 1));
++	spin_unlock_irqrestore(&qp_table->lock, flags);
++	return qp;
++}
++EXPORT_SYMBOL_GPL(mlx4_qp_lookup_lock);
++
+ void mlx4_qp_remove(struct mlx4_dev *dev, struct mlx4_qp *qp)
+ {
+ 	struct mlx4_qp_table *qp_table = &mlx4_priv(dev)->qp_table;
+Index: ofed_kernel/include/linux/mlx4/qp.h
+===================================================================
+--- ofed_kernel.orig/include/linux/mlx4/qp.h	2010-06-10 15:23:24.320237000 +0300
++++ ofed_kernel/include/linux/mlx4/qp.h	2010-06-10 15:23:49.696006000 +0300
+@@ -336,6 +336,7 @@ static inline struct mlx4_qp *__mlx4_qp_
+ 	return radix_tree_lookup(&dev->qp_table_tree, qpn & (dev->caps.num_qps - 1));
+ }
+ 
++struct mlx4_qp *mlx4_qp_lookup_lock(struct mlx4_dev *dev, u32 qpn);
+ void mlx4_qp_remove(struct mlx4_dev *dev, struct mlx4_qp *qp);
+ int mlx4_qp_get_region(struct mlx4_dev *dev, enum mlx4_qp_region region,
+ 			int *base_qpn, int *cnt);

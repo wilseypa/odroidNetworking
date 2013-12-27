@@ -1,0 +1,27 @@
+diff -Naurp a/drivers/infiniband/hw/nes/nes_ud.c b/drivers/infiniband/hw/nes/nes_ud.c
+--- a/drivers/infiniband/hw/nes/nes_ud.c	2010-09-14 13:10:24.000000000 +0200
++++ b/drivers/infiniband/hw/nes/nes_ud.c	2010-09-14 13:30:45.000000000 +0200
+@@ -1599,6 +1599,8 @@ int nes_ud_post_recv(struct nes_ud_file 
+ 		page_offset = nes_ud_wr->sg_list[i].addr & ~PAGE_MASK;
+ 		page_id = ((mr->va & ~PAGE_MASK) + mr_offset) >> PAGE_SHIFT;
+ 
++		nic_rqe->wqe_words[NES_NIC_RQ_WQE_LENGTH_3_2_IDX] = 0;
++
+ 		wqe_fragment_length =
+ 		(u16 *)&nic_rqe->wqe_words[NES_NIC_RQ_WQE_LENGTH_1_0_IDX];
+ 
+@@ -1615,8 +1617,12 @@ int nes_ud_post_recv(struct nes_ud_file 
+ 			NES_NIC_RQ_WQE_FRAG0_LOW_IDX + 2*wqe_fragment_index,
+ 				  mr->addrs[page_id]+page_offset);
+ 
+-		      wqe_fragment_length[wqe_fragment_index] =
+-				cpu_to_le16(PAGE_SIZE - page_offset);
++			if (remaining_length >= PAGE_SIZE)
++				wqe_fragment_length[wqe_fragment_index] =
++					cpu_to_le16(PAGE_SIZE - page_offset);
++			else
++				wqe_fragment_length[wqe_fragment_index] =
++					cpu_to_le16(remaining_length);
+ 
+ 		      remaining_length -= PAGE_SIZE - page_offset;
+ 		      page_offset = 0;

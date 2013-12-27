@@ -1,0 +1,77 @@
+From 59bcc37458e69af0719691a7acf8789173d14d51 Mon Sep 17 00:00:00 2001
+From: Eli Cohen <eli@mellanox.co.il>
+Date: Wed, 6 Jan 2010 11:16:26 +0200
+Subject: [PATCH 10/12] mlx4: extend cap flags to 64 bit
+
+Since the number of capabilities was extended and now occupies two dwords, use
+a single 64 bit cap flags formed of the two 32 bit flags registers.
+
+Signed-off-by: Eli Cohen <eli@mellanox.co.il>
+---
+ drivers/net/mlx4/fw.c       |   10 +++++++---
+ drivers/net/mlx4/fw.h       |    2 +-
+ include/linux/mlx4/device.h |    2 +-
+ 3 files changed, 9 insertions(+), 5 deletions(-)
+
+Index: ofed_kernel-fixes/drivers/net/mlx4/fw.c
+===================================================================
+--- ofed_kernel-fixes.orig/drivers/net/mlx4/fw.c	2010-03-16 15:43:35.000000000 +0200
++++ ofed_kernel-fixes/drivers/net/mlx4/fw.c	2010-03-16 15:44:57.000000000 +0200
+@@ -78,7 +78,7 @@ MODULE_PARM_DESC(enable_pre_t11_mode, "F
+ 		}						      \
+ 	} while (0)
+ 
+-static void dump_dev_cap_flags(struct mlx4_dev *dev, u32 flags)
++static void dump_dev_cap_flags(struct mlx4_dev *dev, u64 flags)
+ {
+ 	static const char *fname[] = {
+ 		[ 0] = "RC transport",
+@@ -109,7 +109,7 @@ static void dump_dev_cap_flags(struct ml
+ 
+ 	mlx4_dbg(dev, "DEV_CAP flags:\n");
+ 	for (i = 0; i < ARRAY_SIZE(fname); ++i)
+-		if (fname[i] && (flags & (1 << i)))
++		if (fname[i] && (flags & (1LL << i)))
+ 			mlx4_dbg(dev, "    %s\n", fname[i]);
+ }
+ 
+@@ -153,6 +153,7 @@ int mlx4_QUERY_DEV_CAP(struct mlx4_dev *
+ 	int i;
+ 	u32 in_modifier;
+ 	u64 out_param;
++	u32 tmp1, tmp2;
+ 
+ #define QUERY_DEV_CAP_OUT_SIZE		       0x100
+ #define QUERY_DEV_CAP_MAX_SRQ_SZ_OFFSET		0x10
+@@ -187,6 +188,7 @@ int mlx4_QUERY_DEV_CAP(struct mlx4_dev *
+ #define QUERY_DEV_CAP_MAX_GID_OFFSET		0x3b
+ #define QUERY_DEV_CAP_RATE_SUPPORT_OFFSET	0x3c
+ #define QUERY_DEV_CAP_MAX_PKEY_OFFSET		0x3f
++#define QUERY_DEV_CAP_EXT_FLAGS_OFFSET		0x40
+ #define QUERY_DEV_CAP_UDP_RSS_OFFSET		0x42
+ #define QUERY_DEV_CAP_ETH_UC_LOOPBACK_OFFSET	0x43
+ #define QUERY_DEV_CAP_FLAGS_OFFSET		0x44
+@@ -287,7 +289,9 @@ int mlx4_QUERY_DEV_CAP(struct mlx4_dev *
+ 	dev_cap->udp_rss = field & 0x1;
+ 	MLX4_GET(field, outbox, QUERY_DEV_CAP_ETH_UC_LOOPBACK_OFFSET);
+ 	dev_cap->loopback_support = field & 0x1;
+-	MLX4_GET(dev_cap->flags, outbox, QUERY_DEV_CAP_FLAGS_OFFSET);
++	MLX4_GET(tmp1, outbox, QUERY_DEV_CAP_EXT_FLAGS_OFFSET);
++	MLX4_GET(tmp2, outbox, QUERY_DEV_CAP_FLAGS_OFFSET);
++	dev_cap->flags = tmp2 | (u64)tmp1 << 32;
+ 	MLX4_GET(field, outbox, QUERY_DEV_CAP_RSVD_UAR_OFFSET);
+ 	dev_cap->reserved_uars = field >> 4;
+ 	MLX4_GET(field, outbox, QUERY_DEV_CAP_UAR_SZ_OFFSET);
+Index: ofed_kernel-fixes/include/linux/mlx4/device.h
+===================================================================
+--- ofed_kernel-fixes.orig/include/linux/mlx4/device.h	2010-03-16 15:43:36.000000000 +0200
++++ ofed_kernel-fixes/include/linux/mlx4/device.h	2010-03-16 15:44:57.000000000 +0200
+@@ -239,7 +239,7 @@ struct mlx4_caps {
+ 	int			max_xrcds;
+ 	u32			max_msg_sz;
+ 	u32			page_size_cap;
+-	u32			flags;
++	u64			flags;
+ 	u32			bmme_flags;
+ 	u32			reserved_lkey;
+ 	u16			stat_rate_support;

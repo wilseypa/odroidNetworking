@@ -1,0 +1,34 @@
+---
+ drivers/net/cxgb3/cxgb3_main.c |   11 +++--------
+ 1 file changed, 3 insertions(+), 8 deletions(-)
+
+Index: ofed_kernel/drivers/net/cxgb3/cxgb3_main.c
+===================================================================
+--- ofed_kernel.orig/drivers/net/cxgb3/cxgb3_main.c
++++ ofed_kernel/drivers/net/cxgb3/cxgb3_main.c
+@@ -1249,14 +1249,9 @@ static char stats_strings[][ETH_GSTRING_
+ 
+ };
+ 
+-static int get_sset_count(struct net_device *dev, int sset)
++static int get_stats_count(struct net_device *dev)
+ {
+-	switch (sset) {
+-	case ETH_SS_STATS:
+-		return ARRAY_SIZE(stats_strings);
+-	default:
+-		return -EOPNOTSUPP;
+-	}
++	return ARRAY_SIZE(stats_strings);
+ }
+ 
+ #define T3_REGMAP_SIZE (3 * 1024)
+@@ -1774,7 +1769,7 @@ static const struct ethtool_ops cxgb_eth
+ 	.get_strings = get_strings,
+ 	.phys_id = cxgb3_phys_id,
+ 	.nway_reset = restart_autoneg,
+-	.get_sset_count = get_sset_count,
++	.get_stats_count = get_stats_count,
+ 	.get_ethtool_stats = get_stats,
+ 	.get_regs_len = get_regs_len,
+ 	.get_regs = get_regs,

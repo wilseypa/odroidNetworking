@@ -1,0 +1,74 @@
+
+backports: 2.6.26: change device_create() back to device_create_drvdata()
+
+Reverts commit 91bd418fdc8526ee70a0e8f7970b584c8870ae10, except for ipath.
+    
+Signed-off-by: Jack Morgenstein <jackm@dev.mellanox.co.il>
+
+diff --git a/drivers/infiniband/core/cm.c b/drivers/infiniband/core/cm.c
+index 3cab0ce..a78d35a 100644
+--- a/drivers/infiniband/core/cm.c
++++ b/drivers/infiniband/core/cm.c
+@@ -3691,9 +3691,9 @@ static void cm_add_one(struct ib_device *ib_device)
+ 	cm_dev->ib_device = ib_device;
+ 	cm_get_ack_delay(cm_dev);
+ 
++	cm_dev->device = device_create_drvdata(&cm_class, &ib_device->dev,
++					       MKDEV(0, 0), NULL,
++					       "%s", ib_device->name);
+-	cm_dev->device = device_create(&cm_class, &ib_device->dev,
+-				       MKDEV(0, 0), NULL,
+-				       "%s", ib_device->name);
+ 	if (!cm_dev->device) {
+ 		kfree(cm_dev);
+ 		return;
+diff --git a/drivers/infiniband/core/user_mad.c b/drivers/infiniband/core/user_mad.c
+index 268a2d2..8c46f22 100644
+--- a/drivers/infiniband/core/user_mad.c
++++ b/drivers/infiniband/core/user_mad.c
+@@ -1016,9 +1016,9 @@ static int ib_umad_init_port(struct ib_device *device, int port_num,
+ 	if (cdev_add(port->cdev, base_dev + port->dev_num, 1))
+ 		goto err_cdev;
+ 
++	port->dev = device_create_drvdata(umad_class, device->dma_device,
++					  port->cdev->dev, port,
++					  "umad%d", port->dev_num);
+-	port->dev = device_create(umad_class, device->dma_device,
+-				  port->cdev->dev, port,
+-				  "umad%d", port->dev_num);
+ 	if (IS_ERR(port->dev))
+ 		goto err_cdev;
+ 
+@@ -1036,9 +1036,9 @@ static int ib_umad_init_port(struct ib_device *device, int port_num,
+ 	if (cdev_add(port->sm_cdev, base_dev + port->dev_num + IB_UMAD_MAX_PORTS, 1))
+ 		goto err_sm_cdev;
+ 
++	port->sm_dev = device_create_drvdata(umad_class, device->dma_device,
++					     port->sm_cdev->dev, port,
++					     "issm%d", port->dev_num);
+-	port->sm_dev = device_create(umad_class, device->dma_device,
+-				     port->sm_cdev->dev, port,
+-				     "issm%d", port->dev_num);
+ 	if (IS_ERR(port->sm_dev))
+ 		goto err_sm_cdev;
+ 
+diff --git a/drivers/infiniband/core/uverbs_main.c b/drivers/infiniband/core/uverbs_main.c
+index aeee856..d85af1b 100644
+--- a/drivers/infiniband/core/uverbs_main.c
++++ b/drivers/infiniband/core/uverbs_main.c
+@@ -764,9 +764,12 @@ static void ib_uverbs_add_one(struct ib_device *device)
+ 	if (cdev_add(uverbs_dev->cdev, IB_UVERBS_BASE_DEV + uverbs_dev->devnum, 1))
+ 		goto err_cdev;
+ 
++	uverbs_dev->dev = device_create_drvdata(uverbs_class,
++						device->dma_device,
++						uverbs_dev->cdev->dev,
++						uverbs_dev,
++						"uverbs%d",
++						uverbs_dev->devnum);
+-	uverbs_dev->dev = device_create(uverbs_class, device->dma_device,
+-					uverbs_dev->cdev->dev, uverbs_dev,
+-					"uverbs%d", uverbs_dev->devnum);
+ 	if (IS_ERR(uverbs_dev->dev))
+ 		goto err_cdev;
+ 

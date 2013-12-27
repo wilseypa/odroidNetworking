@@ -1,0 +1,64 @@
+commit a7f18a776785aecb5eb9967aef6f0f603b698ba0
+Author: Doug Ledford <dledford@redhat.com>
+Date:   Thu Jul 16 12:47:55 2009 -0400
+
+mlx4: Fix attempts to use kmalloc on overly large allocations
+
+Based on Doug Ledford's patch for mthca.
+
+Signed-off-by: Jack Morgenstein <jackm@dev.mellanox.co.il>
+    
+diff --git a/drivers/net/mlx4/mr.c b/drivers/net/mlx4/mr.c
+index d606edf..312e18d 100644
+--- a/drivers/net/mlx4/mr.c
++++ b/drivers/net/mlx4/mr.c
+@@ -145,8 +145,11 @@ static int lx4_buddy_init(struct mlx4_buddy *buddy, int max_order)
+ 		goto err_out;
+ 
+ 	for (i = 0; i <= buddy->max_order; ++i) {
+-		s = BITS_TO_LONGS(1 << (buddy->max_order - i));
+-		buddy->bits[i] = kmalloc(s * sizeof (long), GFP_KERNEL);
++		s = BITS_TO_LONGS(1 << (buddy->max_order - i)) * sizeof(long);
++		if(s > PAGE_SIZE)
++			buddy->bits[i] = (unsigned long *)__get_free_pages(GFP_KERNEL, get_order(s));
++		else 
++			buddy->bits[i] = kmalloc(s, GFP_KERNEL);
+ 		if (!buddy->bits[i])
+ 			goto err_out_free;
+ 		bitmap_zero(buddy->bits[i], 1 << (buddy->max_order - i));
+@@ -159,9 +162,13 @@ static int mlx4_buddy_init(struct mlx4_buddy *buddy, int max_order)
+ 	return 0;
+ 
+ err_out_free:
+-	for (i = 0; i <= buddy->max_order; ++i)
+-		kfree(buddy->bits[i]);
+-
++	for (i = 0; i <= buddy->max_order; ++i){
++		s = BITS_TO_LONGS(1 << (buddy->max_order - i)) * sizeof(long);
++		if(s > PAGE_SIZE)
++			free_pages((unsigned long)buddy->bits[i], get_order(s));
++		else
++			kfree(buddy->bits[i]);
++	}
+ err_out:
+ 	kfree(buddy->bits);
+ 	kfree(buddy->num_free);
+@@ -171,10 +178,15 @@ err_out:
+ 
+ static void mlx4_buddy_cleanup(struct mlx4_buddy *buddy)
+ {
+-	int i;
++	int i, s;
+ 
+-	for (i = 0; i <= buddy->max_order; ++i)
+-		kfree(buddy->bits[i]);
++	for (i = 0; i <= buddy->max_order; ++i){
++		s = BITS_TO_LONGS(1 << (buddy->max_order - i)) * sizeof(long);
++		if(s > PAGE_SIZE)
++			free_pages((unsigned long)buddy->bits[i], get_order(s));
++		else
++			kfree(buddy->bits[i]);
++	}
+ 
+ 	kfree(buddy->bits);
+ 	kfree(buddy->num_free);

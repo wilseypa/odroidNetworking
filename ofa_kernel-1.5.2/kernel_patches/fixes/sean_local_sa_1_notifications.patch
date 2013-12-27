@@ -1,0 +1,1413 @@
+Add SA client support for notice/trap registration using InformInfo.
+Clients can use the ib_sa interface to register for SA events based
+on trap numbers, and receive SA event notification.  This allows
+clients to receive notification, such as GID in/out of service.
+
+Signed-off-by: Sean Hefty <sean.hefty@intel.com>
+---
+
+ drivers/infiniband/core/Makefile   |    2 
+ drivers/infiniband/core/notice.c   |  749 +++++++++++++++++++++++++++++++++++++
+ drivers/infiniband/core/sa.h       |   16 
+ drivers/infiniband/core/sa_query.c |  313 +++++++++++++++
+ include/rdma/ib_sa.h               |  171 ++++++++
+ 5 files changed, 1248 insertions(+), 3 deletions(-)
+
+V2:
+modified ib_sa_register_inform_info() to use alloc_mad,
+per changes in commit 2aec5c602c6a44e2a3a173339a9ab94549658e4b
+
+V3:
+Commit 2aec5c602c6a44e2a3a173339a9ab94549658e4b on 2008-02-05 modified
+the SA notification patch to use alloc_mad() from within
+sa_query.c:ib_sa_informinfo_query(), but didn't also modify the function
+to use the associated free_mad() call on exit, resulting in a lost
+kref_put() on the AH structure.
+
+Signed-off-by: Jack Morgenstein <jackm@dev.mellanox.co.il>
+Signed-off-by: Michael Brooks <michael.brooks@qlogic.com>
+
+V4:
+fixed kernel oops in ib_sa_notice_resp(). See Bugzilla 1347.
+
+Signed-off-by: Amar Mudrankit <amar.mudrankit@qlogic.com>
+Signed-off-by: Jack Morgenstein <jackm@dev.mellanox.co.il>
+
+Index: ofed_kernel-fixes/drivers/infiniband/core/Makefile
+===================================================================
+--- ofed_kernel-fixes.orig/drivers/infiniband/core/Makefile	2010-08-22 16:20:21.000000000 +0300
++++ ofed_kernel-fixes/drivers/infiniband/core/Makefile	2010-08-22 16:21:52.031539544 +0300
+@@ -13,7 +13,7 @@ ib_core-$(CONFIG_INFINIBAND_USER_MEM) +=
+ 
+ ib_mad-y :=			mad.o smi.o agent.o mad_rmpp.o
+ 
+-ib_sa-y :=			sa_query.o multicast.o
++ib_sa-y :=			sa_query.o multicast.o notice.o
+ 
+ ib_cm-y :=			cm.o
+ 
+Index: ofed_kernel-fixes/drivers/infiniband/core/notice.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ ofed_kernel-fixes/drivers/infiniband/core/notice.c	2010-08-22 16:21:52.031539544 +0300
+@@ -0,0 +1,749 @@
++/*
++ * Copyright (c) 2006 Intel Corporation.  All rights reserved.
++ *
++ * This software is available to you under a choice of one of two
++ * licenses.  You may choose to be licensed under the terms of the GNU
++ * General Public License (GPL) Version 2, available from the file
++ * COPYING in the main directory of this source tree, or the
++ * OpenIB.org BSD license below:
++ *
++ *     Redistribution and use in source and binary forms, with or
++ *     without modification, are permitted provided that the following
++ *     conditions are met:
++ *
++ *      - Redistributions of source code must retain the above
++ *        copyright notice, this list of conditions and the following
++ *        disclaimer.
++ *
++ *      - Redistributions in binary form must reproduce the above
++ *        copyright notice, this list of conditions and the following
++ *        disclaimer in the documentation and/or other materials
++ *        provided with the distribution.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
++ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
++ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
++ * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
++ * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
++ * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
++ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++ * SOFTWARE.
++ */
++
++#include <linux/completion.h>
++#include <linux/dma-mapping.h>
++#include <linux/err.h>
++#include <linux/interrupt.h>
++#include <linux/pci.h>
++#include <linux/bitops.h>
++#include <linux/random.h>
++
++#include "sa.h"
++
++MODULE_AUTHOR("Sean Hefty");
++MODULE_DESCRIPTION("InfiniBand InformInfo & Notice event handling");
++MODULE_LICENSE("Dual BSD/GPL");
++
++static void inform_add_one(struct ib_device *device);
++static void inform_remove_one(struct ib_device *device);
++
++static struct ib_client inform_client = {
++	.name   = "ib_notice",
++	.add    = inform_add_one,
++	.remove = inform_remove_one
++};
++
++static struct ib_sa_client	sa_client;
++static struct workqueue_struct	*inform_wq;
++
++struct inform_device;
++
++struct inform_port {
++	struct inform_device	*dev;
++	spinlock_t		lock;
++	struct rb_root		table;
++	atomic_t		refcount;
++	struct completion	comp;
++	u8			port_num;
++};
++
++struct inform_device {
++	struct ib_device	*device;
++	struct ib_event_handler	event_handler;
++	int			start_port;
++	int			end_port;
++	struct inform_port	port[0];
++};
++
++enum inform_state {
++	INFORM_IDLE,
++	INFORM_REGISTERING,
++	INFORM_MEMBER,
++	INFORM_BUSY,
++	INFORM_ERROR
++};
++
++struct inform_member;
++
++struct inform_group {
++	u16			trap_number;
++	struct rb_node		node;
++	struct inform_port	*port;
++	spinlock_t		lock;
++	struct work_struct	work;
++	struct list_head	pending_list;
++	struct list_head	active_list;
++	struct list_head	notice_list;
++	struct inform_member	*last_join;
++	int			members;
++	enum inform_state	join_state; /* State relative to SA */
++	atomic_t		refcount;
++	enum inform_state	state;
++	struct ib_sa_query	*query;
++	int			query_id;
++};
++
++struct inform_member {
++	struct ib_inform_info	info;
++	struct ib_sa_client	*client;
++	struct inform_group	*group;
++	struct list_head	list;
++	enum inform_state	state;
++	atomic_t		refcount;
++	struct completion	comp;
++};
++
++struct inform_notice {
++	struct list_head	list;
++	struct ib_sa_notice	notice;
++};
++
++static void reg_handler(int status, struct ib_sa_inform *inform,
++			 void *context);
++static void unreg_handler(int status, struct ib_sa_inform *inform,
++			  void *context);
++
++static struct inform_group *inform_find(struct inform_port *port,
++					u16 trap_number)
++{
++	struct rb_node *node = port->table.rb_node;
++	struct inform_group *group;
++
++	while (node) {
++		group = rb_entry(node, struct inform_group, node);
++		if (trap_number < group->trap_number)
++			node = node->rb_left;
++		else if (trap_number > group->trap_number)
++			node = node->rb_right;
++		else
++			return group;
++	}
++	return NULL;
++}
++
++static struct inform_group *inform_insert(struct inform_port *port,
++					  struct inform_group *group)
++{
++	struct rb_node **link = &port->table.rb_node;
++	struct rb_node *parent = NULL;
++	struct inform_group *cur_group;
++
++	while (*link) {
++		parent = *link;
++		cur_group = rb_entry(parent, struct inform_group, node);
++		if (group->trap_number < cur_group->trap_number)
++			link = &(*link)->rb_left;
++		else if (group->trap_number > cur_group->trap_number)
++			link = &(*link)->rb_right;
++		else
++			return cur_group;
++	}
++	rb_link_node(&group->node, parent, link);
++	rb_insert_color(&group->node, &port->table);
++	return NULL;
++}
++
++static void deref_port(struct inform_port *port)
++{
++	if (atomic_dec_and_test(&port->refcount))
++		complete(&port->comp);
++}
++
++static void release_group(struct inform_group *group)
++{
++	struct inform_port *port = group->port;
++	unsigned long flags;
++
++	spin_lock_irqsave(&port->lock, flags);
++	if (atomic_dec_and_test(&group->refcount)) {
++		rb_erase(&group->node, &port->table);
++		spin_unlock_irqrestore(&port->lock, flags);
++		kfree(group);
++		deref_port(port);
++	} else
++		spin_unlock_irqrestore(&port->lock, flags);
++}
++
++static void deref_member(struct inform_member *member)
++{
++	if (atomic_dec_and_test(&member->refcount))
++		complete(&member->comp);
++}
++
++static void queue_reg(struct inform_member *member)
++{
++	struct inform_group *group = member->group;
++	unsigned long flags;
++
++	spin_lock_irqsave(&group->lock, flags);
++	list_add(&member->list, &group->pending_list);
++	if (group->state == INFORM_IDLE) {
++		group->state = INFORM_BUSY;
++		atomic_inc(&group->refcount);
++		queue_work(inform_wq, &group->work);
++	}
++	spin_unlock_irqrestore(&group->lock, flags);
++}
++
++static int send_reg(struct inform_group *group, struct inform_member *member)
++{
++	struct inform_port *port = group->port;
++	struct ib_sa_inform inform;
++	int ret;
++
++	memset(&inform, 0, sizeof inform);
++	inform.lid_range_begin = cpu_to_be16(0xFFFF);
++	inform.is_generic = 1;
++	inform.subscribe = 1;
++	inform.type = cpu_to_be16(IB_SA_EVENT_TYPE_ALL);
++	inform.trap.generic.trap_num = cpu_to_be16(member->info.trap_number);
++	inform.trap.generic.resp_time = 19;
++	inform.trap.generic.producer_type =
++				cpu_to_be32(IB_SA_EVENT_PRODUCER_TYPE_ALL);
++
++	group->last_join = member;
++	ret = ib_sa_informinfo_query(&sa_client, port->dev->device,
++				     port->port_num, &inform, 3000, GFP_KERNEL,
++				     reg_handler, group,&group->query);
++	if (ret >= 0) {
++		group->query_id = ret;
++		ret = 0;
++	}
++	return ret;
++}
++
++static int send_unreg(struct inform_group *group)
++{
++	struct inform_port *port = group->port;
++	struct ib_sa_inform inform;
++	int ret;
++
++	memset(&inform, 0, sizeof inform);
++	inform.lid_range_begin = cpu_to_be16(0xFFFF);
++	inform.is_generic = 1;
++	inform.type = cpu_to_be16(IB_SA_EVENT_TYPE_ALL);
++	inform.trap.generic.trap_num = cpu_to_be16(group->trap_number);
++	inform.trap.generic.qpn = IB_QP1;
++	inform.trap.generic.resp_time = 19;
++	inform.trap.generic.producer_type =
++				cpu_to_be32(IB_SA_EVENT_PRODUCER_TYPE_ALL);
++
++	ret = ib_sa_informinfo_query(&sa_client, port->dev->device,
++				     port->port_num, &inform, 3000, GFP_KERNEL,
++				     unreg_handler, group, &group->query);
++	if (ret >= 0) {
++		group->query_id = ret;
++		ret = 0;
++	}
++	return ret;
++}
++
++static void join_group(struct inform_group *group, struct inform_member *member)
++{
++	member->state = INFORM_MEMBER;
++	group->members++;
++	list_move(&member->list, &group->active_list);
++}
++
++static int fail_join(struct inform_group *group, struct inform_member *member,
++		     int status)
++{
++	spin_lock_irq(&group->lock);
++	list_del_init(&member->list);
++	spin_unlock_irq(&group->lock);
++	return member->info.callback(status, &member->info, NULL);
++}
++
++static void process_group_error(struct inform_group *group)
++{
++	struct inform_member *member;
++	int ret;
++
++	spin_lock_irq(&group->lock);
++	while (!list_empty(&group->active_list)) {
++		member = list_entry(group->active_list.next,
++				    struct inform_member, list);
++		atomic_inc(&member->refcount);
++		list_del_init(&member->list);
++		group->members--;
++		member->state = INFORM_ERROR;
++		spin_unlock_irq(&group->lock);
++
++		ret = member->info.callback(-ENETRESET, &member->info, NULL);
++		deref_member(member);
++		if (ret)
++			ib_sa_unregister_inform_info(&member->info);
++		spin_lock_irq(&group->lock);
++	}
++
++	group->join_state = INFORM_IDLE;
++	group->state = INFORM_BUSY;
++	spin_unlock_irq(&group->lock);
++}
++
++/*
++ * Report a notice to all active subscribers.  We use a temporary list to
++ * handle unsubscription requests while the notice is being reported, which
++ * avoids holding the group lock while in the user's callback.
++ */
++static void process_notice(struct inform_group *group,
++			   struct inform_notice *info_notice)
++{
++	struct inform_member *member;
++	struct list_head list;
++	int ret;
++
++	INIT_LIST_HEAD(&list);
++
++	spin_lock_irq(&group->lock);
++	list_splice_init(&group->active_list, &list);
++	while (!list_empty(&list)) {
++
++		member = list_entry(list.next, struct inform_member, list);
++		atomic_inc(&member->refcount);
++		list_move(&member->list, &group->active_list);
++		spin_unlock_irq(&group->lock);
++
++		ret = member->info.callback(0, &member->info,
++					    &info_notice->notice);
++		deref_member(member);
++		if (ret)
++			ib_sa_unregister_inform_info(&member->info);
++		spin_lock_irq(&group->lock);
++	}
++	spin_unlock_irq(&group->lock);
++}
++
++static void inform_work_handler(struct work_struct *work)
++{
++	struct inform_group *group;
++	struct inform_member *member;
++	struct ib_inform_info *info;
++	struct inform_notice *info_notice;
++	int status, ret;
++
++	group = container_of(work, typeof(*group), work);
++retest:
++	spin_lock_irq(&group->lock);
++	while (!list_empty(&group->pending_list) ||
++	       !list_empty(&group->notice_list) ||
++	       (group->state == INFORM_ERROR)) {
++
++		if (group->state == INFORM_ERROR) {
++			spin_unlock_irq(&group->lock);
++			process_group_error(group);
++			goto retest;
++		}
++
++		if (!list_empty(&group->notice_list)) {
++			info_notice = list_entry(group->notice_list.next,
++						 struct inform_notice, list);
++			list_del(&info_notice->list);
++			spin_unlock_irq(&group->lock);
++			process_notice(group, info_notice);
++			kfree(info_notice);
++			goto retest;
++		}
++
++		member = list_entry(group->pending_list.next,
++				    struct inform_member, list);
++		info = &member->info;
++		atomic_inc(&member->refcount);
++
++		if (group->join_state == INFORM_MEMBER) {
++			join_group(group, member);
++			spin_unlock_irq(&group->lock);
++			ret = info->callback(0, info, NULL);
++		} else {
++			spin_unlock_irq(&group->lock);
++			status = send_reg(group, member);
++			if (!status) {
++				deref_member(member);
++				return;
++			}
++			ret = fail_join(group, member, status);
++		}
++
++		deref_member(member);
++		if (ret)
++			ib_sa_unregister_inform_info(&member->info);
++		spin_lock_irq(&group->lock);
++	}
++
++	if (!group->members && (group->join_state == INFORM_MEMBER)) {
++		group->join_state = INFORM_IDLE;
++		spin_unlock_irq(&group->lock);
++		if (send_unreg(group))
++			goto retest;
++	} else {
++		group->state = INFORM_IDLE;
++		spin_unlock_irq(&group->lock);
++		release_group(group);
++	}
++}
++
++/*
++ * Fail a join request if it is still active - at the head of the pending queue.
++ */
++static void process_join_error(struct inform_group *group, int status)
++{
++	struct inform_member *member;
++	int ret;
++
++	spin_lock_irq(&group->lock);
++	member = list_entry(group->pending_list.next,
++			    struct inform_member, list);
++	if (group->last_join == member) {
++		atomic_inc(&member->refcount);
++		list_del_init(&member->list);
++		spin_unlock_irq(&group->lock);
++		ret = member->info.callback(status, &member->info, NULL);
++		deref_member(member);
++		if (ret)
++			ib_sa_unregister_inform_info(&member->info);
++	} else
++		spin_unlock_irq(&group->lock);
++}
++
++static void reg_handler(int status, struct ib_sa_inform *inform, void *context)
++{
++	struct inform_group *group = context;
++
++	if (status)
++		process_join_error(group, status);
++	else
++		group->join_state = INFORM_MEMBER;
++
++	inform_work_handler(&group->work);
++}
++
++static void unreg_handler(int status, struct ib_sa_inform *rec, void *context)
++{
++	struct inform_group *group = context;
++
++	inform_work_handler(&group->work);
++}
++
++int notice_dispatch(struct ib_device *device, u8 port_num,
++		    struct ib_sa_notice *notice)
++{
++	struct inform_device *dev;
++	struct inform_port *port;
++	struct inform_group *group;
++	struct inform_notice *info_notice;
++
++	dev = ib_get_client_data(device, &inform_client);
++	if (!dev)
++		return 0; /* No one to give notice to. */
++
++	port = &dev->port[port_num - dev->start_port];
++	spin_lock_irq(&port->lock);
++	group = inform_find(port, __be16_to_cpu(notice->trap.
++						generic.trap_num));
++	if (!group) {
++		spin_unlock_irq(&port->lock);
++		return 0;
++	}
++
++	atomic_inc(&group->refcount);
++	spin_unlock_irq(&port->lock);
++
++	info_notice = kmalloc(sizeof *info_notice, GFP_KERNEL);
++	if (!info_notice) {
++		release_group(group);
++		return -ENOMEM;
++	}
++
++	info_notice->notice = *notice;
++
++	spin_lock_irq(&group->lock);
++	list_add(&info_notice->list, &group->notice_list);
++	if (group->state == INFORM_IDLE) {
++		group->state = INFORM_BUSY;
++		spin_unlock_irq(&group->lock);
++		inform_work_handler(&group->work);
++	} else {
++		spin_unlock_irq(&group->lock);
++		release_group(group);
++	}
++
++	return 0;
++}
++
++static struct inform_group *acquire_group(struct inform_port *port,
++					  u16 trap_number, gfp_t gfp_mask)
++{
++	struct inform_group *group, *cur_group;
++	unsigned long flags;
++
++	spin_lock_irqsave(&port->lock, flags);
++	group = inform_find(port, trap_number);
++	if (group)
++		goto found;
++	spin_unlock_irqrestore(&port->lock, flags);
++
++	group = kzalloc(sizeof *group, gfp_mask);
++	if (!group)
++		return NULL;
++
++	group->port = port;
++	group->trap_number = trap_number;
++	INIT_LIST_HEAD(&group->pending_list);
++	INIT_LIST_HEAD(&group->active_list);
++	INIT_LIST_HEAD(&group->notice_list);
++	INIT_WORK(&group->work, inform_work_handler);
++	spin_lock_init(&group->lock);
++
++	spin_lock_irqsave(&port->lock, flags);
++	cur_group = inform_insert(port, group);
++	if (cur_group) {
++		kfree(group);
++		group = cur_group;
++	} else
++		atomic_inc(&port->refcount);
++found:
++	atomic_inc(&group->refcount);
++	spin_unlock_irqrestore(&port->lock, flags);
++	return group;
++}
++
++/*
++ * We serialize all join requests to a single group to make our lives much
++ * easier.  Otherwise, two users could try to join the same group
++ * simultaneously, with different configurations, one could leave while the
++ * join is in progress, etc., which makes locking around error recovery
++ * difficult.
++ */
++struct ib_inform_info *
++ib_sa_register_inform_info(struct ib_sa_client *client,
++			   struct ib_device *device, u8 port_num,
++			   u16 trap_number, gfp_t gfp_mask,
++			   int (*callback)(int status,
++					   struct ib_inform_info *info,
++					   struct ib_sa_notice *notice),
++			   void *context)
++{
++	struct inform_device *dev;
++	struct inform_member *member;
++	struct ib_inform_info *info;
++	int ret;
++
++	dev = ib_get_client_data(device, &inform_client);
++	if (!dev)
++		return ERR_PTR(-ENODEV);
++
++	member = kzalloc(sizeof *member, gfp_mask);
++	if (!member)
++		return ERR_PTR(-ENOMEM);
++
++	ib_sa_client_get(client);
++	member->client = client;
++	member->info.trap_number = trap_number;
++	member->info.callback = callback;
++	member->info.context = context;
++	init_completion(&member->comp);
++	atomic_set(&member->refcount, 1);
++	member->state = INFORM_REGISTERING;
++
++	member->group = acquire_group(&dev->port[port_num - dev->start_port],
++				      trap_number, gfp_mask);
++	if (!member->group) {
++		ret = -ENOMEM;
++		goto err;
++	}
++
++	/*
++	 * The user will get the info structure in their callback.  They
++	 * could then free the info structure before we can return from
++	 * this routine.  So we save the pointer to return before queuing
++	 * any callback.
++	 */
++	info = &member->info;
++	queue_reg(member);
++	return info;
++
++err:
++	ib_sa_client_put(member->client);
++	kfree(member);
++	return ERR_PTR(ret);
++}
++EXPORT_SYMBOL(ib_sa_register_inform_info);
++
++void ib_sa_unregister_inform_info(struct ib_inform_info *info)
++{
++	struct inform_member *member;
++	struct inform_group *group;
++
++	member = container_of(info, struct inform_member, info);
++	group = member->group;
++
++	spin_lock_irq(&group->lock);
++	if (member->state == INFORM_MEMBER)
++		group->members--;
++
++	list_del_init(&member->list);
++
++	if (group->state == INFORM_IDLE) {
++		group->state = INFORM_BUSY;
++		spin_unlock_irq(&group->lock);
++		/* Continue to hold reference on group until callback */
++		queue_work(inform_wq, &group->work);
++	} else {
++		spin_unlock_irq(&group->lock);
++		release_group(group);
++	}
++
++	deref_member(member);
++	wait_for_completion(&member->comp);
++	ib_sa_client_put(member->client);
++	kfree(member);
++}
++EXPORT_SYMBOL(ib_sa_unregister_inform_info);
++
++static void inform_groups_lost(struct inform_port *port)
++{
++	struct inform_group *group;
++	struct rb_node *node;
++	unsigned long flags;
++
++	spin_lock_irqsave(&port->lock, flags);
++	for (node = rb_first(&port->table); node; node = rb_next(node)) {
++		group = rb_entry(node, struct inform_group, node);
++		spin_lock(&group->lock);
++		if (group->state == INFORM_IDLE) {
++			atomic_inc(&group->refcount);
++			queue_work(inform_wq, &group->work);
++		}
++		group->state = INFORM_ERROR;
++		spin_unlock(&group->lock);
++	}
++	spin_unlock_irqrestore(&port->lock, flags);
++}
++
++static void inform_event_handler(struct ib_event_handler *handler,
++				struct ib_event *event)
++{
++	struct inform_device *dev;
++
++	dev = container_of(handler, struct inform_device, event_handler);
++
++	switch (event->event) {
++	case IB_EVENT_PORT_ERR:
++	case IB_EVENT_LID_CHANGE:
++	case IB_EVENT_SM_CHANGE:
++	case IB_EVENT_CLIENT_REREGISTER:
++		inform_groups_lost(&dev->port[event->element.port_num -
++					      dev->start_port]);
++		break;
++	default:
++		break;
++	}
++}
++
++static void inform_add_one(struct ib_device *device)
++{
++	struct inform_device *dev;
++	struct inform_port *port;
++	int i;
++
++	if (rdma_node_get_transport(device->node_type) != RDMA_TRANSPORT_IB)
++		return;
++
++	dev = kmalloc(sizeof *dev + device->phys_port_cnt * sizeof *port,
++		      GFP_KERNEL);
++	if (!dev)
++		return;
++
++	if (device->node_type == RDMA_NODE_IB_SWITCH)
++		dev->start_port = dev->end_port = 0;
++	else {
++		dev->start_port = 1;
++		dev->end_port = device->phys_port_cnt;
++	}
++
++	for (i = 0; i <= dev->end_port - dev->start_port; i++) {
++		port = &dev->port[i];
++		port->dev = dev;
++		port->port_num = dev->start_port + i;
++		spin_lock_init(&port->lock);
++		port->table = RB_ROOT;
++		init_completion(&port->comp);
++		atomic_set(&port->refcount, 1);
++	}
++
++	dev->device = device;
++	ib_set_client_data(device, &inform_client, dev);
++
++	INIT_IB_EVENT_HANDLER(&dev->event_handler, device, inform_event_handler);
++	ib_register_event_handler(&dev->event_handler);
++}
++
++static void inform_remove_one(struct ib_device *device)
++{
++	struct inform_device *dev;
++	struct inform_port *port;
++	int i;
++
++	dev = ib_get_client_data(device, &inform_client);
++	if (!dev)
++		return;
++
++	ib_unregister_event_handler(&dev->event_handler);
++	flush_workqueue(inform_wq);
++
++	for (i = 0; i <= dev->end_port - dev->start_port; i++) {
++		port = &dev->port[i];
++		deref_port(port);
++		wait_for_completion(&port->comp);
++	}
++
++	kfree(dev);
++}
++
++int notice_init(void)
++{
++	int ret;
++
++	inform_wq = create_singlethread_workqueue("ib_inform");
++	if (!inform_wq)
++		return -ENOMEM;
++
++	ib_sa_register_client(&sa_client);
++
++	ret = ib_register_client(&inform_client);
++	if (ret)
++		goto err;
++	return 0;
++
++err:
++	ib_sa_unregister_client(&sa_client);
++	destroy_workqueue(inform_wq);
++	return ret;
++}
++
++void notice_cleanup(void)
++{
++	ib_unregister_client(&inform_client);
++	ib_sa_unregister_client(&sa_client);
++	destroy_workqueue(inform_wq);
++}
+Index: ofed_kernel-fixes/drivers/infiniband/core/sa.h
+===================================================================
+--- ofed_kernel-fixes.orig/drivers/infiniband/core/sa.h	2010-08-22 16:20:21.000000000 +0300
++++ ofed_kernel-fixes/drivers/infiniband/core/sa.h	2010-08-22 16:21:52.031539544 +0300
+@@ -63,4 +63,20 @@ int ib_sa_mcmember_rec_query(struct ib_s
+ int mcast_init(void);
+ void mcast_cleanup(void);
+ 
++int ib_sa_informinfo_query(struct ib_sa_client *client,
++			   struct ib_device *device, u8 port_num,
++			   struct ib_sa_inform *rec,
++			   int timeout_ms, gfp_t gfp_mask,
++			   void (*callback)(int status,
++					    struct ib_sa_inform *resp,
++					    void *context),
++			   void *context,
++			   struct ib_sa_query **sa_query);
++
++int notice_dispatch(struct ib_device *device, u8 port_num,
++		    struct ib_sa_notice *notice);
++
++int notice_init(void);
++void notice_cleanup(void);
++
+ #endif /* SA_H */
+Index: ofed_kernel-fixes/drivers/infiniband/core/sa_query.c
+===================================================================
+--- ofed_kernel-fixes.orig/drivers/infiniband/core/sa_query.c	2010-08-22 16:20:34.000000000 +0300
++++ ofed_kernel-fixes/drivers/infiniband/core/sa_query.c	2010-08-22 16:32:57.435537019 +0300
+@@ -60,10 +60,12 @@ struct ib_sa_sm_ah {
+ 
+ struct ib_sa_port {
+ 	struct ib_mad_agent *agent;
++	struct ib_mad_agent *notice_agent;
+ 	struct ib_sa_sm_ah  *sm_ah;
+ 	struct work_struct   update_task;
+ 	spinlock_t           ah_lock;
+ 	u8                   port_num;
++	struct ib_device    *device;
+ };
+ 
+ struct ib_sa_device {
+@@ -100,6 +102,12 @@ struct ib_sa_mcmember_query {
+ 	struct ib_sa_query sa_query;
+ };
+ 
++struct ib_sa_inform_query {
++	void (*callback)(int, struct ib_sa_inform *, void *);
++	void *context;
++	struct ib_sa_query sa_query;
++};
++
+ static void ib_sa_add_one(struct ib_device *device);
+ static void ib_sa_remove_one(struct ib_device *device);
+ 
+@@ -347,6 +355,110 @@ static const struct ib_field service_rec
+ 	  .size_bits    = 2*64 },
+ };
+ 
++#define INFORM_FIELD(field) \
++	.struct_offset_bytes = offsetof(struct ib_sa_inform, field), \
++	.struct_size_bytes   = sizeof ((struct ib_sa_inform *) 0)->field, \
++	.field_name          = "sa_inform:" #field
++
++static const struct ib_field inform_table[] = {
++	{ INFORM_FIELD(gid),
++	  .offset_words = 0,
++	  .offset_bits  = 0,
++	  .size_bits    = 128 },
++	{ INFORM_FIELD(lid_range_begin),
++	  .offset_words = 4,
++	  .offset_bits  = 0,
++	  .size_bits    = 16 },
++	{ INFORM_FIELD(lid_range_end),
++	  .offset_words = 4,
++	  .offset_bits  = 16,
++	  .size_bits    = 16 },
++	{ RESERVED,
++	  .offset_words = 5,
++	  .offset_bits  = 0,
++	  .size_bits    = 16 },
++	{ INFORM_FIELD(is_generic),
++	  .offset_words = 5,
++	  .offset_bits  = 16,
++	  .size_bits    = 8 },
++	{ INFORM_FIELD(subscribe),
++	  .offset_words = 5,
++	  .offset_bits  = 24,
++	  .size_bits    = 8 },
++	{ INFORM_FIELD(type),
++	  .offset_words = 6,
++	  .offset_bits  = 0,
++	  .size_bits    = 16 },
++	{ INFORM_FIELD(trap.generic.trap_num),
++	  .offset_words = 6,
++	  .offset_bits  = 16,
++	  .size_bits    = 16 },
++	{ INFORM_FIELD(trap.generic.qpn),
++	  .offset_words = 7,
++	  .offset_bits  = 0,
++	  .size_bits    = 24 },
++	{ RESERVED,
++	  .offset_words = 7,
++	  .offset_bits  = 24,
++	  .size_bits    = 3 },
++	{ INFORM_FIELD(trap.generic.resp_time),
++	  .offset_words = 7,
++	  .offset_bits  = 27,
++	  .size_bits    = 5 },
++	{ RESERVED,
++	  .offset_words = 8,
++	  .offset_bits  = 0,
++	  .size_bits    = 8 },
++	{ INFORM_FIELD(trap.generic.producer_type),
++	  .offset_words = 8,
++	  .offset_bits  = 8,
++	  .size_bits    = 24 },
++};
++
++#define NOTICE_FIELD(field) \
++	.struct_offset_bytes = offsetof(struct ib_sa_notice, field), \
++	.struct_size_bytes   = sizeof ((struct ib_sa_notice *) 0)->field, \
++	.field_name          = "sa_notice:" #field
++
++static const struct ib_field notice_table[] = {
++	{ NOTICE_FIELD(is_generic),
++	  .offset_words = 0,
++	  .offset_bits  = 0,
++	  .size_bits    = 1 },
++	{ NOTICE_FIELD(type),
++	  .offset_words = 0,
++	  .offset_bits  = 1,
++	  .size_bits    = 7 },
++	{ NOTICE_FIELD(trap.generic.producer_type),
++	  .offset_words = 0,
++	  .offset_bits  = 8,
++	  .size_bits    = 24 },
++	{ NOTICE_FIELD(trap.generic.trap_num),
++	  .offset_words = 1,
++	  .offset_bits  = 0,
++	  .size_bits    = 16 },
++	{ NOTICE_FIELD(issuer_lid),
++	  .offset_words = 1,
++	  .offset_bits  = 16,
++	  .size_bits    = 16 },
++	{ NOTICE_FIELD(notice_toggle),
++	  .offset_words = 2,
++	  .offset_bits  = 0,
++	  .size_bits    = 1 },
++	{ NOTICE_FIELD(notice_count),
++	  .offset_words = 2,
++	  .offset_bits  = 1,
++	  .size_bits    = 15 },
++	{ NOTICE_FIELD(data_details),
++	  .offset_words = 2,
++	  .offset_bits  = 16,
++	  .size_bits    = 432 },
++	{ NOTICE_FIELD(issuer_gid),
++	  .offset_words = 16,
++	  .offset_bits  = 0,
++	  .size_bits    = 128 },
++};
++
+ static void free_sm_ah(struct kref *kref)
+ {
+ 	struct ib_sa_sm_ah *sm_ah = container_of(kref, struct ib_sa_sm_ah, ref);
+@@ -945,6 +1057,156 @@ err1:
+ 	return ret;
+ }
+ 
++static void ib_sa_inform_callback(struct ib_sa_query *sa_query,
++				  int status,
++				  struct ib_sa_mad *mad)
++{
++	struct ib_sa_inform_query *query =
++		container_of(sa_query, struct ib_sa_inform_query, sa_query);
++
++	if (mad) {
++		struct ib_sa_inform rec;
++
++		ib_unpack(inform_table, ARRAY_SIZE(inform_table),
++			  mad->data, &rec);
++		query->callback(status, &rec, query->context);
++	} else
++		query->callback(status, NULL, query->context);
++}
++
++static void ib_sa_inform_release(struct ib_sa_query *sa_query)
++{
++	kfree(container_of(sa_query, struct ib_sa_inform_query, sa_query));
++}
++
++/**
++ * ib_sa_informinfo_query - Start an InformInfo registration.
++ * @client:SA client
++ * @device:device to send query on
++ * @port_num: port number to send query on
++ * @rec:Inform record to send in query
++ * @timeout_ms:time to wait for response
++ * @gfp_mask:GFP mask to use for internal allocations
++ * @callback:function called when notice handler registration completes,
++ * times out or is canceled
++ * @context:opaque user context passed to callback
++ * @sa_query:query context, used to cancel query
++ *
++ * This function sends inform info to register with SA to receive
++ * in-service notice.
++ * The callback function will be called when the query completes (or
++ * fails); status is 0 for a successful response, -EINTR if the query
++ * is canceled, -ETIMEDOUT is the query timed out, or -EIO if an error
++ * occurred sending the query.  The resp parameter of the callback is
++ * only valid if status is 0.
++ *
++ * If the return value of ib_sa_inform_query() is negative, it is an
++ * error code.  Otherwise it is a query ID that can be used to cancel
++ * the query.
++ */
++int ib_sa_informinfo_query(struct ib_sa_client *client,
++			   struct ib_device *device, u8 port_num,
++			   struct ib_sa_inform *rec,
++			   int timeout_ms, gfp_t gfp_mask,
++			   void (*callback)(int status,
++					   struct ib_sa_inform *resp,
++					   void *context),
++			   void *context,
++			   struct ib_sa_query **sa_query)
++{
++	struct ib_sa_inform_query *query;
++	struct ib_sa_device *sa_dev = ib_get_client_data(device, &sa_client);
++	struct ib_sa_port   *port;
++	struct ib_mad_agent *agent;
++	struct ib_sa_mad *mad;
++	int ret;
++
++	if (!sa_dev)
++		return -ENODEV;
++
++	port  = &sa_dev->port[port_num - sa_dev->start_port];
++	agent = port->agent;
++
++	query = kmalloc(sizeof *query, gfp_mask);
++	if (!query)
++		return -ENOMEM;
++
++	query->sa_query.port     = port;
++	ret = alloc_mad(&query->sa_query, gfp_mask);
++	if (ret)
++		goto err1;
++
++	ib_sa_client_get(client);
++	query->sa_query.client = client;
++	query->callback = callback;
++	query->context  = context;
++
++	mad = query->sa_query.mad_buf->mad;
++	init_mad(mad, agent);
++
++	query->sa_query.callback = callback ? ib_sa_inform_callback : NULL;
++	query->sa_query.release  = ib_sa_inform_release;
++	query->sa_query.port     = port;
++	mad->mad_hdr.method	 = IB_MGMT_METHOD_SET;
++	mad->mad_hdr.attr_id	 = cpu_to_be16(IB_SA_ATTR_INFORM_INFO);
++
++	ib_pack(inform_table, ARRAY_SIZE(inform_table), rec, mad->data);
++
++	*sa_query = &query->sa_query;
++	ret = send_mad(&query->sa_query, timeout_ms, gfp_mask);
++	if (ret < 0)
++		goto err2;
++
++	return ret;
++
++err2:
++	*sa_query = NULL;
++	ib_sa_client_put(query->sa_query.client);
++	free_mad(&query->sa_query);
++err1:
++	kfree(query);
++	return ret;
++}
++
++static void ib_sa_notice_resp(struct ib_sa_port *port,
++			      struct ib_mad_recv_wc *mad_recv_wc)
++{
++	struct ib_mad_send_buf *mad_buf;
++	struct ib_sa_mad *mad;
++	int ret;
++	unsigned long flags;
++
++	mad_buf = ib_create_send_mad(port->notice_agent, 1, 0, 0,
++				     IB_MGMT_SA_HDR, IB_MGMT_SA_DATA,
++				     GFP_KERNEL);
++	if (IS_ERR(mad_buf))
++		return;
++
++	mad = mad_buf->mad;
++	memcpy(mad, mad_recv_wc->recv_buf.mad, sizeof *mad);
++	mad->mad_hdr.method = IB_MGMT_METHOD_REPORT_RESP;
++
++	spin_lock_irqsave(&port->ah_lock, flags);
++	if (!port->sm_ah) {
++		spin_unlock_irqrestore(&port->ah_lock, flags);
++		ib_free_send_mad(mad_buf);
++		return;
++	}
++	kref_get(&port->sm_ah->ref);
++	mad_buf->context[0] = &port->sm_ah->ref;
++	mad_buf->ah = port->sm_ah->ah;
++	spin_unlock_irqrestore(&port->ah_lock, flags);
++
++	ret = ib_post_send_mad(mad_buf, NULL);
++	if (ret)
++		goto err;
++
++	return;
++err:
++	kref_put(mad_buf->context[0], free_sm_ah);
++	ib_free_send_mad(mad_buf);
++}
++
+ static void send_handler(struct ib_mad_agent *agent,
+ 			 struct ib_mad_send_wc *mad_send_wc)
+ {
+@@ -998,9 +1260,36 @@ static void recv_handler(struct ib_mad_a
+ 	ib_free_recv_mad(mad_recv_wc);
+ }
+ 
++static void notice_resp_handler(struct ib_mad_agent *agent,
++				struct ib_mad_send_wc *mad_send_wc)
++{
++	kref_put(mad_send_wc->send_buf->context[0], free_sm_ah);
++	ib_free_send_mad(mad_send_wc->send_buf);
++}
++
++static void notice_handler(struct ib_mad_agent *mad_agent,
++			   struct ib_mad_recv_wc *mad_recv_wc)
++{
++	struct ib_sa_port *port;
++	struct ib_sa_mad *mad;
++	struct ib_sa_notice notice;
++
++	port = mad_agent->context;
++	mad = (struct ib_sa_mad *) mad_recv_wc->recv_buf.mad;
++	ib_unpack(notice_table, ARRAY_SIZE(notice_table), mad->data, &notice);
++
++	if (!notice_dispatch(port->device, port->port_num, &notice))
++		ib_sa_notice_resp(port, mad_recv_wc);
++	ib_free_recv_mad(mad_recv_wc);
++}
++
+ static void ib_sa_add_one(struct ib_device *device)
+ {
+ 	struct ib_sa_device *sa_dev;
++	struct ib_mad_reg_req reg_req = {
++		.mgmt_class = IB_MGMT_CLASS_SUBN_ADM,
++		.mgmt_class_version = 2
++	};
+ 	int s, e, i;
+ 
+ 	if (rdma_node_get_transport(device->node_type) != RDMA_TRANSPORT_IB)
+@@ -1037,6 +1326,16 @@ static void ib_sa_add_one(struct ib_devi
+ 		if (IS_ERR(sa_dev->port[i].agent))
+ 			goto err;
+ 
++		sa_dev->port[i].device = device;
++		set_bit(IB_MGMT_METHOD_REPORT, reg_req.method_mask);
++		sa_dev->port[i].notice_agent =
++			ib_register_mad_agent(device, i + s, IB_QPT_GSI,
++					      &reg_req, 0, notice_resp_handler,
++					      notice_handler, &sa_dev->port[i]);
++
++		if (IS_ERR(sa_dev->port[i].notice_agent))
++			goto err;
++
+ 		INIT_WORK(&sa_dev->port[i].update_task, update_sm_ah);
+ 	}
+ 
+@@ -1061,8 +1360,12 @@ static void ib_sa_add_one(struct ib_devi
+ 
+ err:
+ 	while (--i >= 0)
+-		if (rdma_port_get_link_layer(device, i + 1) == IB_LINK_LAYER_INFINIBAND)
+-			ib_unregister_mad_agent(sa_dev->port[i].agent);
++		if (rdma_port_get_link_layer(device, i + 1) == IB_LINK_LAYER_INFINIBAND) {
++			if (!IS_ERR(sa_dev->port[i].notice_agent))
++				ib_unregister_mad_agent(sa_dev->port[i].notice_agent);
++			if (!IS_ERR(sa_dev->port[i].agent))
++				ib_unregister_mad_agent(sa_dev->port[i].agent);
++		}
+ 
+ 	kfree(sa_dev);
+ 
+@@ -1083,6 +1386,7 @@ static void ib_sa_remove_one(struct ib_d
+ 
+ 	for (i = 0; i <= sa_dev->end_port - sa_dev->start_port; ++i) {
+ 		if (rdma_port_get_link_layer(device, i + 1) == IB_LINK_LAYER_INFINIBAND) {
++			ib_unregister_mad_agent(sa_dev->port[i].notice_agent);
+ 			ib_unregister_mad_agent(sa_dev->port[i].agent);
+ 			if (sa_dev->port[i].sm_ah)
+ 				kref_put(&sa_dev->port[i].sm_ah->ref, free_sm_ah);
+@@ -1114,7 +1418,15 @@ static int __init ib_sa_init(void)
+ 		goto err2;
+ 	}
+ 
++	ret = notice_init();
++	if (ret) {
++		printk(KERN_ERR "Couldn't initialize notice handling\n");
++		goto err3;
++	}
++
+ 	return 0;
++err3:
++	mcast_cleanup();
+ err2:
+ 	ib_unregister_client(&sa_client);
+ err1:
+@@ -1124,6 +1436,7 @@ err1:
+ static void __exit ib_sa_cleanup(void)
+ {
+ 	mcast_cleanup();
++	notice_cleanup();
+ 	ib_unregister_client(&sa_client);
+ 	idr_destroy(&query_idr);
+ }
+Index: ofed_kernel-fixes/include/rdma/ib_sa.h
+===================================================================
+--- ofed_kernel-fixes.orig/include/rdma/ib_sa.h	2010-08-22 16:20:34.000000000 +0300
++++ ofed_kernel-fixes/include/rdma/ib_sa.h	2010-08-22 16:21:52.035539903 +0300
+@@ -251,6 +251,127 @@ struct ib_sa_service_rec {
+ 	u64		data64[2];
+ };
+ 
++enum {
++	IB_SA_EVENT_TYPE_FATAL		= 0x0,
++	IB_SA_EVENT_TYPE_URGENT		= 0x1,
++	IB_SA_EVENT_TYPE_SECURITY	= 0x2,
++	IB_SA_EVENT_TYPE_SM		= 0x3,
++	IB_SA_EVENT_TYPE_INFO		= 0x4,
++	IB_SA_EVENT_TYPE_EMPTY		= 0x7F,
++	IB_SA_EVENT_TYPE_ALL		= 0xFFFF
++};
++
++enum {
++	IB_SA_EVENT_PRODUCER_TYPE_CA		= 0x1,
++	IB_SA_EVENT_PRODUCER_TYPE_SWITCH	= 0x2,
++	IB_SA_EVENT_PRODUCER_TYPE_ROUTER	= 0x3,
++	IB_SA_EVENT_PRODUCER_TYPE_CLASS_MANAGER	= 0x4,
++	IB_SA_EVENT_PRODUCER_TYPE_ALL		= 0xFFFFFF
++};
++
++enum {
++	IB_SA_SM_TRAP_GID_IN_SERVICE			= 64,
++	IB_SA_SM_TRAP_GID_OUT_OF_SERVICE		= 65,
++	IB_SA_SM_TRAP_CREATE_MC_GROUP			= 66,
++	IB_SA_SM_TRAP_DELETE_MC_GROUP			= 67,
++	IB_SA_SM_TRAP_PORT_CHANGE_STATE			= 128,
++	IB_SA_SM_TRAP_LINK_INTEGRITY			= 129,
++	IB_SA_SM_TRAP_EXCESSIVE_BUFFER_OVERRUN		= 130,
++	IB_SA_SM_TRAP_FLOW_CONTROL_UPDATE_EXPIRED	= 131,
++	IB_SA_SM_TRAP_BAD_M_KEY				= 256,
++	IB_SA_SM_TRAP_BAD_P_KEY				= 257,
++	IB_SA_SM_TRAP_BAD_Q_KEY				= 258,
++	IB_SA_SM_TRAP_SWITCH_BAD_P_KEY			= 259,
++	IB_SA_SM_TRAP_ALL				= 0xFFFF
++};
++
++struct ib_sa_inform {
++	union ib_gid	gid;
++	__be16		lid_range_begin;
++	__be16		lid_range_end;
++	u8		is_generic;
++	u8		subscribe;
++	__be16		type;
++	union {
++		struct {
++			__be16	trap_num;
++			__be32	qpn;
++			u8	resp_time;
++			__be32	producer_type;
++		} generic;
++		struct {
++			__be16	device_id;
++			__be32	qpn;
++			u8	resp_time;
++			__be32	vendor_id;
++		} vendor;
++	} trap;
++};
++
++struct ib_sa_notice {
++	u8		is_generic;
++	u8		type;
++	union {
++		struct {
++			__be32	producer_type;
++			__be16	trap_num;
++		} generic;
++		struct {
++			__be32	vendor_id;
++			__be16	device_id;
++		} vendor;
++	} trap;
++	__be16		issuer_lid;
++	__be16		notice_count;
++	u8		notice_toggle;
++	/*
++	 * Align data 16 bits off 64 bit field to match InformInfo definition.
++	 * Data contained within this field will then align properly.
++	 * See IB spec 1.2, sections 13.4.8.2 and 14.2.5.1.
++	 */
++	u8		reserved[5];
++	u8		data_details[54];
++	union ib_gid	issuer_gid;
++};
++
++/*
++ * SM notice data details for:
++ *
++ * IB_SA_SM_TRAP_GID_IN_SERVICE		= 64
++ * IB_SA_SM_TRAP_GID_OUT_OF_SERVICE	= 65
++ * IB_SA_SM_TRAP_CREATE_MC_GROUP	= 66
++ * IB_SA_SM_TRAP_DELETE_MC_GROUP	= 67
++ */
++struct ib_sa_notice_data_gid {
++	u8	reserved[6];
++	u8	gid[16];
++	u8	padding[32];
++};
++
++/*
++ * SM notice data details for:
++ *
++ * IB_SA_SM_TRAP_PORT_CHANGE_STATE	= 128
++ */
++struct ib_sa_notice_data_port_change {
++	__be16	lid;
++	u8	padding[52];
++};
++
++/*
++ * SM notice data details for:
++ *
++ * IB_SA_SM_TRAP_LINK_INTEGRITY			= 129
++ * IB_SA_SM_TRAP_EXCESSIVE_BUFFER_OVERRUN	= 130
++ * IB_SA_SM_TRAP_FLOW_CONTROL_UPDATE_EXPIRED	= 131
++ */
++struct ib_sa_notice_data_port_error {
++	u8	reserved[2];
++	__be16	lid;
++	u8	port_num;
++	u8	padding[49];
++};
++
+ struct ib_sa_client {
+ 	atomic_t users;
+ 	struct completion comp;
+@@ -385,4 +506,54 @@ int ib_init_ah_from_path(struct ib_devic
+  */
+ void ib_sa_unpack_path(void *attribute, struct ib_sa_path_rec *rec);
+ 
++struct ib_inform_info {
++	void		*context;
++	int		(*callback)(int status,
++				    struct ib_inform_info *info,
++				    struct ib_sa_notice *notice);
++	u16		trap_number;
++};
++
++/**
++ * ib_sa_register_inform_info - Registers to receive notice events.
++ * @device: Device associated with the registration.
++ * @port_num: Port on the specified device to associate with the registration.
++ * @trap_number: InformInfo trap number to register for.
++ * @gfp_mask: GFP mask for memory allocations.
++ * @callback: User callback invoked once the registration completes and to
++ *   report noticed events.
++ * @context: User specified context stored with the ib_inform_reg structure.
++ *
++ * This call initiates a registration request with the SA for the specified
++ * trap number.  If the operation is started successfully, it returns
++ * an ib_inform_info structure that is used to track the registration operation.
++ * Users must free this structure by calling ib_unregister_inform_info,
++ * even if the operation later fails.  (The callback status is non-zero.)
++ *
++ * If the registration fails; status will be non-zero.  If the registration
++ * succeeds, the callback status will be zero, but the notice parameter will
++ * be NULL.  If the notice parameter is not NULL, a trap or notice is being
++ * reported to the user.
++ *
++ * A status of -ENETRESET indicates that an error occurred which requires
++ * reregisteration.
++ */
++struct ib_inform_info *
++ib_sa_register_inform_info(struct ib_sa_client *client,
++			   struct ib_device *device, u8 port_num,
++			   u16 trap_number, gfp_t gfp_mask,
++			   int (*callback)(int status,
++					   struct ib_inform_info *info,
++					   struct ib_sa_notice *notice),
++			   void *context);
++
++/**
++ * ib_sa_unregister_inform_info - Releases an InformInfo registration.
++ * @info: InformInfo registration tracking structure.
++ *
++ * This call blocks until the registration request is destroyed.  It may
++ * not be called from within the registration callback.
++ */
++void ib_sa_unregister_inform_info(struct ib_inform_info *info);
++
+ #endif /* IB_SA_H */

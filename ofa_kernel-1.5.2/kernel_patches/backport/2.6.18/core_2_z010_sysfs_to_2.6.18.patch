@@ -1,0 +1,32 @@
+--- a/drivers/infiniband/core/device.c	2009-02-24 14:00:50.387541000 +0200
++++ b/drivers/infiniband/core/device.c	2009-02-24 14:00:54.891362000 +0200
+@@ -199,7 +199,7 @@ void ib_dealloc_device(struct ib_device 
+ 
+ 	BUG_ON(device->reg_state != IB_DEV_UNREGISTERED);
+ 
+-	kobject_put(&device->dev.kobj);
++	ib_device_unregister_sysfs(device);
+ }
+ EXPORT_SYMBOL(ib_dealloc_device);
+ 
+@@ -356,8 +356,6 @@ void ib_unregister_device(struct ib_devi
+ 
+ 	mutex_unlock(&device_mutex);
+ 
+-	ib_device_unregister_sysfs(device);
+-
+ 	spin_lock_irqsave(&device->client_data_lock, flags);
+ 	list_for_each_entry_safe(context, tmp, &device->client_data_list, list)
+ 		kfree(context);
+--- a/drivers/infiniband/core/sysfs.c	2009-02-24 13:58:42.509754000 +0200
++++ b/drivers/infiniband/core/sysfs.c	2009-02-24 14:00:54.894368000 +0200
+@@ -863,9 +863,6 @@ void ib_device_unregister_sysfs(struct i
+ 	struct kobject *p, *t;
+ 	struct ib_port *port;
+ 
+-	/* Hold kobject until ib_dealloc_device() */
+-	kobject_get(&device->dev.kobj);
+-
+ 	list_for_each_entry_safe(p, t, &device->port_list, entry) {
+ 		list_del(&p->entry);
+ 		port = container_of(p, struct ib_port, kobj);

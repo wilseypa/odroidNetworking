@@ -1,0 +1,37 @@
+From 134e8ba45ac49b773ba912726b4faee6a2839fab Mon Sep 17 00:00:00 2001
+From: Eli Cohen <eli@mellanox.co.il>
+Date: Tue, 24 Nov 2009 17:06:35 +0200
+Subject: [PATCH] mlx4: properly mask MGM entry members count
+
+The members_count field size is 24 bits so mask it properly when reading it.
+
+Signed-off-by: Eli Cohen <eli@mellanox.co.il>
+---
+ drivers/net/mlx4/mcg.c |    4 ++--
+ 1 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/mlx4/mcg.c b/drivers/net/mlx4/mcg.c
+index 5ccbce9..cbc0205 100644
+--- a/drivers/net/mlx4/mcg.c
++++ b/drivers/net/mlx4/mcg.c
+@@ -188,7 +188,7 @@ int mlx4_multicast_attach(struct mlx4_dev *dev, struct mlx4_qp *qp, u8 gid[16],
+ 		memcpy(mgm->gid, gid, 16);
+ 	}
+ 
+-	members_count = be32_to_cpu(mgm->members_count);
++	members_count = be32_to_cpu(mgm->members_count) & 0xffffff;
+ 	if (members_count == MLX4_QP_PER_MGM) {
+ 		mlx4_err(dev, "MGM at index %x is full.\n", index);
+ 		err = -ENOMEM;
+@@ -271,7 +271,7 @@ int mlx4_multicast_detach(struct mlx4_dev *dev, struct mlx4_qp *qp, u8 gid[16])
+ 		goto out;
+ 	}
+ 
+-	members_count = be32_to_cpu(mgm->members_count);
++	members_count = be32_to_cpu(mgm->members_count) & 0xffffff;
+ 	for (loc = -1, i = 0; i < members_count; ++i)
+ 		if ((be32_to_cpu(mgm->qp[i]) & MGM_QPN_MASK) == qp->qpn)
+ 			loc = i;
+-- 
+1.6.5.3
+

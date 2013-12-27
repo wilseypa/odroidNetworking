@@ -1,0 +1,182 @@
+IB/ipoib: Fix neigh destructor oops
+
+For kernels 2.6.20 and older, it may happen that the pointer to
+ipoib_neigh_cleanup() is called after IPoIB has been unloades,
+causing a kernel oops. This problem has been fixed for 2.6.21 with
+the following commit: ecbb416939da77c0d107409976499724baddce7b
+
+The idea with this patch is to have a helper module which remains
+always loaded, and this modules provides the destructor for
+neighbours which calls IPoIB's destructor through a function poiner.
+When IPoIB is unloaded, the function pointer is cleared so subsequent
+calls to a neighbour destructor will be made to valid addresses but
+IPoIB's destructor won't get called.
+
+Signed-off-by: Eli Cohen <eli@mellanox.co.il>
+---
+
+Index: ofa_1_3_dev_kernel/drivers/infiniband/ulp/ipoib/ipoib_main.c
+===================================================================
+--- ofa_1_3_dev_kernel.orig/drivers/infiniband/ulp/ipoib/ipoib_main.c	2008-05-14 12:49:11.000000000 +0300
++++ ofa_1_3_dev_kernel/drivers/infiniband/ulp/ipoib/ipoib_main.c	2008-05-14 12:49:32.000000000 +0300
+@@ -49,6 +49,7 @@
+ 
+ #include <net/dst.h>
+ #include <linux/vmalloc.h>
++#include <linux/delay.h>
+ 
+ MODULE_AUTHOR("Roland Dreier");
+ MODULE_DESCRIPTION("IP-over-InfiniBand net driver");
+@@ -916,7 +917,7 @@ void ipoib_neigh_free(struct net_device 
+ 
+ static int ipoib_neigh_setup_dev(struct net_device *dev, struct neigh_parms *parms)
+ {
+-	parms->neigh_cleanup = ipoib_neigh_cleanup;
++	parms->neigh_cleanup = ipoib_neigh_cleanup_container;
+ 
+ 	return 0;
+ }
+@@ -1383,9 +1384,13 @@ static int __init ipoib_init_module(void
+ 	ipoib_max_conn_qp = min(ipoib_max_conn_qp, IPOIB_CM_MAX_CONN_QP);
+ #endif
+ 
++
++	ipoib_set_cleanup_function(ipoib_neigh_cleanup);
+ 	ret = ipoib_register_debugfs();
+-	if (ret)
++	if (ret) {
++		ipoib_set_cleanup_function(NULL);
+ 		return ret;
++	}
+ 
+ 	/*
+ 	 * We create our own workqueue mainly because we want to be
+@@ -1397,6 +1402,7 @@ static int __init ipoib_init_module(void
+ 	 */
+ 	ipoib_workqueue = create_singlethread_workqueue("ipoib");
+ 	if (!ipoib_workqueue) {
++		ipoib_set_cleanup_function(NULL);
+ 		ret = -ENOMEM;
+ 		goto err_fs;
+ 	}
+@@ -1404,8 +1410,10 @@ static int __init ipoib_init_module(void
+ 	ib_sa_register_client(&ipoib_sa_client);
+ 
+ 	ret = ib_register_client(&ipoib_client);
+-	if (ret)
++	if (ret) {
++		ipoib_set_cleanup_function(NULL);
+ 		goto err_sa;
++	}
+ 
+ 	return 0;
+ 
+@@ -1421,7 +1429,16 @@ err_fs:
+ 
+ static void __exit ipoib_cleanup_module(void)
+ {
++	int ret;
++
+ 	ib_unregister_client(&ipoib_client);
++
++	do {
++		ret = ipoib_set_cleanup_function(NULL);
++		if (ret)
++			msleep(10);
++	} while(ret);
++
+ 	ib_sa_unregister_client(&ipoib_sa_client);
+ 	ipoib_unregister_debugfs();
+ 	destroy_workqueue(ipoib_workqueue);
+Index: ofa_1_3_dev_kernel/drivers/infiniband/ulp/ipoib/Makefile
+===================================================================
+--- ofa_1_3_dev_kernel.orig/drivers/infiniband/ulp/ipoib/Makefile	2008-05-14 12:49:11.000000000 +0300
++++ ofa_1_3_dev_kernel/drivers/infiniband/ulp/ipoib/Makefile	2008-05-14 12:49:32.000000000 +0300
+@@ -1,4 +1,4 @@
+-obj-$(CONFIG_INFINIBAND_IPOIB)			+= ib_ipoib.o
++obj-$(CONFIG_INFINIBAND_IPOIB)			+= ib_ipoib.o ipoib_helper.o
+ 
+ ib_ipoib-y					:= ipoib_main.o \
+ 						   ipoib_ib.o \
+Index: ofa_1_3_dev_kernel/drivers/infiniband/ulp/ipoib/ipoib.h
+===================================================================
+--- ofa_1_3_dev_kernel.orig/drivers/infiniband/ulp/ipoib/ipoib.h	2008-05-14 12:49:11.000000000 +0300
++++ ofa_1_3_dev_kernel/drivers/infiniband/ulp/ipoib/ipoib.h	2008-05-14 12:49:32.000000000 +0300
+@@ -554,6 +554,9 @@ int ipoib_mcast_stop_thread(struct net_d
+ void ipoib_mcast_dev_down(struct net_device *dev);
+ void ipoib_mcast_dev_flush(struct net_device *dev);
+ 
++int ipoib_set_cleanup_function(void (*func)(struct neighbour *n));
++void ipoib_neigh_cleanup_container(struct neighbour *n);
++
+ #ifdef CONFIG_INFINIBAND_IPOIB_DEBUG
+ struct ipoib_mcast_iter *ipoib_mcast_iter_init(struct net_device *dev);
+ int ipoib_mcast_iter_next(struct ipoib_mcast_iter *iter);
+Index: ofa_1_3_dev_kernel/drivers/infiniband/ulp/ipoib/ipoib_helper.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ ofa_1_3_dev_kernel/drivers/infiniband/ulp/ipoib/ipoib_helper.c	2008-05-14 12:49:32.000000000 +0300
+@@ -0,0 +1,63 @@
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <net/neighbour.h>
++
++MODULE_AUTHOR("Eli Cohen");
++MODULE_DESCRIPTION("container for ipoib neighbour destructor");
++MODULE_LICENSE("Dual BSD/GPL");
++
++DEFINE_SPINLOCK(spl);
++static int busy;
++
++static void (*cleanup_func)(struct neighbour *n);
++
++static int ipoib_set_cleanup_function(void (*func)(struct neighbour *n))
++{
++	unsigned long flags;
++
++	spin_lock_irqsave(&spl, flags);
++	if (busy) {
++		spin_unlock_irqrestore(&spl, flags);
++		return -EBUSY;
++	}
++	cleanup_func = func;
++	spin_unlock_irqrestore(&spl, flags);
++
++	return 0;
++}
++
++static void ipoib_neigh_cleanup_container(struct neighbour *n)
++{
++	unsigned long flags;
++
++	spin_lock_irqsave(&spl, flags);
++	busy = 1;
++	spin_unlock_irqrestore(&spl, flags);
++	if (cleanup_func)
++		cleanup_func(n);
++
++	spin_lock_irqsave(&spl, flags);
++	busy = 0;
++	spin_unlock_irqrestore(&spl, flags);
++}
++
++
++EXPORT_SYMBOL(ipoib_set_cleanup_function);
++EXPORT_SYMBOL(ipoib_neigh_cleanup_container);
++
++
++static int __init ipoib_helper_init(void)
++{
++	if (!try_module_get(THIS_MODULE))
++		return -1;
++
++	return 0;
++}
++
++
++static void __exit ipoib_helper_cleanup(void)
++{
++}
++
++module_init(ipoib_helper_init);
++module_exit(ipoib_helper_cleanup);

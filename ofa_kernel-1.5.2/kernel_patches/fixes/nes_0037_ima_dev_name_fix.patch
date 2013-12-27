@@ -1,0 +1,12 @@
+diff --git a/drivers/infiniband/hw/nes/nes_verbs.c b/drivers/infiniband/hw/nes/nes_verbs.c
+index 1801a54..7ded814 100644
+--- a/drivers/infiniband/hw/nes/nes_verbs.c
++++ b/drivers/infiniband/hw/nes/nes_verbs.c
+@@ -4052,7 +4052,6 @@ struct nes_ib_device *nes_init_ofa_device(struct net_device *netdev)
+ 		return NULL;
+ 	}
+ 	strlcpy(nesibdev->ibdev.name, "nes%d", IB_DEVICE_NAME_MAX);
+-	strcpy(nesibdev->ibdev.name, netdev->name);
+ 	nesibdev->ibdev.owner = THIS_MODULE;
+ 
+ 	nesibdev->ibdev.node_type = RDMA_NODE_RNIC;

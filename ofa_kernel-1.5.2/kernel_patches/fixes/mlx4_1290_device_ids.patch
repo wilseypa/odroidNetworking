@@ -1,0 +1,40 @@
+From 6e4cb51efc488cc0cb5980bc455794750033145b Mon Sep 17 00:00:00 2001
+From: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+Date: Thu, 24 Dec 2009 13:31:35 +0200
+Subject: [PATCH] mlx4_core: Added Device ID range for future devices
+
+Signed-off-by: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+---
+ drivers/net/mlx4/main.c |   16 ++++++++++++++++
+ 1 files changed, 16 insertions(+), 0 deletions(-)
+
+diff --git a/drivers/net/mlx4/main.c b/drivers/net/mlx4/main.c
+index b117f55..6ce47df 100644
+--- a/drivers/net/mlx4/main.c
++++ b/drivers/net/mlx4/main.c
+@@ -1468,6 +1468,22 @@ static struct pci_device_id mlx4_pci_table[] = {
+ 	{ PCI_VDEVICE(MELLANOX, 0x6746) }, /* MT26438 ConnectX VPI PCIe 2.0 5GT/s - IB QDR / 10GigE Virt+ */
+ 	{ PCI_VDEVICE(MELLANOX, 0x676e) }, /* MT26478 ConnectX EN 40GigE PCIe 2.0 5GT/s */
+ 	{ PCI_VDEVICE(MELLANOX, 0x6778) }, /* MT26488 ConnectX VPI PCIe 2.0 5GT/s - IB DDR / 10GigE Virt+ */
++	{ PCI_VDEVICE(MELLANOX, 0x1000) },
++	{ PCI_VDEVICE(MELLANOX, 0x1001) },
++	{ PCI_VDEVICE(MELLANOX, 0x1002) },
++	{ PCI_VDEVICE(MELLANOX, 0x1003) },
++	{ PCI_VDEVICE(MELLANOX, 0x1004) },
++	{ PCI_VDEVICE(MELLANOX, 0x1005) },
++	{ PCI_VDEVICE(MELLANOX, 0x1006) },
++	{ PCI_VDEVICE(MELLANOX, 0x1007) },
++	{ PCI_VDEVICE(MELLANOX, 0x1008) },
++	{ PCI_VDEVICE(MELLANOX, 0x1009) },
++	{ PCI_VDEVICE(MELLANOX, 0x100a) },
++	{ PCI_VDEVICE(MELLANOX, 0x100b) },
++	{ PCI_VDEVICE(MELLANOX, 0x100c) },
++	{ PCI_VDEVICE(MELLANOX, 0x100d) },
++	{ PCI_VDEVICE(MELLANOX, 0x100e) },
++	{ PCI_VDEVICE(MELLANOX, 0x100f) },
+ 	{ 0, }
+ };
+ 
+-- 
+1.5.3.7
+

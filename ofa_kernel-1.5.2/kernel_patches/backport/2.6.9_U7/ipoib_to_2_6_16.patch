@@ -1,0 +1,103 @@
+---
+ drivers/infiniband/ulp/ipoib/ipoib.h      |    1 
+ drivers/infiniband/ulp/ipoib/ipoib_main.c |   33 ++++++++++++++++++++++++++++--
+ 2 files changed, 32 insertions(+), 2 deletions(-)
+
+Index: ofed_kernel-2.6.16_sles10_sp3/drivers/infiniband/ulp/ipoib/ipoib.h
+===================================================================
+--- ofed_kernel-2.6.16_sles10_sp3.orig/drivers/infiniband/ulp/ipoib/ipoib.h	2009-11-08 16:24:56.000000000 +0200
++++ ofed_kernel-2.6.16_sles10_sp3/drivers/infiniband/ulp/ipoib/ipoib.h	2009-11-08 16:27:56.000000000 +0200
+@@ -392,6 +392,7 @@ struct ipoib_neigh {
+ 	struct neighbour   *neighbour;
+ 	struct net_device *dev;
+ 
++	struct list_head    all_neigh_list;
+ 	struct list_head    list;
+ };
+ 
+Index: ofed_kernel-2.6.16_sles10_sp3/drivers/infiniband/ulp/ipoib/ipoib_main.c
+===================================================================
+--- ofed_kernel-2.6.16_sles10_sp3.orig/drivers/infiniband/ulp/ipoib/ipoib_main.c	2009-11-08 16:24:57.000000000 +0200
++++ ofed_kernel-2.6.16_sles10_sp3/drivers/infiniband/ulp/ipoib/ipoib_main.c	2009-11-08 16:27:56.000000000 +0200
+@@ -91,6 +91,9 @@ struct workqueue_struct *ipoib_workqueue
+ 
+ struct ib_sa_client ipoib_sa_client;
+ 
++static DEFINE_SPINLOCK(ipoib_all_neigh_list_lock);
++static LIST_HEAD(ipoib_all_neigh_list);
++
+ static void ipoib_add_one(struct ib_device *device);
+ static void ipoib_remove_one(struct ib_device *device);
+ 
+@@ -890,6 +893,18 @@ static void ipoib_neigh_cleanup(struct n
+ 		priv = netdev_priv(neigh->dev);
+ 	else
+ 		return;
++
++	struct ipoib_neigh *tn, *nn = NULL;
++	spin_lock_irqsave(&ipoib_all_neigh_list_lock, flags);
++	list_for_each_entry(tn, &ipoib_all_neigh_list, all_neigh_list)
++		if (tn->neighbour == n) {
++			nn = tn;
++			break;
++		}
++	spin_unlock_irqrestore(&ipoib_all_neigh_list_lock, flags);
++	if (!nn)
++		return;
++
+ 	ipoib_dbg(priv,
+ 		  "neigh_cleanup for %06x %pI6\n",
+ 		  IPOIB_QPN(n->ha),
+@@ -923,6 +938,11 @@ struct ipoib_neigh *ipoib_neigh_alloc(st
+ 	skb_queue_head_init(&neigh->queue);
+ 	ipoib_cm_set(neigh, NULL);
+ 
++	spin_lock(&ipoib_all_neigh_list_lock);
++	list_add_tail(&neigh->all_neigh_list, &ipoib_all_neigh_list);
++	neigh->neighbour->ops->destructor = ipoib_neigh_cleanup;
++	spin_unlock(&ipoib_all_neigh_list_lock);
++
+ 	return neigh;
+ }
+ 
+@@ -930,6 +950,17 @@ void ipoib_neigh_free(struct net_device 
+ {
+ 	struct sk_buff *skb;
+ 	struct ipoib_dev_priv *priv = netdev_priv(dev);
++	struct ipoib_neigh *nn;
++	spin_lock(&ipoib_all_neigh_list_lock);
++	list_del(&neigh->all_neigh_list);
++	list_for_each_entry(nn, &ipoib_all_neigh_list, all_neigh_list)
++		if (nn->neighbour->ops == neigh->neighbour->ops)
++			goto found;
++
++	neigh->neighbour->ops->destructor = NULL;
++found:
++	spin_unlock(&ipoib_all_neigh_list_lock);
++
+ 	*to_ipoib_neigh(neigh->neighbour) = NULL;
+ 	while ((skb = __skb_dequeue(&neigh->queue))) {
+ 		++priv->stats.tx_dropped;
+@@ -942,8 +973,6 @@ void ipoib_neigh_free(struct net_device 
+ 
+ static int ipoib_neigh_setup_dev(struct net_device *dev, struct neigh_parms *parms)
+ {
+-	parms->neigh_cleanup = ipoib_neigh_cleanup;
+-
+ 	return 0;
+ }
+ 
+Index: ofed_kernel-2.6.16_sles10_sp3/drivers/infiniband/ulp/ipoib/ipoib_vlan.c
+===================================================================
+--- ofed_kernel-2.6.16_sles10_sp3.orig/drivers/infiniband/ulp/ipoib/ipoib_vlan.c	2009-11-08 16:28:09.000000000 +0200
++++ ofed_kernel-2.6.16_sles10_sp3/drivers/infiniband/ulp/ipoib/ipoib_vlan.c	2009-11-08 16:28:50.000000000 +0200
+@@ -125,6 +125,9 @@ int ipoib_vlan_add(struct net_device *pd
+ 
+ 	ipoib_create_debug_files(priv->dev);
+ 
++	rtnl_unlock();
++	rtnl_lock();
++
+ 	if (ipoib_cm_add_mode_attr(priv->dev))
+ 		goto sysfs_failed;
+ 	if (ipoib_add_pkey_attr(priv->dev))

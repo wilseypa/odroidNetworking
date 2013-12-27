@@ -1,0 +1,182 @@
+---
+ drivers/infiniband/core/cm.c    |   15 ++++--
+ drivers/infiniband/core/sysfs.c |   90 ++++++++++++++++++++--------------------
+ 2 files changed, 55 insertions(+), 50 deletions(-)
+
+Index: ofed_kernel/drivers/infiniband/core/cm.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/core/cm.c
++++ ofed_kernel/drivers/infiniband/core/cm.c
+@@ -175,7 +175,7 @@ struct cm_port {
+ struct cm_device {
+ 	struct list_head list;
+ 	struct ib_device *ib_device;
+-	struct device *device;
++	struct class_device *device;
+ 	u8 ack_delay;
+ 	struct cm_port *port[0];
+ };
+@@ -3666,8 +3666,13 @@ static struct kobj_type cm_port_obj_type
+ 	.release = cm_release_port_obj
+ };
+ 
++static void cm_release_cm_class_obj(struct class_device *dev)
++{
++}
++
+ struct class cm_class = {
+ 	.name    = "infiniband_cm",
++	.release = cm_release_cm_class_obj,
+ };
+ EXPORT_SYMBOL(cm_class);
+ 
+@@ -3738,8 +3743,8 @@ static void cm_add_one(struct ib_device 
+ 	cm_dev->ib_device = ib_device;
+ 	cm_get_ack_delay(cm_dev);
+ 
+-	cm_dev->device = device_create(&cm_class, &ib_device->dev,
+-					       MKDEV(0, 0),
++	cm_dev->device = class_device_create(&cm_class, MKDEV(0, 0),
++					       ib_device->class_dev.dev,
+ 					       "%s", ib_device->name);
+ 	if (!cm_dev->device) {
+ 		kfree(cm_dev);
+@@ -3794,7 +3799,7 @@ error1:
+ 		ib_unregister_mad_agent(port->mad_agent);
+ 		cm_remove_port_fs(port);
+ 	}
+-	device_unregister(cm_dev->device);
++	class_device_unregister(cm_dev->device);
+ 	kfree(cm_dev);
+ }
+ 
+@@ -3823,7 +3828,7 @@ static void cm_remove_one(struct ib_devi
+ 		flush_workqueue(cm.wq);
+ 		cm_remove_port_fs(port);
+ 	}
+-	device_unregister(cm_dev->device);
++	class_device_unregister(cm_dev->device);
+ 	kfree(cm_dev);
+ }
+ 
+Index: ofed_kernel/drivers/infiniband/core/sysfs.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/core/sysfs.c
++++ ofed_kernel/drivers/infiniband/core/sysfs.c
+@@ -678,11 +678,11 @@ static struct class ib_class = {
+ };
+ 
+ /* Show a given an attribute in the statistics group */
+-static ssize_t show_protocol_stat(const struct device *device,
+-			    struct device_attribute *attr, char *buf,
++static ssize_t show_protocol_stat(struct class_device *cdev,
++			    char *buf,
+ 			    unsigned offset)
+ {
+-	struct ib_device *dev = container_of(device, struct ib_device, dev);
++	struct ib_device *dev = container_of(cdev, struct ib_device, class_dev);
+ 	union rdma_protocol_stats stats;
+ 	ssize_t ret;
+ 
+@@ -696,14 +696,14 @@ static ssize_t show_protocol_stat(const 
+ 
+ /* generate a read-only iwarp statistics attribute */
+ #define IW_STATS_ENTRY(name)						\
+-static ssize_t show_##name(struct device *device,			\
+-			   struct device_attribute *attr, char *buf)	\
++static ssize_t show_##name(struct class_device *cdev,			\
++			   char *buf)					\
+ {									\
+-	return show_protocol_stat(device, attr, buf,			\
++	return show_protocol_stat(cdev, buf,				\
+ 				  offsetof(struct iw_protocol_stats, name) / \
+ 				  sizeof (u64));			\
+ }									\
+-static DEVICE_ATTR(name, S_IRUGO, show_##name, NULL)
++static CLASS_DEVICE_ATTR(name, S_IRUGO, show_##name, NULL)
+ 
+ IW_STATS_ENTRY(ipInReceives);
+ IW_STATS_ENTRY(ipInHdrErrors);
+@@ -745,44 +745,44 @@ IW_STATS_ENTRY(tcpInErrs);
+ IW_STATS_ENTRY(tcpOutRsts);
+ 
+ static struct attribute *iw_proto_stats_attrs[] = {
+-	&dev_attr_ipInReceives.attr,
+-	&dev_attr_ipInHdrErrors.attr,
+-	&dev_attr_ipInTooBigErrors.attr,
+-	&dev_attr_ipInNoRoutes.attr,
+-	&dev_attr_ipInAddrErrors.attr,
+-	&dev_attr_ipInUnknownProtos.attr,
+-	&dev_attr_ipInTruncatedPkts.attr,
+-	&dev_attr_ipInDiscards.attr,
+-	&dev_attr_ipInDelivers.attr,
+-	&dev_attr_ipOutForwDatagrams.attr,
+-	&dev_attr_ipOutRequests.attr,
+-	&dev_attr_ipOutDiscards.attr,
+-	&dev_attr_ipOutNoRoutes.attr,
+-	&dev_attr_ipReasmTimeout.attr,
+-	&dev_attr_ipReasmReqds.attr,
+-	&dev_attr_ipReasmOKs.attr,
+-	&dev_attr_ipReasmFails.attr,
+-	&dev_attr_ipFragOKs.attr,
+-	&dev_attr_ipFragFails.attr,
+-	&dev_attr_ipFragCreates.attr,
+-	&dev_attr_ipInMcastPkts.attr,
+-	&dev_attr_ipOutMcastPkts.attr,
+-	&dev_attr_ipInBcastPkts.attr,
+-	&dev_attr_ipOutBcastPkts.attr,
+-	&dev_attr_tcpRtoAlgorithm.attr,
+-	&dev_attr_tcpRtoMin.attr,
+-	&dev_attr_tcpRtoMax.attr,
+-	&dev_attr_tcpMaxConn.attr,
+-	&dev_attr_tcpActiveOpens.attr,
+-	&dev_attr_tcpPassiveOpens.attr,
+-	&dev_attr_tcpAttemptFails.attr,
+-	&dev_attr_tcpEstabResets.attr,
+-	&dev_attr_tcpCurrEstab.attr,
+-	&dev_attr_tcpInSegs.attr,
+-	&dev_attr_tcpOutSegs.attr,
+-	&dev_attr_tcpRetransSegs.attr,
+-	&dev_attr_tcpInErrs.attr,
+-	&dev_attr_tcpOutRsts.attr,
++	&class_device_attr_ipInReceives.attr,
++	&class_device_attr_ipInHdrErrors.attr,
++	&class_device_attr_ipInTooBigErrors.attr,
++	&class_device_attr_ipInNoRoutes.attr,
++	&class_device_attr_ipInAddrErrors.attr,
++	&class_device_attr_ipInUnknownProtos.attr,
++	&class_device_attr_ipInTruncatedPkts.attr,
++	&class_device_attr_ipInDiscards.attr,
++	&class_device_attr_ipInDelivers.attr,
++	&class_device_attr_ipOutForwDatagrams.attr,
++	&class_device_attr_ipOutRequests.attr,
++	&class_device_attr_ipOutDiscards.attr,
++	&class_device_attr_ipOutNoRoutes.attr,
++	&class_device_attr_ipReasmTimeout.attr,
++	&class_device_attr_ipReasmReqds.attr,
++	&class_device_attr_ipReasmOKs.attr,
++	&class_device_attr_ipReasmFails.attr,
++	&class_device_attr_ipFragOKs.attr,
++	&class_device_attr_ipFragFails.attr,
++	&class_device_attr_ipFragCreates.attr,
++	&class_device_attr_ipInMcastPkts.attr,
++	&class_device_attr_ipOutMcastPkts.attr,
++	&class_device_attr_ipInBcastPkts.attr,
++	&class_device_attr_ipOutBcastPkts.attr,
++	&class_device_attr_tcpRtoAlgorithm.attr,
++	&class_device_attr_tcpRtoMin.attr,
++	&class_device_attr_tcpRtoMax.attr,
++	&class_device_attr_tcpMaxConn.attr,
++	&class_device_attr_tcpActiveOpens.attr,
++	&class_device_attr_tcpPassiveOpens.attr,
++	&class_device_attr_tcpAttemptFails.attr,
++	&class_device_attr_tcpEstabResets.attr,
++	&class_device_attr_tcpCurrEstab.attr,
++	&class_device_attr_tcpInSegs.attr,
++	&class_device_attr_tcpOutSegs.attr,
++	&class_device_attr_tcpRetransSegs.attr,
++	&class_device_attr_tcpInErrs.attr,
++	&class_device_attr_tcpOutRsts.attr,
+ 	NULL
+ };
+ 

@@ -1,0 +1,27 @@
+diff -up ofed_kernel-2.6.18-EL5.1/drivers/infiniband/hw/ipath/ipath_keys.c c/drivers/infiniband/hw/ipath/ipath_keys.c
+--- ofed_kernel-2.6.18-EL5.1/drivers/infiniband/hw/ipath/ipath_keys.c	2009-03-03 17:55:26.000000000 -0800
++++ c/drivers/infiniband/hw/ipath/ipath_keys.c	2009-03-05 16:29:36.000000000 -0800
+@@ -104,8 +104,11 @@ int ipath_free_lkey(struct ipath_ibdev *
+ 	if (lkey == 0) {
+ 		if (dev->dma_mr) {
+ 			ret = atomic_read(&dev->dma_mr->refcount);
+-			if (!ret && dev->dma_mr == mr)
+-				dev->dma_mr = NULL;
++			if (dev->dma_mr == mr) {
++				if (!ret)
++					dev->dma_mr = NULL;
++			} else
++				ret = 0;
+ 		} else
+ 			ret = 0;
+ 	} else {
+@@ -117,8 +120,7 @@ int ipath_free_lkey(struct ipath_ibdev *
+ 	spin_unlock_irqrestore(&dev->lk_table.lock, flags);
+ 
+ 	if (ret) {
+-		ipath_dbg("ipath_free_lkey: MR busy (LKEY %x cnt %u)\n",
+-			  lkey, ret);
++		ipath_dbg("MR busy (LKEY %x cnt %u)\n", lkey, ret);
+ 		ret = -EBUSY;
+ 	}
+ 	return ret;

@@ -1,0 +1,49 @@
+commit 127119411a5221b6ba21f89657a004016c4f3e4a
+Author: Eli Cohen <eli@mellanox.co.il>
+Date:   Thu Apr 29 14:32:19 2010 +0300
+
+    rdma_cm: Add default translation from ToS to SL
+    
+    Add a default translation from for ToS to SL for rdma_cm over RoCE. The default
+    translation is dictated by the value of the module paramter, def_prec2sl. Any
+    value of ToS will be translated to this value. In the future we will add a more
+    generic translation table.
+    
+    Signed-off-by: Eli Cohen <eli@mellanox.co.il>
+
+diff --git a/drivers/infiniband/core/cma.c b/drivers/infiniband/core/cma.c
+index 615685e..bede675 100644
+--- a/drivers/infiniband/core/cma.c
++++ b/drivers/infiniband/core/cma.c
+@@ -73,6 +73,10 @@ static int cma_response_timeout = CMA_CM_RESPONSE_TIMEOUT;
+ module_param_named(cma_response_timeout, cma_response_timeout, int, 0644);
+ MODULE_PARM_DESC(cma_response_timeout, "CMA_CM_RESPONSE_TIMEOUT default=20");
+ 
++static int def_prec2sl = 3;
++module_param_named(def_prec2sl, def_prec2sl, int, 0644);
++MODULE_PARM_DESC(def_prec2sl, "Default value for SL priority with RoCE. Valid values 0 - 7");
++
+ static void cma_add_one(struct ib_device *device);
+ static void cma_remove_one(struct ib_device *device);
+ 
+@@ -1775,6 +1779,11 @@ static int cma_resolve_iw_route(struct rdma_id_private *id_priv, int timeout_ms)
+ 	return 0;
+ }
+ 
++static u8 tos_to_sl(u8 tos)
++{
++	return def_prec2sl & 7;
++}
++
+ static int cma_resolve_iboe_route(struct rdma_id_private *id_priv)
+ {
+ 	struct rdma_route *route = &id_priv->id.route;
+@@ -1822,7 +1831,7 @@ static int cma_resolve_iboe_route(struct rdma_id_private *id_priv)
+ 	route->path_rec->reversible = 1;
+ 	route->path_rec->pkey = cpu_to_be16(0xffff);
+ 	route->path_rec->mtu_selector = IB_SA_EQ;
+-	route->path_rec->sl = id_priv->tos >> 5;
++	route->path_rec->sl = tos_to_sl(id_priv->tos);
+ 
+ 	route->path_rec->mtu = iboe_get_mtu(ndev->mtu);
+ 	route->path_rec->rate_selector = IB_SA_EQ;

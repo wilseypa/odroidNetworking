@@ -1,0 +1,28 @@
+From ad3842b05506a153b9fed767fcb5eed92b7e5c80 Mon Sep 17 00:00:00 2001
+From: Ralph Campbell <ralph.campbell@qlogic.com>
+Date: Wed, 17 Oct 2007 13:04:50 -0700
+Subject: [PATCH] [PATCH] IB/core - delete redundant check for DR SMP
+
+The function handle_outgoing_dr_smp() is only called if the
+MAD to be sent is a directed route SMP.  Thus, the check for
+IB_MGMT_CLASS_SUBN_DIRECTED_ROUTE is redundant.
+
+Signed-off-by: Ralph Campbell <ralph.campbell@qlogic.com>
+---
+ drivers/infiniband/core/mad.c |    3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+Index: ofed_kernel/drivers/infiniband/core/mad.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/core/mad.c
++++ ofed_kernel/drivers/infiniband/core/mad.c
+@@ -679,8 +679,7 @@ static int handle_outgoing_dr_smp(struct
+ 	struct ib_wc mad_wc;
+ 	struct ib_send_wr *send_wr = &mad_send_wr->send_wr;
+ 
+-	if (device->node_type == RDMA_NODE_IB_SWITCH &&
+-	    smp->mgmt_class == IB_MGMT_CLASS_SUBN_DIRECTED_ROUTE)
++	if (device->node_type == RDMA_NODE_IB_SWITCH)
+ 		port_num = send_wr->wr.ud.port_num;
+ 	else
+ 		port_num = mad_agent_priv->agent.port_num;

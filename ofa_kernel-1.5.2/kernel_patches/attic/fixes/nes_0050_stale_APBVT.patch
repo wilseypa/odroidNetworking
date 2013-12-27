@@ -1,0 +1,183 @@
+diff --git a/drivers/infiniband/hw/nes/nes_cm.c b/drivers/infiniband/hw/nes/nes_cm.c
+index 01fd309..fd2dba7 100644
+--- a/drivers/infiniband/hw/nes/nes_cm.c
++++ b/drivers/infiniband/hw/nes/nes_cm.c
+@@ -86,7 +86,7 @@ static int mini_cm_accept(struct nes_cm_core *, struct ietf_mpa_frame *,
+ 	struct nes_cm_node *);
+ static int mini_cm_reject(struct nes_cm_core *, struct ietf_mpa_frame *,
+ 	struct nes_cm_node *);
+-static void mini_cm_recv_pkt(struct nes_cm_core *, struct nes_vnic *,
++static int mini_cm_recv_pkt(struct nes_cm_core *, struct nes_vnic *,
+ 	struct sk_buff *);
+ static int mini_cm_dealloc_core(struct nes_cm_core *);
+ static int mini_cm_get(struct nes_cm_core *);
+@@ -2034,7 +2034,7 @@ static int mini_cm_close(struct nes_cm_core *cm_core, struct nes_cm_node *cm_nod
+  * recv_pkt - recv an ETHERNET packet, and process it through CM
+  * node state machine
+  */
+-static void mini_cm_recv_pkt(struct nes_cm_core *cm_core,
++static int mini_cm_recv_pkt(struct nes_cm_core *cm_core,
+ 	struct nes_vnic *nesvnic, struct sk_buff *skb)
+ {
+ 	struct nes_cm_node *cm_node = NULL;
+@@ -2042,23 +2042,16 @@ static void mini_cm_recv_pkt(struct nes_cm_core *cm_core,
+ 	struct iphdr *iph;
+ 	struct tcphdr *tcph;
+ 	struct nes_cm_info nfo;
++	int skb_handled = 1;
+ 
+ 	if (!skb)
+-		return;
++		return 0;
+ 	if (skb->len < sizeof(struct iphdr) + sizeof(struct tcphdr)) {
+-		dev_kfree_skb_any(skb);
+-		return;
++		return 0;
+ 	}
+ 
+ 	iph = (struct iphdr *)skb->data;
+ 	tcph = (struct tcphdr *)(skb->data + sizeof(struct iphdr));
+-	skb_reset_network_header(skb);
+-	skb_set_transport_header(skb, sizeof(*tcph));
+-	if (!tcph) {
+-		dev_kfree_skb_any(skb);
+-		return;
+-	}
+-	skb->len = ntohs(iph->tot_len);
+ 
+ 	nfo.loc_addr = ntohl(iph->daddr);
+ 	nfo.loc_port = ntohs(tcph->dest);
+@@ -2079,23 +2072,21 @@ static void mini_cm_recv_pkt(struct nes_cm_core *cm_core,
+ 			/* Only type of packet accepted are for */
+ 			/* the PASSIVE open (syn only) */
+ 			if ((!tcph->syn) || (tcph->ack)) {
+-				cm_packets_dropped++;
++				skb_handled = 0;
+ 				break;
+ 			}
+ 			listener = find_listener(cm_core, nfo.loc_addr,
+ 				nfo.loc_port,
+ 				NES_CM_LISTENER_ACTIVE_STATE);
+-			if (listener) {
+-				nfo.cm_id = listener->cm_id;
+-				nfo.conn_type = listener->conn_type;
+-			} else {
+-				nes_debug(NES_DBG_CM, "Unable to find listener "
+-					"for the pkt\n");
+-				cm_packets_dropped++;
+-				dev_kfree_skb_any(skb);
++			if (!listener) {
++				nfo.cm_id = NULL;
++				nfo.conn_type = 0;
++				nes_debug(NES_DBG_CM, "Unable to find listener for the pkt\n");
++				skb_handled = 0;
+ 				break;
+ 			}
+-
++			nfo.cm_id = listener->cm_id;
++			nfo.conn_type = listener->conn_type;
+ 			cm_node = make_cm_node(cm_core, nesvnic, &nfo,
+ 				listener);
+ 			if (!cm_node) {
+@@ -2121,9 +2112,13 @@ static void mini_cm_recv_pkt(struct nes_cm_core *cm_core,
+ 			dev_kfree_skb_any(skb);
+ 			break;
+ 		}
++		skb_reset_network_header(skb);
++		skb_set_transport_header(skb, sizeof(*tcph));
++		skb->len = ntohs(iph->tot_len);
+ 		process_packet(cm_node, skb, cm_core);
+ 		rem_ref_cm_node(cm_core, cm_node);
+ 	} while (0);
++	return skb_handled;
+ }
+ 
+ 
+@@ -2927,15 +2922,16 @@ int nes_destroy_listen(struct iw_cm_id *cm_id)
+  */
+ int nes_cm_recv(struct sk_buff *skb, struct net_device *netdevice)
+ {
++	int rc = 0;
+ 	cm_packets_received++;
+ 	if ((g_cm_core) && (g_cm_core->api)) {
+-		g_cm_core->api->recv_pkt(g_cm_core, netdev_priv(netdevice), skb);
++		rc = g_cm_core->api->recv_pkt(g_cm_core, netdev_priv(netdevice), skb);
+ 	} else {
+ 		nes_debug(NES_DBG_CM, "Unable to process packet for CM,"
+ 				" cm is not setup properly.\n");
+ 	}
+ 
+-	return 0;
++	return rc;
+ }
+ 
+ 
+diff --git a/drivers/infiniband/hw/nes/nes_cm.h b/drivers/infiniband/hw/nes/nes_cm.h
+index 6f01095..fafa350 100644
+--- a/drivers/infiniband/hw/nes/nes_cm.h
++++ b/drivers/infiniband/hw/nes/nes_cm.h
+@@ -396,7 +396,7 @@ struct nes_cm_ops {
+ 			struct nes_cm_node *);
+ 	int (*reject)(struct nes_cm_core *, struct ietf_mpa_frame *,
+ 			struct nes_cm_node *);
+-	void (*recv_pkt)(struct nes_cm_core *, struct nes_vnic *,
++	int (*recv_pkt)(struct nes_cm_core *, struct nes_vnic *,
+ 			struct sk_buff *);
+ 	int (*destroy_cm_core)(struct nes_cm_core *);
+ 	int (*get)(struct nes_cm_core *);
+diff --git a/drivers/infiniband/hw/nes/nes_hw.c b/drivers/infiniband/hw/nes/nes_hw.c
+index 7c49cc8..8f70ff2 100644
+--- a/drivers/infiniband/hw/nes/nes_hw.c
++++ b/drivers/infiniband/hw/nes/nes_hw.c
+@@ -2700,27 +2700,33 @@ void nes_nic_ce_handler(struct nes_device *nesdev, struct nes_hw_nic_cq *cq)
+ 							pkt_type, (pkt_type & NES_PKT_TYPE_APBVT_MASK)); */
+ 
+ 				if ((pkt_type & NES_PKT_TYPE_APBVT_MASK) == NES_PKT_TYPE_APBVT_BITS) {
+-					nes_cm_recv(rx_skb, nesvnic->netdev);
++					if (nes_cm_recv(rx_skb, nesvnic->netdev))
++						rx_skb = NULL;
++				}
++				if (rx_skb == NULL)
++					goto skip_rx_indicate0;
++
++
++				if ((cqe_misc & NES_NIC_CQE_TAG_VALID) &&
++				    (nesvnic->vlan_grp != NULL)) {
++					vlan_tag = (u16)(le32_to_cpu(
++							cq->cq_vbase[head].cqe_words[NES_NIC_CQE_TAG_PKT_TYPE_IDX])
++							>> 16);
++					nes_debug(NES_DBG_CQ, "%s: Reporting stripped VLAN packet. Tag = 0x%04X\n",
++							nesvnic->netdev->name, vlan_tag);
++					if (nes_use_lro)
++						lro_vlan_hwaccel_receive_skb(&nesvnic->lro_mgr, rx_skb,
++								nesvnic->vlan_grp, vlan_tag, NULL);
++					else
++						nes_vlan_rx(rx_skb, nesvnic->vlan_grp, vlan_tag);
+ 				} else {
+-					if ((cqe_misc & NES_NIC_CQE_TAG_VALID) && (nesvnic->vlan_grp != NULL)) {
+-						vlan_tag = (u16)(le32_to_cpu(
+-								cq->cq_vbase[head].cqe_words[NES_NIC_CQE_TAG_PKT_TYPE_IDX])
+-								>> 16);
+-						nes_debug(NES_DBG_CQ, "%s: Reporting stripped VLAN packet. Tag = 0x%04X\n",
+-								nesvnic->netdev->name, vlan_tag);
+-						if (nes_use_lro)
+-							lro_vlan_hwaccel_receive_skb(&nesvnic->lro_mgr, rx_skb,
+-									nesvnic->vlan_grp, vlan_tag, NULL);
+-						else
+-							nes_vlan_rx(rx_skb, nesvnic->vlan_grp, vlan_tag);
+-					} else {
+-						if (nes_use_lro)
+-							lro_receive_skb(&nesvnic->lro_mgr, rx_skb, NULL);
+-						else
+-							nes_netif_rx(rx_skb);
+-					}
++					if (nes_use_lro)
++						lro_receive_skb(&nesvnic->lro_mgr, rx_skb, NULL);
++					else
++						nes_netif_rx(rx_skb);
+ 				}
+ 
++skip_rx_indicate0:
+ 				nesvnic->netdev->last_rx = jiffies;
+ 				/* nesvnic->netstats.rx_packets++; */
+ 				/* nesvnic->netstats.rx_bytes += rx_pkt_size; */

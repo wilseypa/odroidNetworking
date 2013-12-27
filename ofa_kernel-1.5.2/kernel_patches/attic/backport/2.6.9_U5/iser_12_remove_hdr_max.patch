@@ -1,0 +1,22 @@
+From 97672ef8a29da5e16774d1de9527b2cc29415e36 Mon Sep 17 00:00:00 2001
+From: Doron Shoham <dorons@voltaire.com>
+Date: Thu, 3 Jul 2008 14:59:16 +0300
+Subject: [PATCH] remove hdr_max
+
+Signed-off-by: Doron Shoham <dorons@voltaire.com>
+---
+ drivers/infiniband/ulp/iser/iscsi_iser.c |    1 -
+ 1 file changed, 1 deletion(-)
+
+Index: ofed_kernel/drivers/infiniband/ulp/iser/iscsi_iser.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/iser/iscsi_iser.c
++++ ofed_kernel/drivers/infiniband/ulp/iser/iscsi_iser.c
+@@ -394,7 +394,6 @@ iscsi_iser_session_create(struct iscsi_t
+ 		ctask      = session->cmds[i];
+ 		iser_ctask = ctask->dd_data;
+ 		ctask->hdr = (struct iscsi_cmd *)&iser_ctask->desc.iscsi_header;
+-		ctask->hdr_max = sizeof(iser_ctask->desc.iscsi_header);
+ 	}
+ 
+ 	for (i = 0; i < session->mgmtpool_max; i++) {

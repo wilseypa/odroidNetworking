@@ -1,0 +1,162 @@
+From 1887ca4ebb2098b05f91ddfae318d36110e1ef65 Mon Sep 17 00:00:00 2001
+From: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+Date: Thu, 11 Feb 2010 15:29:28 +0200
+Subject: [PATCH] mlx4_en: UDP RSS support
+
+Signed-off-by: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+---
+ drivers/net/mlx4/en_main.c   |   23 +++++++++++++++--------
+ drivers/net/mlx4/en_netdev.c |    7 ++++---
+ drivers/net/mlx4/en_rx.c     |   16 +++++++++-------
+ drivers/net/mlx4/mlx4_en.h   |    6 +++++-
+ 4 files changed, 33 insertions(+), 19 deletions(-)
+
+diff --git a/drivers/net/mlx4/en_main.c b/drivers/net/mlx4/en_main.c
+index 1221f51..3f8303c 100644
+--- a/drivers/net/mlx4/en_main.c
++++ b/drivers/net/mlx4/en_main.c
+@@ -62,11 +62,12 @@ static const char mlx4_en_version[] =
+  */
+ 
+ 
+-/* Use a XOR rathern than Toeplitz hash function for RSS */
+-MLX4_EN_PARM_INT(rss_xor, 0, "Use XOR hash function for RSS");
+-
+-/* RSS hash type mask - default to <saddr, daddr, sport, dport> */
+-MLX4_EN_PARM_INT(rss_mask, 0x5, "RSS hash type bitmask");
++/* Enable RSS TCP traffic */
++MLX4_EN_PARM_INT(tcp_rss, 1,
++		 "Enable RSS for incomming TCP traffic or disabled (0)");
++/* Enable RSS UDP traffic */
++MLX4_EN_PARM_INT(udp_rss, 1,
++		 "Enable RSS for incomming UDP traffic or disabled (0)");
+ 
+ /* Number of LRO sessions per Rx ring (rounded up to a power of two) */
+ MLX4_EN_PARM_INT(num_lro, MLX4_EN_MAX_LRO_DESCRIPTORS,
+@@ -86,8 +87,12 @@ static int mlx4_en_get_profile(struct mlx4_en_dev *mdev)
+ 	struct mlx4_en_profile *params = &mdev->profile;
+ 	int i;
+ 
+-	params->rss_xor = (rss_xor != 0);
+-	params->rss_mask = rss_mask & 0x1f;
++	params->tcp_rss = tcp_rss;
++	params->udp_rss = udp_rss;
++	if (params->udp_rss && !mdev->dev->caps.udp_rss) {
++		mlx4_warn(mdev, "UDP RSS is not supported on this device.\n");
++		params->udp_rss = 0;
++	}
+ 	params->num_lro = min_t(int, num_lro , MLX4_EN_MAX_LRO_DESCRIPTORS);
+ 	params->ip_reasm = ip_reasm;
+ 	for (i = 1; i <= MLX4_MAX_PORTS; i++) {
+@@ -230,7 +235,9 @@ static void *mlx4_en_add(struct mlx4_dev *dev)
+ 		mlx4_info(mdev, "Using %d tx rings for port:%d\n",
+ 			  mdev->profile.prof[i].tx_ring_num, i);
+ 		mdev->profile.prof[i].rx_ring_num = rounddown_pow_of_two(
+-			min_t(int, dev->caps.num_comp_vectors, MAX_RX_RINGS)) + 1;
++			min_t(int, dev->caps.num_comp_vectors, MAX_RX_RINGS/2)) +
++		(mdev->profile.udp_rss ? rounddown_pow_of_two(
++			min_t(int, dev->caps.num_comp_vectors, MAX_RX_RINGS/2)) : 1);
+ 		mlx4_info(mdev, "Defaulting to %d rx rings for port:%d\n",
+ 			  mdev->profile.prof[i].rx_ring_num, i);
+ 	}
+diff --git a/drivers/net/mlx4/en_netdev.c b/drivers/net/mlx4/en_netdev.c
+index cded8e8..7af8592 100644
+--- a/drivers/net/mlx4/en_netdev.c
++++ b/drivers/net/mlx4/en_netdev.c
+@@ -884,10 +884,10 @@ int mlx4_en_alloc_resources(struct mlx4_en_priv *priv)
+ 				      prof->rx_ring_size, i, RX))
+ 			goto err;
+ 
+-		if (i > 0)
+-			priv->rx_ring[i].use_frags = 1;
+-		else
++		if (i > priv->rx_ring_num - priv->udp_rings - 1)
+ 			priv->rx_ring[i].use_frags = 0;
++		else
++			priv->rx_ring[i].use_frags = 1;
+ 		if (mlx4_en_create_rx_ring(priv, &priv->rx_ring[i],
+ 					   prof->rx_ring_size))
+ 			goto err;
+@@ -1014,6 +1014,7 @@ int mlx4_en_init_netdev(struct mlx4_en_dev *mdev, int port,
+ 	priv->flags = prof->flags;
+ 	priv->tx_ring_num = prof->tx_ring_num;
+ 	priv->rx_ring_num = prof->rx_ring_num;
++	priv->udp_rings = mdev->profile.udp_rss ? prof->rx_ring_num / 2 : 1;
+ 	priv->mc_list = NULL;
+ 	priv->mac_index = -1;
+ 	priv->msg_enable = MLX4_EN_MSG_LEVEL;
+diff --git a/drivers/net/mlx4/en_rx.c b/drivers/net/mlx4/en_rx.c
+index c1fc88e..5197af2 100644
+--- a/drivers/net/mlx4/en_rx.c
++++ b/drivers/net/mlx4/en_rx.c
+@@ -1081,8 +1081,7 @@ int mlx4_en_config_rss_steer(struct mlx4_en_priv *priv)
+ 	struct mlx4_qp_context context;
+ 	struct mlx4_en_rss_context *rss_context;
+ 	void *ptr;
+-	int rss_xor = mdev->profile.rss_xor;
+-	u8 rss_mask = mdev->profile.rss_mask;
++	u8 rss_mask = (priv->udp_rings > 1) ? 0x3f : 0x14;
+ 	int i, qpn;
+ 	int err = 0;
+ 	int good_qps = 0;
+@@ -1126,11 +1125,14 @@ int mlx4_en_config_rss_steer(struct mlx4_en_priv *priv)
+ 
+ 	ptr = ((void *) &context) + 0x3c;
+ 	rss_context = (struct mlx4_en_rss_context *) ptr;
+-	rss_context->base_qpn = cpu_to_be32(ilog2(priv->rx_ring_num - 1) << 24 |
+-					    (rss_map->base_qpn + 1));
+-	rss_context->default_qpn = cpu_to_be32(rss_map->base_qpn);
+-	rss_context->hash_fn = rss_xor & 0x3;
+-	rss_context->flags = rss_mask << 2;
++	rss_context->base_qpn = cpu_to_be32(ilog2(priv->rx_ring_num - priv->udp_rings) << 24 |
++					    (rss_map->base_qpn));
++	rss_context->default_qpn = cpu_to_be32(rss_map->base_qpn +
++					       priv->rx_ring_num -
++					       priv->udp_rings);
++	rss_context->flags = rss_mask;
++	if (priv->udp_rings > 1)
++		rss_context->base_qpn_udp = rss_context->default_qpn;
+ 
+ 	err = mlx4_qp_to_ready(mdev->dev, &priv->res.mtt, &context,
+ 			       &rss_map->indir_qp, &rss_map->indir_state);
+diff --git a/drivers/net/mlx4/mlx4_en.h b/drivers/net/mlx4/mlx4_en.h
+index d000ded..436142a 100644
+--- a/drivers/net/mlx4/mlx4_en.h
++++ b/drivers/net/mlx4/mlx4_en.h
+@@ -94,7 +94,7 @@
+ #define MLX4_EN_PAGE_SHIFT	12
+ #define MLX4_EN_PAGE_SIZE	(1 << MLX4_EN_PAGE_SHIFT)
+ #define MAX_TX_RINGS		(MLX4_EN_NUM_HASH_RINGS + 1 + MLX4_EN_NUM_PPP_RINGS)
+-#define MAX_RX_RINGS		9
++#define MAX_RX_RINGS		16
+ #define TXBB_SIZE		64
+ #define HEADROOM		(2048 / TXBB_SIZE + 1)
+ #define STAMP_STRIDE		64
+@@ -373,6 +373,8 @@ struct mlx4_en_profile {
+ 	int rss_xor;
+ 	int num_lro;
+ 	int ip_reasm;
++	int tcp_rss;
++	int udp_rss;
+ 	u8 rss_mask;
+ 	u32 active_ports;
+ 	u32 small_pkt_int;
+@@ -422,6 +424,7 @@ struct mlx4_en_rss_context {
+ 	u8 hash_fn;
+ 	u8 flags;
+ 	__be32 rss_key[10];
++	__be32 base_qpn_udp;
+ };
+ 
+ struct mlx4_en_port_state {
+@@ -527,6 +530,7 @@ struct mlx4_en_priv {
+ #define MLX4_EN_FLAG_PROMISC	0x1
+ 	u32 tx_ring_num;
+ 	u32 rx_ring_num;
++	u32 udp_rings;
+ 	u32 rx_skb_size;
+ 	struct mlx4_en_frag_info frag_info[MLX4_EN_MAX_RX_FRAGS];
+ 	u16 num_frags;
+-- 
+1.5.3.7
+

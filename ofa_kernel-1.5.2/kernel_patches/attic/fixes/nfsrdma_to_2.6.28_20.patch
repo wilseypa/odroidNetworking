@@ -1,0 +1,54 @@
+From 1a954051b0cf79bd67e5f9db40333e3a9b1d05d2 Mon Sep 17 00:00:00 2001
+From: Tom Talpey <talpey@netapp.com>
+Date: Thu, 9 Oct 2008 15:01:31 -0400
+Subject: [PATCH] RPC/RDMA: fix connect/reconnect resource leak.
+
+The RPC/RDMA code can leak RDMA connection manager endpoints in
+certain error cases on connect. Don't signal unwanted events,
+and be certain to destroy any allocated qp.
+
+Signed-off-by: Tom Talpey <talpey@netapp.com>
+Signed-off-by: Trond Myklebust <Trond.Myklebust@netapp.com>
+
+diff --git a/net/sunrpc/xprtrdma/verbs.c b/net/sunrpc/xprtrdma/verbs.c
+index d94f379..a63d0c0 100644
+--- a/net/sunrpc/xprtrdma/verbs.c
++++ b/net/sunrpc/xprtrdma/verbs.c
+@@ -338,10 +338,8 @@ connected:
+ 		wake_up_all(&ep->rep_connect_wait);
+ 		break;
+ 	default:
+-		ia->ri_async_rc = -EINVAL;
+-		dprintk("RPC:       %s: unexpected CM event %X\n",
++		dprintk("RPC:       %s: unexpected CM event %d\n",
+ 			__func__, event->event);
+-		complete(&ia->ri_done);
+ 		break;
+ 	}
+ 
+@@ -355,6 +353,8 @@ rpcrdma_create_id(struct rpcrdma_xprt *xprt,
+ 	struct rdma_cm_id *id;
+ 	int rc;
+ 
++	init_completion(&ia->ri_done);
++
+ 	id = rdma_create_id(rpcrdma_conn_upcall, xprt, RDMA_PS_TCP);
+ 	if (IS_ERR(id)) {
+ 		rc = PTR_ERR(id);
+@@ -427,8 +427,6 @@ rpcrdma_ia_open(struct rpcrdma_xprt *xprt, struct sockaddr *addr, int memreg)
+ 	struct ib_device_attr devattr;
+ 	struct rpcrdma_ia *ia = &xprt->rx_ia;
+ 
+-	init_completion(&ia->ri_done);
+-
+ 	ia->ri_id = rpcrdma_create_id(xprt, ia, addr);
+ 	if (IS_ERR(ia->ri_id)) {
+ 		rc = PTR_ERR(ia->ri_id);
+@@ -815,6 +813,7 @@ retry:
+ 			goto out;
+ 		}
+ 		/* END TEMP */
++		rdma_destroy_qp(ia->ri_id);
+ 		rdma_destroy_id(ia->ri_id);
+ 		ia->ri_id = id;
+ 	}

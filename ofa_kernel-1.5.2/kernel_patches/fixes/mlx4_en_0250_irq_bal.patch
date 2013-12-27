@@ -1,0 +1,48 @@
+Index: ofed_kernel-fixes/drivers/net/mlx4/en_rx.c
+===================================================================
+--- ofed_kernel-fixes.orig/drivers/net/mlx4/en_rx.c	2010-06-10 15:48:46.000000000 +0300
++++ ofed_kernel-fixes/drivers/net/mlx4/en_rx.c	2010-06-10 17:16:13.000000000 +0300
+@@ -53,6 +53,10 @@
+ 	return 0;
+ }
+ 
++enum {
++	MIN_RX_ARM = 1024,
++};
++
+ static int mlx4_en_alloc_frag(struct mlx4_en_priv *priv,
+ 			      struct mlx4_en_rx_desc *rx_desc,
+ 			      struct skb_frag_struct *skb_frags,
+@@ -956,12 +960,19 @@
+ 		done = mlx4_en_process_rx_cq_skb(dev, cq, budget);
+ 
+ 	/* If we used up all the quota - we're probably not done yet... */
+-	if (done == budget)
++	cq->tot_rx += done;
++	if (done == budget) {
+ 		INC_PERF_COUNTER(priv->pstats.napi_quota);
++		if (cq->tot_rx >= MIN_RX_ARM) {
++			cq->tot_rx -= MIN_RX_ARM;
++			mlx4_en_arm_cq(priv, cq);
++		}
++	}	
+ 	else {
+ 		/* Done for now */
+ 		napi_complete(napi);
+ 		mlx4_en_arm_cq(priv, cq);
++		cq->tot_rx = 0;
+ 	}
+ 	return done;
+ }
+Index: ofed_kernel-fixes/drivers/net/mlx4/mlx4_en.h
+===================================================================
+--- ofed_kernel-fixes.orig/drivers/net/mlx4/mlx4_en.h	2010-06-10 15:48:50.000000000 +0300
++++ ofed_kernel-fixes/drivers/net/mlx4/mlx4_en.h	2010-06-10 17:11:54.000000000 +0300
+@@ -352,6 +352,7 @@
+ 	u16 moder_cnt;
+ 	struct mlx4_cqe *buf;
+ #define MLX4_EN_OPCODE_ERROR	0x1e
++	u32 tot_rx;
+ };
+ 
+ struct mlx4_en_port_profile {

@@ -1,0 +1,81 @@
+From cf088cc63ecf07e838235a0deb0f18072224e034 Mon Sep 17 00:00:00 2001
+From: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+Date: Thu, 3 Sep 2009 10:31:39 +0300
+Subject: [PATCH] mlx4: Added interrupts test support
+
+A test that verifies that we can accept interrupts on all
+the irq vectors of the device.
+Interrupts are checked using the NOP command.
+
+Signed-off-by: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+---
+ drivers/net/mlx4/eq.c       |   44 +++++++++++++++++++++++++++++++++++++++++++
+ include/linux/mlx4/device.h |    1 +
+ 2 files changed, 45 insertions(+), 0 deletions(-)
+
+diff --git a/drivers/net/mlx4/eq.c b/drivers/net/mlx4/eq.c
+index 66d8bc6..4d0e849 100644
+--- a/drivers/net/mlx4/eq.c
++++ b/drivers/net/mlx4/eq.c
+@@ -730,3 +730,47 @@ void mlx4_cleanup_eq_table(struct mlx4_dev *dev)
+ 
+ 	kfree(priv->eq_table.uar_map);
+ }
++
++/* A test that verifies that we can accept interrupts on all
++ * the irq vectors of the device.
++ * Interrupts are checked using the NOP command.
++ */
++int mlx4_test_interrupts(struct mlx4_dev *dev)
++{
++	struct mlx4_priv *priv = mlx4_priv(dev);
++	int i;
++	int err;
++
++	err = mlx4_NOP(dev);
++	/* When not in MSI_X, there is only one irq to check */
++	if (!(dev->flags & MLX4_FLAG_MSI_X))
++		return err;
++
++	/* A loop over all completion vectors, for each vector we will check
++	 * whether it works by mapping command completions to that vector
++	 * and performing a NOP command
++	 */
++	for(i = 0; !err && (i < dev->caps.num_comp_vectors); ++i) {
++		/* Temporary use polling for command completions */
++		mlx4_cmd_use_polling(dev);
++
++		/* Map the new eq to handle all asyncronous events */
++		err = mlx4_MAP_EQ(dev, MLX4_ASYNC_EVENT_MASK, 0,
++				  priv->eq_table.eq[i].eqn);
++		if (err) {
++			mlx4_warn(dev, "Failed mapping eq for interrupt test\n");
++			mlx4_cmd_use_events(dev);
++			break;
++		}
++
++		/* Go back to using events */
++		mlx4_cmd_use_events(dev);
++		err = mlx4_NOP(dev);
++	}
++
++	/* Return to default */
++	mlx4_MAP_EQ(dev, MLX4_ASYNC_EVENT_MASK, 0,
++		    priv->eq_table.eq[dev->caps.num_comp_vectors].eqn);
++	return err;
++}
++EXPORT_SYMBOL(mlx4_test_interrupts);
+diff --git a/include/linux/mlx4/device.h b/include/linux/mlx4/device.h
+index 02f15f4..7c5983f 100644
+--- a/include/linux/mlx4/device.h
++++ b/include/linux/mlx4/device.h
+@@ -491,5 +491,6 @@ int mlx4_fmr_free(struct mlx4_dev *dev, struct mlx4_fmr *fmr);
+ int mlx4_SYNC_TPT(struct mlx4_dev *dev);
+ int mlx4_query_diag_counters(struct mlx4_dev *mlx4_dev, int array_length,
+ 			     u8 op_modifier, u32 in_offset[], u32 counter_out[]);
++int mlx4_test_interrupts(struct mlx4_dev *dev);
+ 
+ #endif /* MLX4_DEVICE_H */
+-- 
+1.6.3
+

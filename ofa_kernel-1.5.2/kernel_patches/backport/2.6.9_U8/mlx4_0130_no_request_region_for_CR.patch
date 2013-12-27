@@ -1,0 +1,53 @@
+From 06e6d0902b8128db97d04dbadae698bc85fd163e Mon Sep 17 00:00:00 2001
+From: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+Date: Mon, 18 May 2009 16:00:02 +0300
+Subject: [PATCH] mlx4: Don't request region for CR
+
+Signed-off-by: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+---
+ drivers/net/mlx4/main.c |   12 +-----------
+ 1 files changed, 1 insertions(+), 11 deletions(-)
+
+diff --git a/drivers/net/mlx4/main.c b/drivers/net/mlx4/main.c
+index 960618f..3446119 100644
+--- a/drivers/net/mlx4/main.c
++++ b/drivers/net/mlx4/main.c
+@@ -1214,16 +1214,10 @@ static int __mlx4_init_one(struct pci_dev *pdev, const struct pci_device_id *id)
+ 		goto err_disable_pdev;
+ 	}
+ 
+-	err = pci_request_region(pdev, 0, DRV_NAME);
+-	if (err) {
+-		dev_err(&pdev->dev, "Cannot request control region, aborting.\n");
+-		goto err_disable_pdev;
+-	}
+-
+ 	err = pci_request_region(pdev, 2, DRV_NAME);
+ 	if (err) {
+ 		dev_err(&pdev->dev, "Cannot request UAR region, aborting.\n");
+-		goto err_release_bar0;
++		goto err_disable_pdev;;
+ 	}
+ 
+ 	pci_set_master(pdev);
+@@ -1357,9 +1351,6 @@ err_free_dev:
+ err_release_bar2:
+ 	pci_release_region(pdev, 2);
+ 
+-err_release_bar0:
+-	pci_release_region(pdev, 0);
+-
+ err_disable_pdev:
+ 	pci_disable_device(pdev);
+ 	pci_set_drvdata(pdev, NULL);
+@@ -1414,7 +1405,6 @@ static void mlx4_remove_one(struct pci_dev *pdev)
+ 
+ 		kfree(priv);
+ 		pci_release_region(pdev, 2);
+-		pci_release_region(pdev, 0);
+ 		pci_disable_device(pdev);
+ 		pci_set_drvdata(pdev, NULL);
+ 	}
+-- 
+1.5.3
+

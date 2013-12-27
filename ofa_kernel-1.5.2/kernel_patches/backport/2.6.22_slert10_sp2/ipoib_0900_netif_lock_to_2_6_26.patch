@@ -1,0 +1,26 @@
+---
+ drivers/infiniband/ulp/ipoib/ipoib_multicast.c |    4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+Index: ofed_kernel/drivers/infiniband/ulp/ipoib/ipoib_multicast.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/ipoib/ipoib_multicast.c
++++ ofed_kernel/drivers/infiniband/ulp/ipoib/ipoib_multicast.c
+@@ -777,7 +777,7 @@ void ipoib_mcast_restart_task(struct wor
+ 	ipoib_mcast_stop_thread(dev, 0);
+ 
+ 	local_irq_save(flags);
+-	netif_addr_lock(dev);
++	netif_tx_lock(dev);
+ 	spin_lock(&priv->lock);
+ 
+ 	/*
+@@ -854,7 +854,7 @@ void ipoib_mcast_restart_task(struct wor
+ 	}
+ 
+ 	spin_unlock(&priv->lock);
+-	netif_addr_unlock(dev);
++	netif_tx_unlock(dev);
+ 	local_irq_restore(flags);
+ 
+ 	/* We have to cancel outside of the spinlock */

@@ -1,0 +1,497 @@
+ib_core: avoid race condition between sysfs access and low-level module unload. (V2)
+
+In newer kernels, although a low-level module will not be unloaded (code)
+while its sysfs interface is being accessed, it is possible for the module to
+free all its resources (data) during such access.  This almost always causes
+a kernel Oops.
+
+To avoid this, we protect the device reg_state with a mutex, and perform
+all sysfs operations (show, store) atomically within this mutex.
+
+V2: fix thinko bug in sysfs_state_show changes(found by Ralph Campbell).
+
+Signed-off-by: Jack Morgenstein <jackm@dev.mellanox.co.il>
+Signed-off-by: Ralph Campbell <ralph.campbell@qlogic.com>
+
+Index: ofed_kernel-2.6.18/drivers/infiniband/core/device.c
+===================================================================
+--- ofed_kernel-2.6.18.orig/drivers/infiniband/core/device.c	2009-06-01 16:06:02.000000000 +0300
++++ ofed_kernel-2.6.18/drivers/infiniband/core/device.c	2009-06-01 16:08:44.000000000 +0300
+@@ -178,9 +178,14 @@ static int end_port(struct ib_device *de
+  */
+ struct ib_device *ib_alloc_device(size_t size)
+ {
++	struct ib_device *ibdev;
++
+ 	BUG_ON(size < sizeof (struct ib_device));
+ 
+-	return kzalloc(size, GFP_KERNEL);
++	ibdev = kzalloc(size, GFP_KERNEL);
++	if (ibdev)
++		mutex_init(&ibdev->sysfs_mutex);
++	return ibdev;
+ }
+ EXPORT_SYMBOL(ib_alloc_device);
+ 
+@@ -313,9 +318,10 @@ int ib_register_device(struct ib_device 
+ 		goto out;
+ 	}
+ 
++	mutex_lock(&device->sysfs_mutex);
+ 	list_add_tail(&device->core_list, &device_list);
+-
+ 	device->reg_state = IB_DEV_REGISTERED;
++	mutex_unlock(&device->sysfs_mutex);
+ 
+ 	{
+ 		struct ib_client *client;
+@@ -361,7 +367,9 @@ void ib_unregister_device(struct ib_devi
+ 		kfree(context);
+ 	spin_unlock_irqrestore(&device->client_data_lock, flags);
+ 
++	mutex_lock(&device->sysfs_mutex);
+ 	device->reg_state = IB_DEV_UNREGISTERED;
++	mutex_unlock(&device->sysfs_mutex);
+ }
+ EXPORT_SYMBOL(ib_unregister_device);
+ 
+Index: ofed_kernel-2.6.18/drivers/infiniband/core/sysfs.c
+===================================================================
+--- ofed_kernel-2.6.18.orig/drivers/infiniband/core/sysfs.c	2009-06-01 16:06:02.000000000 +0300
++++ ofed_kernel-2.6.18/drivers/infiniband/core/sysfs.c	2009-06-01 16:08:44.000000000 +0300
+@@ -66,6 +66,11 @@ struct port_table_attribute {
+ 	int			index;
+ };
+ 
++static inline int ibdev_is_alive(const struct ib_device *dev)
++{
++	return dev->reg_state == IB_DEV_REGISTERED;
++}
++
+ static ssize_t port_attr_show(struct kobject *kobj,
+ 			      struct attribute *attr, char *buf)
+ {
+@@ -87,7 +87,7 @@ static ssize_t state_show(struct ib_port
+ 			  char *buf)
+ {
+ 	struct ib_port_attr attr;
+-	ssize_t ret;
++	ssize_t ret = -ENODEV;
+ 
+ 	static const char *state_name[] = {
+ 		[IB_PORT_NOP]		= "NOP",
+@@ -98,26 +98,33 @@ static ssize_t state_show(struct ib_port
+ 		[IB_PORT_ACTIVE_DEFER]	= "ACTIVE_DEFER"
+ 	};
+ 
+-	ret = ib_query_port(p->ibdev, p->port_num, &attr);
+-	if (ret)
+-		return ret;
+-
+-	return sprintf(buf, "%d: %s\n", attr.state,
+-		       attr.state >= 0 && attr.state < ARRAY_SIZE(state_name) ?
+-		       state_name[attr.state] : "UNKNOWN");
++	mutex_lock(&p->ibdev->sysfs_mutex);
++	if (ibdev_is_alive(p->ibdev)) {
++		ret = ib_query_port(p->ibdev, p->port_num, &attr);
++		if (!ret)
++			ret = sprintf(buf, "%d: %s\n", attr.state,
++				      attr.state >= 0 &&
++				      attr.state < ARRAY_SIZE(state_name) ?
++				      state_name[attr.state] : "UNKNOWN");
++	}
++	mutex_unlock(&p->ibdev->sysfs_mutex);
++	return ret;
+ }
+ 
+ static ssize_t lid_show(struct ib_port *p, struct port_attribute *unused,
+ 			char *buf)
+ {
+ 	struct ib_port_attr attr;
+-	ssize_t ret;
++	ssize_t ret = -ENODEV;
+ 
+-	ret = ib_query_port(p->ibdev, p->port_num, &attr);
+-	if (ret)
+-		return ret;
+-
+-	return sprintf(buf, "0x%x\n", attr.lid);
++	mutex_lock(&p->ibdev->sysfs_mutex);
++	if (ibdev_is_alive(p->ibdev)) {
++		ret = ib_query_port(p->ibdev, p->port_num, &attr);
++		if (!ret)
++			ret = sprintf(buf, "0x%x\n", attr.lid);
++	}
++	mutex_unlock(&p->ibdev->sysfs_mutex);
++	return ret;
+ }
+ 
+ static ssize_t lid_mask_count_show(struct ib_port *p,
+@@ -125,52 +132,64 @@ static ssize_t lid_mask_count_show(struc
+ 				   char *buf)
+ {
+ 	struct ib_port_attr attr;
+-	ssize_t ret;
+-
+-	ret = ib_query_port(p->ibdev, p->port_num, &attr);
+-	if (ret)
+-		return ret;
++	ssize_t ret = -ENODEV;
+ 
+-	return sprintf(buf, "%d\n", attr.lmc);
++	mutex_lock(&p->ibdev->sysfs_mutex);
++	if (ibdev_is_alive(p->ibdev)) {
++		ret = ib_query_port(p->ibdev, p->port_num, &attr);
++		if (!ret)
++			ret = sprintf(buf, "%d\n", attr.lmc);
++	}
++	mutex_unlock(&p->ibdev->sysfs_mutex);
++	return ret;
+ }
+ 
+ static ssize_t sm_lid_show(struct ib_port *p, struct port_attribute *unused,
+ 			   char *buf)
+ {
+ 	struct ib_port_attr attr;
+-	ssize_t ret;
+-
+-	ret = ib_query_port(p->ibdev, p->port_num, &attr);
+-	if (ret)
+-		return ret;
++	ssize_t ret = -ENODEV;
+ 
+-	return sprintf(buf, "0x%x\n", attr.sm_lid);
++	mutex_lock(&p->ibdev->sysfs_mutex);
++	if (ibdev_is_alive(p->ibdev)) {
++		ret = ib_query_port(p->ibdev, p->port_num, &attr);
++		if (!ret)
++			ret = sprintf(buf, "0x%x\n", attr.sm_lid);
++	}
++	mutex_unlock(&p->ibdev->sysfs_mutex);
++	return ret;
+ }
+ 
+ static ssize_t sm_sl_show(struct ib_port *p, struct port_attribute *unused,
+ 			  char *buf)
+ {
+ 	struct ib_port_attr attr;
+-	ssize_t ret;
+-
+-	ret = ib_query_port(p->ibdev, p->port_num, &attr);
+-	if (ret)
+-		return ret;
++	ssize_t ret = -ENODEV;
+ 
+-	return sprintf(buf, "%d\n", attr.sm_sl);
++	mutex_lock(&p->ibdev->sysfs_mutex);
++	if (ibdev_is_alive(p->ibdev)) {
++		ret = ib_query_port(p->ibdev, p->port_num, &attr);
++		if (!ret)
++			ret = sprintf(buf, "%d\n", attr.sm_sl);
++	}
++	mutex_unlock(&p->ibdev->sysfs_mutex);
++	return ret;
+ }
+ 
+ static ssize_t cap_mask_show(struct ib_port *p, struct port_attribute *unused,
+ 			     char *buf)
+ {
+ 	struct ib_port_attr attr;
+-	ssize_t ret;
++	ssize_t ret = -ENODEV;
+ 
+-	ret = ib_query_port(p->ibdev, p->port_num, &attr);
+-	if (ret)
+-		return ret;
+-
+-	return sprintf(buf, "0x%08x\n", attr.port_cap_flags);
++	mutex_lock(&p->ibdev->sysfs_mutex);
++	if (ibdev_is_alive(p->ibdev)) {
++		ret = ib_query_port(p->ibdev, p->port_num, &attr);
++		if (!ret)
++			ret = sprintf(buf, "0x%08x\n", attr.port_cap_flags);
++	}
++	mutex_unlock(&p->ibdev->sysfs_mutex);
++	return ret;
+ }
+ 
+ static ssize_t rate_show(struct ib_port *p, struct port_attribute *unused,
+@@ -179,24 +198,33 @@ static ssize_t rate_show(struct ib_port 
+ 	struct ib_port_attr attr;
+ 	char *speed = "";
+ 	int rate;
+-	ssize_t ret;
+-
+-	ret = ib_query_port(p->ibdev, p->port_num, &attr);
+-	if (ret)
+-		return ret;
++	ssize_t ret = -ENODEV;
+ 
+-	switch (attr.active_speed) {
+-	case 2: speed = " DDR"; break;
+-	case 4: speed = " QDR"; break;
++	mutex_lock(&p->ibdev->sysfs_mutex);
++	if (ibdev_is_alive(p->ibdev)) {
++		ret = ib_query_port(p->ibdev, p->port_num, &attr);
++		if (!ret) {
++			switch (attr.active_speed) {
++			case 2: speed = " DDR"; break;
++			case 4: speed = " QDR"; break;
++			}
++
++			rate = 25 * ib_width_enum_to_int(attr.active_width) *
++				attr.active_speed;
++			if (rate < 0) {
++				ret = -EINVAL;
++				goto out;
++			}
++
++			ret = sprintf(buf, "%d%s Gb/sec (%dX%s)\n",
++				      rate / 10, rate % 10 ? ".5" : "",
++				      ib_width_enum_to_int(attr.active_width),
++				      speed);
++		}
+ 	}
+-
+-	rate = 25 * ib_width_enum_to_int(attr.active_width) * attr.active_speed;
+-	if (rate < 0)
+-		return -EINVAL;
+-
+-	return sprintf(buf, "%d%s Gb/sec (%dX%s)\n",
+-		       rate / 10, rate % 10 ? ".5" : "",
+-		       ib_width_enum_to_int(attr.active_width), speed);
++out:
++	mutex_unlock(&p->ibdev->sysfs_mutex);
++	return ret;
+ }
+ 
+ static ssize_t phys_state_show(struct ib_port *p, struct port_attribute *unused,
+@@ -204,22 +232,42 @@ static ssize_t phys_state_show(struct ib
+ {
+ 	struct ib_port_attr attr;
+ 
+-	ssize_t ret;
+-
+-	ret = ib_query_port(p->ibdev, p->port_num, &attr);
+-	if (ret)
+-		return ret;
++	ssize_t ret = -ENODEV;
+ 
+-	switch (attr.phys_state) {
+-	case 1:  return sprintf(buf, "1: Sleep\n");
+-	case 2:  return sprintf(buf, "2: Polling\n");
+-	case 3:  return sprintf(buf, "3: Disabled\n");
+-	case 4:  return sprintf(buf, "4: PortConfigurationTraining\n");
+-	case 5:  return sprintf(buf, "5: LinkUp\n");
+-	case 6:  return sprintf(buf, "6: LinkErrorRecovery\n");
+-	case 7:  return sprintf(buf, "7: Phy Test\n");
+-	default: return sprintf(buf, "%d: <unknown>\n", attr.phys_state);
++	mutex_lock(&p->ibdev->sysfs_mutex);
++	if (ibdev_is_alive(p->ibdev)) {
++		ret = ib_query_port(p->ibdev, p->port_num, &attr);
++		if (!ret) {
++			switch (attr.phys_state) {
++			case 1:
++				ret = sprintf(buf, "1: Sleep\n");
++				break;
++			case 2:
++				ret = sprintf(buf, "2: Polling\n");
++				break;
++			case 3:
++				ret = sprintf(buf, "3: Disabled\n");
++				break;
++			case 4:
++				ret = sprintf(buf, "4: PortConfigurationTraining\n");
++				break;
++			case 5:
++				ret = sprintf(buf, "5: LinkUp\n");
++				break;
++			case 6:
++				ret = sprintf(buf, "6: LinkErrorRecovery\n");
++				break;
++			case 7:
++				ret = sprintf(buf, "7: Phy Test\n");
++				break;
++			default:
++				ret = sprintf(buf, "%d: <unknown>\n", attr.phys_state);
++				break;
++			}
++		}
+ 	}
++	mutex_unlock(&p->ibdev->sysfs_mutex);
++	return ret;
+ }
+ 
+ static PORT_ATTR_RO(state);
+@@ -249,13 +297,24 @@ static ssize_t show_port_gid(struct ib_p
+ 	struct port_table_attribute *tab_attr =
+ 		container_of(attr, struct port_table_attribute, attr);
+ 	union ib_gid gid;
+-	ssize_t ret;
+-
+-	ret = ib_query_gid(p->ibdev, p->port_num, tab_attr->index, &gid);
+-	if (ret)
+-		return ret;
++	ssize_t ret = -ENODEV;
+ 
+-	return sprintf(buf, "%pI6\n", gid.raw);
++	mutex_lock(&p->ibdev->sysfs_mutex);
++	if (ibdev_is_alive(p->ibdev)) {
++		ret = ib_query_gid(p->ibdev, p->port_num, tab_attr->index, &gid);
++		if (!ret)
++			ret = sprintf(buf, "%04x:%04x:%04x:%04x:%04x:%04x:%04x:%04x\n",
++				      be16_to_cpu(((__be16 *) gid.raw)[0]),
++				      be16_to_cpu(((__be16 *) gid.raw)[1]),
++				      be16_to_cpu(((__be16 *) gid.raw)[2]),
++				      be16_to_cpu(((__be16 *) gid.raw)[3]),
++				      be16_to_cpu(((__be16 *) gid.raw)[4]),
++				      be16_to_cpu(((__be16 *) gid.raw)[5]),
++				      be16_to_cpu(((__be16 *) gid.raw)[6]),
++				      be16_to_cpu(((__be16 *) gid.raw)[7]));
++	}
++	mutex_unlock(&p->ibdev->sysfs_mutex);
++	return ret;
+ }
+ 
+ static ssize_t show_port_pkey(struct ib_port *p, struct port_attribute *attr,
+@@ -264,13 +323,16 @@ static ssize_t show_port_pkey(struct ib_
+ 	struct port_table_attribute *tab_attr =
+ 		container_of(attr, struct port_table_attribute, attr);
+ 	u16 pkey;
+-	ssize_t ret;
+-
+-	ret = ib_query_pkey(p->ibdev, p->port_num, tab_attr->index, &pkey);
+-	if (ret)
+-		return ret;
++	ssize_t ret = -ENODEV;
+ 
+-	return sprintf(buf, "0x%04x\n", pkey);
++	mutex_lock(&p->ibdev->sysfs_mutex);
++	if (ibdev_is_alive(p->ibdev)) {
++		ret = ib_query_pkey(p->ibdev, p->port_num, tab_attr->index, &pkey);
++		if (!ret)
++			ret = sprintf(buf, "0x%04x\n", pkey);
++	}
++	mutex_unlock(&p->ibdev->sysfs_mutex);
++	return ret;
+ }
+ 
+ #define PORT_PMA_ATTR(_name, _counter, _width, _offset)			\
+@@ -293,6 +355,12 @@ static ssize_t show_pma_counter(struct i
+ 	if (!p->ibdev->process_mad)
+ 		return sprintf(buf, "N/A (no PMA)\n");
+ 
++	mutex_lock(&p->ibdev->sysfs_mutex);
++	if (!ibdev_is_alive(p->ibdev)) {
++		ret = -ENODEV;
++		goto out;
++	}
++
+ 	in_mad  = kzalloc(sizeof *in_mad, GFP_KERNEL);
+ 	out_mad = kmalloc(sizeof *out_mad, GFP_KERNEL);
+ 	if (!in_mad || !out_mad) {
+@@ -339,7 +407,7 @@ static ssize_t show_pma_counter(struct i
+ out:
+ 	kfree(in_mad);
+ 	kfree(out_mad);
+-
++	mutex_unlock(&p->ibdev->sysfs_mutex);
+ 	return ret;
+ }
+ 
+@@ -577,17 +645,20 @@ static ssize_t show_sys_image_guid(struc
+ {
+ 	struct ib_device *dev = container_of(cdev, struct ib_device, class_dev);
+ 	struct ib_device_attr attr;
+-	ssize_t ret;
+-
+-	ret = ib_query_device(dev, &attr);
+-	if (ret)
+-		return ret;
++	ssize_t ret = -ENODEV;
+ 
+-	return sprintf(buf, "%04x:%04x:%04x:%04x\n",
+-		       be16_to_cpu(((__be16 *) &attr.sys_image_guid)[0]),
+-		       be16_to_cpu(((__be16 *) &attr.sys_image_guid)[1]),
+-		       be16_to_cpu(((__be16 *) &attr.sys_image_guid)[2]),
+-		       be16_to_cpu(((__be16 *) &attr.sys_image_guid)[3]));
++	mutex_lock(&dev->sysfs_mutex);
++	if (ibdev_is_alive(dev)) {
++		ret = ib_query_device(dev, &attr);
++		if (!ret)
++			ret = sprintf(buf, "%04x:%04x:%04x:%04x\n",
++				      be16_to_cpu(((__be16 *) &attr.sys_image_guid)[0]),
++				      be16_to_cpu(((__be16 *) &attr.sys_image_guid)[1]),
++				      be16_to_cpu(((__be16 *) &attr.sys_image_guid)[2]),
++				      be16_to_cpu(((__be16 *) &attr.sys_image_guid)[3]));
++	}
++	mutex_unlock(&dev->sysfs_mutex);
++	return ret;
+ }
+ 
+ static ssize_t show_node_guid(struct class_device *cdev, char *buf)
+@@ -613,17 +684,20 @@ static ssize_t set_node_desc(struct clas
+ {
+ 	struct ib_device *dev = container_of(cdev, struct ib_device, class_dev);
+ 	struct ib_device_modify desc = {};
+-	int ret;
++	int ret = -ENODEV;
+ 
+ 	if (!dev->modify_device)
+ 		return -EIO;
+ 
+ 	memcpy(desc.node_desc, buf, min_t(int, count, 64));
+-	ret = ib_modify_device(dev, IB_DEVICE_MODIFY_NODE_DESC, &desc);
+-	if (ret)
+-		return ret;
+-
+-	return count;
++	mutex_lock(&dev->sysfs_mutex);
++	if (ibdev_is_alive(dev)) {
++		ret = ib_modify_device(dev, IB_DEVICE_MODIFY_NODE_DESC, &desc);
++		if (!ret)
++			ret = count;
++	}
++	mutex_unlock(&dev->sysfs_mutex);
++	return ret;
+ }
+ 
+ static CLASS_DEVICE_ATTR(node_type, S_IRUGO, show_node_type, NULL);
+@@ -651,14 +725,18 @@ static ssize_t show_protocol_stat(struct
+ {
+ 	struct ib_device *dev = container_of(cdev, struct ib_device, class_dev);
+ 	union rdma_protocol_stats stats;
+-	ssize_t ret;
++	ssize_t ret = -ENODEV;
+ 
+-	ret = dev->get_protocol_stats(dev, &stats);
+-	if (ret)
+-		return ret;
+-
+-	return sprintf(buf, "%llu\n",
+-		       (unsigned long long) ((u64 *) &stats)[offset]);
++	mutex_lock(&dev->sysfs_mutex);
++	if (ibdev_is_alive(dev)) {
++		ret = dev->get_protocol_stats(dev, &stats);
++		if (!ret)
++			ret = sprintf(buf, "%llu\n",
++				      (unsigned long long)
++				      ((u64 *) &stats)[offset]);
++	}
++	mutex_unlock(&dev->sysfs_mutex);
++	return ret;
+ }
+ 
+ /* generate a read-only iwarp statistics attribute */
+Index: ofed_kernel-2.6.18/include/rdma/ib_verbs.h
+===================================================================
+--- ofed_kernel-2.6.18.orig/include/rdma/ib_verbs.h	2009-06-01 16:06:02.000000000 +0300
++++ ofed_kernel-2.6.18/include/rdma/ib_verbs.h	2009-06-01 16:08:44.000000000 +0300
+@@ -1205,6 +1205,7 @@ struct ib_device {
+ 		IB_DEV_REGISTERED,
+ 		IB_DEV_UNREGISTERED
+ 	}                            reg_state;
++	struct mutex		     sysfs_mutex;
+ 
+ 	u64			     uverbs_cmd_mask;
+ 	int			     uverbs_abi_ver;

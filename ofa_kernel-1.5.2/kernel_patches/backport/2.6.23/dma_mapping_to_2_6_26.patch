@@ -1,0 +1,17 @@
+---
+ include/rdma/ib_verbs.h |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+Index: ofed_kernel/include/rdma/ib_verbs.h
+===================================================================
+--- ofed_kernel.orig/include/rdma/ib_verbs.h
++++ ofed_kernel/include/rdma/ib_verbs.h
+@@ -1682,7 +1682,7 @@ static inline int ib_dma_mapping_error(s
+ {
+ 	if (dev->dma_ops)
+ 		return dev->dma_ops->mapping_error(dev, dma_addr);
+-	return dma_mapping_error(dev->dma_device, dma_addr);
++	return dma_mapping_error(dma_addr);
+ }
+ 
+ /**

@@ -1,0 +1,304 @@
+mlx4: Implement kernel-space XRC.
+
+V2: no changes.
+
+Signed-off-by: Jack Morgenstein <jackm@dev.mellanox.co.il>
+---
+ drivers/infiniband/hw/mlx4/cq.c  |   37 ++++++++++++++++++++++++++++++++++---
+ drivers/infiniband/hw/mlx4/qp.c  |    8 +++++++-
+ drivers/infiniband/hw/mlx4/srq.c |   16 +++++++++++++++-
+ drivers/net/mlx4/mlx4.h          |    1 -
+ drivers/net/mlx4/srq.c           |   26 +++++++++++++++++++-------
+ include/linux/mlx4/device.h      |    1 +
+ include/linux/mlx4/srq.h         |   12 ++++++++++++
+ 7 files changed, 88 insertions(+), 13 deletions(-)
+
+Index: ofed_kernel/drivers/infiniband/hw/mlx4/cq.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/hw/mlx4/cq.c
++++ ofed_kernel/drivers/infiniband/hw/mlx4/cq.c
+@@ -33,6 +33,7 @@
+ 
+ #include <linux/mlx4/cq.h>
+ #include <linux/mlx4/qp.h>
++#include <linux/mlx4/srq.h>
+ 
+ #include "mlx4_ib.h"
+ #include "user.h"
+@@ -541,9 +542,11 @@ static int mlx4_ib_poll_one(struct mlx4_
+ 	struct mlx4_qp *mqp;
+ 	struct mlx4_ib_wq *wq;
+ 	struct mlx4_ib_srq *srq;
++	struct mlx4_srq *msrq;
+ 	int is_send;
+ 	int is_error;
+ 	u32 g_mlpath_rqpn;
++	int is_xrc_recv = 0;
+ 	u16 wqe_ctr;
+ 
+ repoll:
+@@ -585,7 +588,24 @@ repoll:
+ 		goto repoll;
+ 	}
+ 
+-	if (!*cur_qp ||
++	if ((be32_to_cpu(cqe->vlan_my_qpn) & (1 << 23)) && !is_send) {
++		 /*
++		  * We do not have to take the XRC SRQ table lock here,
++		  * because CQs will be locked while XRC SRQs are removed
++		  * from the table.
++		  */
++		 msrq = __mlx4_srq_lookup(to_mdev(cq->ibcq.device)->dev,
++					 be32_to_cpu(cqe->g_mlpath_rqpn) &
++					 0xffffff);
++		 if (unlikely(!msrq)) {
++			 printk(KERN_WARNING "CQ %06x with entry for unknown "
++				"XRC SRQ %06x\n", cq->mcq.cqn,
++				be32_to_cpu(cqe->g_mlpath_rqpn) & 0xffffff);
++			 return -EINVAL;
++		 }
++		 is_xrc_recv = 1;
++		 srq = to_mibsrq(msrq);
++	} else if (!*cur_qp ||
+ 	    (be32_to_cpu(cqe->vlan_my_qpn) & MLX4_CQE_QPN_MASK) != (*cur_qp)->mqp.qpn) {
+ 		/*
+ 		 * We do not have to take the QP table lock here,
+@@ -603,7 +623,7 @@ repoll:
+ 		*cur_qp = to_mibqp(mqp);
+ 	}
+ 
+-	wc->qp = &(*cur_qp)->ibqp;
++	wc->qp = is_xrc_recv ? NULL: &(*cur_qp)->ibqp;
+ 
+ 	if (is_send) {
+ 		wq = &(*cur_qp)->sq;
+@@ -613,6 +633,10 @@ repoll:
+ 		}
+ 		wc->wr_id = wq->wrid[wq->tail & (wq->wqe_cnt - 1)];
+ 		++wq->tail;
++	} else if (is_xrc_recv) {
++		wqe_ctr = be16_to_cpu(cqe->wqe_index);
++		wc->wr_id = srq->wrid[wqe_ctr];
++		mlx4_ib_free_srq_wqe(srq, wqe_ctr);
+ 	} else if ((*cur_qp)->ibqp.srq) {
+ 		srq = to_msrq((*cur_qp)->ibqp.srq);
+ 		wqe_ctr = be16_to_cpu(cqe->wqe_index);
+@@ -752,6 +776,10 @@ void __mlx4_ib_cq_clean(struct mlx4_ib_c
+ 	int nfreed = 0;
+ 	struct mlx4_cqe *cqe, *dest;
+ 	u8 owner_bit;
++	int is_xrc_srq = 0;
++
++	if (srq && srq->ibsrq.xrc_cq)
++		is_xrc_srq = 1;
+ 
+ 	/*
+ 	 * First we need to find the current producer index, so we
+@@ -770,7 +798,10 @@ void __mlx4_ib_cq_clean(struct mlx4_ib_c
+ 	 */
+ 	while ((int) --prod_index - (int) cq->mcq.cons_index >= 0) {
+ 		cqe = get_cqe(cq, prod_index & cq->ibcq.cqe);
+-		if ((be32_to_cpu(cqe->vlan_my_qpn) & MLX4_CQE_QPN_MASK) == qpn) {
++		if (((be32_to_cpu(cqe->vlan_my_qpn) & 0xffffff) == qpn) ||
++		    (is_xrc_srq &&
++		     (be32_to_cpu(cqe->g_mlpath_rqpn) & 0xffffff) ==
++		      srq->msrq.srqn)) {
+ 			if (srq && !(cqe->owner_sr_opcode & MLX4_CQE_IS_SEND_MASK))
+ 				mlx4_ib_free_srq_wqe(srq, be16_to_cpu(cqe->wqe_index));
+ 			++nfreed;
+Index: ofed_kernel/drivers/infiniband/hw/mlx4/qp.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/hw/mlx4/qp.c
++++ ofed_kernel/drivers/infiniband/hw/mlx4/qp.c
+@@ -265,6 +265,7 @@ static int send_wqe_overhead(enum ib_qp_
+ 	case IB_QPT_UC:
+ 		return sizeof (struct mlx4_wqe_ctrl_seg) +
+ 			sizeof (struct mlx4_wqe_raddr_seg);
++	case IB_QPT_XRC:
+ 	case IB_QPT_RC:
+ 		return sizeof (struct mlx4_wqe_ctrl_seg) +
+ 			sizeof (struct mlx4_wqe_atomic_seg) +
+@@ -1639,6 +1640,10 @@ int mlx4_ib_post_send(struct ib_qp *ibqp
+ 		size = sizeof *ctrl / 16;
+ 
+ 		switch (ibqp->qp_type) {
++		case IB_QPT_XRC:
++			ctrl->srcrb_flags |=
++				cpu_to_be32(wr->xrc_remote_srq_num << 8);
++			/* fall thru */
+ 		case IB_QPT_RC:
+ 		case IB_QPT_UC:
+ 			switch (wr->opcode) {
+@@ -1968,7 +1973,8 @@ int mlx4_ib_query_qp(struct ib_qp *ibqp,
+ 	qp_attr->qp_access_flags     =
+ 		to_ib_qp_access_flags(be32_to_cpu(context.params2));
+ 
+-	if (qp->ibqp.qp_type == IB_QPT_RC || qp->ibqp.qp_type == IB_QPT_UC) {
++	if (qp->ibqp.qp_type == IB_QPT_RC || qp->ibqp.qp_type == IB_QPT_UC ||
++	    qp->ibqp.qp_type == IB_QPT_XRC) {
+ 		to_ib_ah_attr(dev->dev, &qp_attr->ah_attr, &context.pri_path);
+ 		to_ib_ah_attr(dev->dev, &qp_attr->alt_ah_attr, &context.alt_path);
+ 		qp_attr->alt_pkey_index = context.alt_path.pkey_index & 0x7f;
+Index: ofed_kernel/drivers/infiniband/hw/mlx4/srq.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/hw/mlx4/srq.c
++++ ofed_kernel/drivers/infiniband/hw/mlx4/srq.c
+@@ -186,11 +186,13 @@ struct ib_srq *mlx4_ib_create_xrc_srq(st
+ 
+ 	srq->msrq.event = mlx4_ib_srq_event;
+ 
+-	if (pd->uobject)
++	if (pd->uobject) {
+ 		if (ib_copy_to_udata(udata, &srq->msrq.srqn, sizeof (__u32))) {
+ 			err = -EFAULT;
+ 			goto err_wrid;
+ 		}
++	} else
++		srq->ibsrq.xrc_srq_num = srq->msrq.srqn;
+ 
+ 	init_attr->attr.max_wr = srq->msrq.max - 1;
+ 
+@@ -280,6 +282,18 @@ int mlx4_ib_destroy_srq(struct ib_srq *s
+ {
+ 	struct mlx4_ib_dev *dev = to_mdev(srq->device);
+ 	struct mlx4_ib_srq *msrq = to_msrq(srq);
++	struct mlx4_ib_cq *cq;
++
++	mlx4_srq_invalidate(dev->dev, &msrq->msrq);
++
++	if (srq->xrc_cq && !srq->uobject) {
++		cq = to_mcq(srq->xrc_cq);
++		spin_lock_irq(&cq->lock);
++		__mlx4_ib_cq_clean(cq, -1, msrq);
++		mlx4_srq_remove(dev->dev, &msrq->msrq);
++		spin_unlock_irq(&cq->lock);
++	} else
++		mlx4_srq_remove(dev->dev, &msrq->msrq);
+ 
+ 	mlx4_srq_free(dev->dev, &msrq->msrq);
+ 	mlx4_mtt_cleanup(dev->dev, &msrq->mtt);
+Index: ofed_kernel/drivers/net/mlx4/mlx4.h
+===================================================================
+--- ofed_kernel.orig/drivers/net/mlx4/mlx4.h
++++ ofed_kernel/drivers/net/mlx4/mlx4.h
+@@ -228,7 +228,6 @@ struct mlx4_eq_table {
+ struct mlx4_srq_table {
+ 	struct mlx4_bitmap	bitmap;
+ 	spinlock_t		lock;
+-	struct radix_tree_root	tree;
+ 	struct mlx4_icm_table	table;
+ 	struct mlx4_icm_table	cmpt_table;
+ };
+Index: ofed_kernel/drivers/net/mlx4/srq.c
+===================================================================
+--- ofed_kernel.orig/drivers/net/mlx4/srq.c
++++ ofed_kernel/drivers/net/mlx4/srq.c
+@@ -65,7 +65,8 @@ void mlx4_srq_event(struct mlx4_dev *dev
+ 
+ 	spin_lock(&srq_table->lock);
+ 
+-	srq = radix_tree_lookup(&srq_table->tree, srqn & (dev->caps.num_srqs - 1));
++	srq = radix_tree_lookup(&dev->srq_table_tree,
++				srqn & (dev->caps.num_srqs - 1));
+ 	if (srq)
+ 		atomic_inc(&srq->refcount);
+ 
+@@ -132,7 +133,7 @@ int mlx4_srq_alloc(struct mlx4_dev *dev,
+ 		goto err_put;
+ 
+ 	spin_lock_irq(&srq_table->lock);
+-	err = radix_tree_insert(&srq_table->tree, srq->srqn, srq);
++	err = radix_tree_insert(&dev->srq_table_tree, srq->srqn, srq);
+ 	spin_unlock_irq(&srq_table->lock);
+ 	if (err)
+ 		goto err_cmpt_put;
+@@ -171,7 +172,7 @@ int mlx4_srq_alloc(struct mlx4_dev *dev,
+ 
+ err_radix:
+ 	spin_lock_irq(&srq_table->lock);
+-	radix_tree_delete(&srq_table->tree, srq->srqn);
++	radix_tree_delete(&dev->srq_table_tree, srq->srqn);
+ 	spin_unlock_irq(&srq_table->lock);
+ 
+ err_cmpt_put:
+@@ -187,18 +188,29 @@ err_out:
+ }
+ EXPORT_SYMBOL_GPL(mlx4_srq_alloc);
+ 
+-void mlx4_srq_free(struct mlx4_dev *dev, struct mlx4_srq *srq)
++void mlx4_srq_invalidate(struct mlx4_dev *dev, struct mlx4_srq *srq)
+ {
+-	struct mlx4_srq_table *srq_table = &mlx4_priv(dev)->srq_table;
+ 	int err;
+ 
+ 	err = mlx4_HW2SW_SRQ(dev, NULL, srq->srqn);
+ 	if (err)
+ 		mlx4_warn(dev, "HW2SW_SRQ failed (%d) for SRQN %06x\n", err, srq->srqn);
++}
++EXPORT_SYMBOL_GPL(mlx4_srq_invalidate);
++
++void mlx4_srq_remove(struct mlx4_dev *dev, struct mlx4_srq *srq)
++{
++	struct mlx4_srq_table *srq_table = &mlx4_priv(dev)->srq_table;
+ 
+ 	spin_lock_irq(&srq_table->lock);
+-	radix_tree_delete(&srq_table->tree, srq->srqn);
++	radix_tree_delete(&dev->srq_table_tree, srq->srqn);
+ 	spin_unlock_irq(&srq_table->lock);
++}
++EXPORT_SYMBOL_GPL(mlx4_srq_remove);
++
++void mlx4_srq_free(struct mlx4_dev *dev, struct mlx4_srq *srq)
++{
++	struct mlx4_srq_table *srq_table = &mlx4_priv(dev)->srq_table;
+ 
+ 	if (atomic_dec_and_test(&srq->refcount))
+ 		complete(&srq->free);
+@@ -244,7 +256,7 @@ int mlx4_init_srq_table(struct mlx4_dev 
+ 	int err;
+ 
+ 	spin_lock_init(&srq_table->lock);
+-	INIT_RADIX_TREE(&srq_table->tree, GFP_ATOMIC);
++	INIT_RADIX_TREE(&dev->srq_table_tree, GFP_ATOMIC);
+ 
+ 	err = mlx4_bitmap_init(&srq_table->bitmap, dev->caps.num_srqs,
+ 			       dev->caps.num_srqs - 1, dev->caps.reserved_srqs, 0);
+Index: ofed_kernel/include/linux/mlx4/device.h
+===================================================================
+--- ofed_kernel.orig/include/linux/mlx4/device.h
++++ ofed_kernel/include/linux/mlx4/device.h
+@@ -370,6 +370,7 @@ struct mlx4_dev {
+ 	unsigned long		flags;
+ 	struct mlx4_caps	caps;
+ 	struct radix_tree_root	qp_table_tree;
++	struct radix_tree_root	srq_table_tree;
+ 	u32			rev_id;
+ 	char			board_id[MLX4_BOARD_ID_LEN];
+ };
+Index: ofed_kernel/include/linux/mlx4/srq.h
+===================================================================
+--- ofed_kernel.orig/include/linux/mlx4/srq.h
++++ ofed_kernel/include/linux/mlx4/srq.h
+@@ -33,10 +33,22 @@
+ #ifndef MLX4_SRQ_H
+ #define MLX4_SRQ_H
+ 
++#include <linux/types.h>
++#include <linux/mlx4/device.h>
++
+ struct mlx4_wqe_srq_next_seg {
+ 	u16			reserved1;
+ 	__be16			next_wqe_index;
+ 	u32			reserved2[3];
+ };
+ 
++void mlx4_srq_invalidate(struct mlx4_dev *dev, struct mlx4_srq *srq);
++void mlx4_srq_remove(struct mlx4_dev *dev, struct mlx4_srq *srq);
++
++static inline struct mlx4_srq *__mlx4_srq_lookup(struct mlx4_dev *dev, u32 srqn)
++{
++	return radix_tree_lookup(&dev->srq_table_tree,
++				 srqn & (dev->caps.num_srqs - 1));
++}
++
+ #endif /* MLX4_SRQ_H */

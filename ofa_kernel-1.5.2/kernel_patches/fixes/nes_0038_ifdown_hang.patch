@@ -1,0 +1,105 @@
+diff --git a/drivers/infiniband/hw/nes/nes.h b/drivers/infiniband/hw/nes/nes.h
+index faf420f..bc54a27 100644
+--- a/drivers/infiniband/hw/nes/nes.h
++++ b/drivers/infiniband/hw/nes/nes.h
+@@ -264,6 +264,7 @@ struct nes_device {
+ 	u16                    base_doorbell_index;
+ 	u16                    currcq_count;
+ 	u16                    deepcq_count;
++	u8                     iw_status;
+ 	u8                     msi_enabled;
+ 	u8                     netdev_count;
+ 	u8                     napi_isr_ran;
+@@ -529,6 +530,7 @@ void nes_cm_disconn_worker(void *);
+ int nes_hw_modify_qp(struct nes_device *, struct nes_qp *, u32, u32, u32);
+ int nes_modify_qp(struct ib_qp *, struct ib_qp_attr *, int, struct ib_udata *);
+ struct nes_ib_device *nes_init_ofa_device(struct net_device *);
++void  nes_port_ibevent(struct nes_vnic *nesvnic);
+ void nes_destroy_ofa_device(struct nes_ib_device *);
+ int nes_register_ofa_device(struct nes_ib_device *);
+ 
+diff --git a/drivers/infiniband/hw/nes/nes_hw.c b/drivers/infiniband/hw/nes/nes_hw.c
+index c9bddbd..6b034f0 100644
+--- a/drivers/infiniband/hw/nes/nes_hw.c
++++ b/drivers/infiniband/hw/nes/nes_hw.c
+@@ -3282,9 +3282,15 @@ static void nes_terminate_connection(struct nes_device *nesdev, struct nes_qp *n
+ 	else
+ 		mod_qp_flags |= NES_CQP_QP_TERM_DONT_SEND_TERM_MSG;
+ 
+-	nes_terminate_start_timer(nesqp);
+-	nesqp->term_flags |= NES_TERM_SENT;
+-	nes_hw_modify_qp(nesdev, nesqp, mod_qp_flags, termlen, 0);
++	if (!nesdev->iw_status)  {
++		nesqp->term_flags = NES_TERM_DONE;
++		nes_hw_modify_qp(nesdev, nesqp, NES_CQP_QP_IWARP_STATE_ERROR, 0, 0);
++		nes_cm_disconn(nesqp);
++	} else {
++		nes_terminate_start_timer(nesqp);
++		nesqp->term_flags |= NES_TERM_SENT;
++		nes_hw_modify_qp(nesdev, nesqp, mod_qp_flags, termlen, 0);
++	}
+ }
+ 
+ static void nes_terminate_send_fin(struct nes_device *nesdev,
+diff --git a/drivers/infiniband/hw/nes/nes_nic.c b/drivers/infiniband/hw/nes/nes_nic.c
+index d9d9592..a0033fb 100644
+--- a/drivers/infiniband/hw/nes/nes_nic.c
++++ b/drivers/infiniband/hw/nes/nes_nic.c
+@@ -231,6 +231,13 @@ static int nes_netdev_open(struct net_device *netdev)
+ 				NES_MAC_INT_TX_UNDERFLOW | NES_MAC_INT_TX_ERROR));
+ 		first_nesvnic = nesvnic;
+ 	}
++
++	if (nesvnic->of_device_registered) {
++		nesdev->iw_status = 1;
++		nesdev->nesadapter->send_term_ok = 1;
++		nes_port_ibevent(nesvnic);
++	}
++
+ 	if (first_nesvnic->linkup) {
+ 		/* Enable network packets */
+ 		nesvnic->linkup = 1;
+@@ -308,9 +315,9 @@ static int nes_netdev_stop(struct net_device *netdev)
+ 
+ 
+ 	if (nesvnic->of_device_registered) {
+-		nes_destroy_ofa_device(nesvnic->nesibdev);
+-		nesvnic->nesibdev = NULL;
+-		nesvnic->of_device_registered = 0;
++		nesdev->nesadapter->send_term_ok = 0;
++		nesdev->iw_status = 0;
++		nes_port_ibevent(nesvnic);
+ 	}
+ 	nes_destroy_nic_qp(nesvnic);
+ 
+diff --git a/drivers/infiniband/hw/nes/nes_verbs.c b/drivers/infiniband/hw/nes/nes_verbs.c
+index d4f2b14..8c3ab85 100644
+--- a/drivers/infiniband/hw/nes/nes_verbs.c
++++ b/drivers/infiniband/hw/nes/nes_verbs.c
+@@ -3258,6 +3258,7 @@ int nes_modify_qp(struct ib_qp *ibqp, struct ib_qp_attr *attr,
+ 						nesqp->hte_added = 0;
+ 					}
+ 				if ((nesqp->hw_tcp_state > NES_AEQE_TCP_STATE_CLOSED) &&
++						(nesdev->iw_status) &&
+ 						(nesqp->hw_tcp_state != NES_AEQE_TCP_STATE_TIME_WAIT)) {
+ 					next_iwarp_state |= NES_CQP_QP_RESET;
+ 				} else {
+@@ -4146,6 +4147,18 @@ struct nes_ib_device *nes_init_ofa_device(struct net_device *netdev)
+ 	return nesibdev;
+ }
+ 
++void  nes_port_ibevent(struct nes_vnic *nesvnic)
++{
++	struct nes_ib_device *nesibdev = nesvnic->nesibdev;
++	struct nes_device *nesdev = nesvnic->nesdev;
++	struct ib_event event;
++	event.device = &nesibdev->ibdev;
++	event.element.port_num = nesvnic->logical_port + 1;
++	event.event = nesdev->iw_status ? IB_EVENT_PORT_ACTIVE : IB_EVENT_PORT_ERR;
++	ib_dispatch_event(&event);
++}
++
++
+ 
+ /**
+  * nes_destroy_ofa_device

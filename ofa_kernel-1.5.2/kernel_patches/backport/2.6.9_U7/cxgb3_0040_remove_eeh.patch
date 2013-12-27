@@ -1,0 +1,87 @@
+commit 37ce58bace288f077343ed4968396a9c5566c090
+Author: root <root@almus.(none)>
+Date:   Tue Jul 7 06:16:41 2009 -0700
+
+    cxgb3_0040_remove_eeh.patch
+
+diff --git a/drivers/net/cxgb3/cxgb3_main.c b/drivers/net/cxgb3/cxgb3_main.c
+index 363921e..87a206b 100644
+--- a/drivers/net/cxgb3/cxgb3_main.c
++++ b/drivers/net/cxgb3/cxgb3_main.c
+@@ -2835,68 +2835,6 @@ void t3_fatal_err(struct adapter *adapter)
+ 			 fw_status[2], fw_status[3]);
+ }
+ 
+-/**
+- * t3_io_error_detected - called when PCI error is detected
+- * @pdev: Pointer to PCI device
+- * @state: The current pci connection state
+- *
+- * This function is called after a PCI bus error affecting
+- * this device has been detected.
+- */
+-static pci_ers_result_t t3_io_error_detected(struct pci_dev *pdev,
+-					     pci_channel_state_t state)
+-{
+-	struct adapter *adapter = pci_get_drvdata(pdev);
+-	int ret;
+-
+-	if (state == pci_channel_io_perm_failure)
+-		return PCI_ERS_RESULT_DISCONNECT;
+-
+-	ret = t3_adapter_error(adapter, 0);
+-
+-	/* Request a slot slot reset. */
+-	return PCI_ERS_RESULT_NEED_RESET;
+-}
+-
+-/**
+- * t3_io_slot_reset - called after the pci bus has been reset.
+- * @pdev: Pointer to PCI device
+- *
+- * Restart the card from scratch, as if from a cold-boot.
+- */
+-static pci_ers_result_t t3_io_slot_reset(struct pci_dev *pdev)
+-{
+-	struct adapter *adapter = pci_get_drvdata(pdev);
+-
+-	if (!t3_reenable_adapter(adapter))
+-		return PCI_ERS_RESULT_RECOVERED;
+-
+-	return PCI_ERS_RESULT_DISCONNECT;
+-}
+-
+-/**
+- * t3_io_resume - called when traffic can start flowing again.
+- * @pdev: Pointer to PCI device
+- *
+- * This callback is called when the error recovery driver tells us that
+- * its OK to resume normal operation.
+- */
+-static void t3_io_resume(struct pci_dev *pdev)
+-{
+-	struct adapter *adapter = pci_get_drvdata(pdev);
+-
+-	CH_ALERT(adapter, "adapter recovering, PEX ERR 0x%x\n",
+-		 t3_read_reg(adapter, A_PCIE_PEX_ERR));
+-
+-	t3_resume_ports(adapter);
+-}
+-
+-static struct pci_error_handlers t3_err_handler = {
+-	.error_detected = t3_io_error_detected,
+-	.slot_reset = t3_io_slot_reset,
+-	.resume = t3_io_resume,
+-};
+-
+ /*
+  * Set the number of qsets based on the number of CPUs and the number of ports,
+  * not to exceed the number of available qsets, assuming there are enough qsets
+@@ -3252,7 +3190,6 @@ static struct pci_driver driver = {
+ 	.id_table = cxgb3_pci_tbl,
+ 	.probe = init_one,
+ 	.remove = __devexit_p(remove_one),
+-	.err_handler = &t3_err_handler,
+ };
+ 
+ static int __init cxgb3_init_module(void)

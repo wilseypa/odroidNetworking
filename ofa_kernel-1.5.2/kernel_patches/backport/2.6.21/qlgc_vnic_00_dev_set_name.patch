@@ -1,0 +1,56 @@
+---
+ drivers/infiniband/ulp/qlgc_vnic/vnic_ib.c  |    7 ++++---
+ drivers/infiniband/ulp/qlgc_vnic/vnic_sys.c |    5 +++--
+ 2 files changed, 7 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/infiniband/ulp/qlgc_vnic/vnic_ib.c b/drivers/infiniband/ulp/qlgc_vnic/vnic_ib.c
+index 9bf7bcf..451dc4e 100644
+--- a/drivers/infiniband/ulp/qlgc_vnic/vnic_ib.c
++++ b/drivers/infiniband/ulp/qlgc_vnic/vnic_ib.c
+@@ -91,7 +91,8 @@ int vnic_ib_init(void)
+ 
+ 	interface_dev.dev.class = &vnic_class;
+ 	interface_dev.dev.release = vnic_release_dev;
+-	dev_set_name(&interface_dev.dev, "interfaces");
++	snprintf(interface_dev.dev.bus_id,
++		 BUS_ID_SIZE, "interfaces");
+ 	init_completion(&interface_dev.released);
+ 	ret = device_register(&interface_dev.dev);
+ 	if (ret) {
+@@ -154,8 +155,8 @@ static struct vnic_ib_port *vnic_add_port(struct vnic_ib_device *device,
+ 	port->pdev_info.dev.class = &vnic_class;
+ 	port->pdev_info.dev.parent = NULL;
+ 	port->pdev_info.dev.release = vnic_release_dev;
+-	dev_set_name(&port->pdev_info.dev, "vnic-%s-%d",
+-		device->dev->name, port_num);
++	snprintf(port->pdev_info.dev.bus_id, BUS_ID_SIZE,
++		 "vnic-%s-%d", device->dev->name, port_num);
+ 
+ 	if (device_register(&port->pdev_info.dev))
+ 		goto free_port;
+diff --git a/drivers/infiniband/ulp/qlgc_vnic/vnic_sys.c b/drivers/infiniband/ulp/qlgc_vnic/vnic_sys.c
+index f3a35c4..0ba1583 100644
+--- a/drivers/infiniband/ulp/qlgc_vnic/vnic_sys.c
++++ b/drivers/infiniband/ulp/qlgc_vnic/vnic_sys.c
+@@ -518,7 +518,8 @@ static struct vnic *create_vnic(struct path_param *param)
+ 	vnic->dev_info.dev.class = NULL;
+ 	vnic->dev_info.dev.parent = &interface_dev.dev;
+ 	vnic->dev_info.dev.release = vnic_release_dev;
+-	dev_set_name(&vnic->dev_info.dev, vnic_config->name);
++	snprintf(vnic->dev_info.dev.bus_id, BUS_ID_SIZE,
++		 vnic_config->name);
+ 
+ 	if (device_register(&vnic->dev_info.dev)) {
+ 		SYS_ERROR("create_vnic: error in registering"
+@@ -897,7 +898,7 @@ static int setup_path_class_files(struct netpath *path, char *name)
+ 	path->dev_info.dev.class = NULL;
+ 	path->dev_info.dev.parent = &path->parent->dev_info.dev;
+ 	path->dev_info.dev.release = vnic_release_dev;
+-	dev_set_name(&path->dev_info.dev, name);
++	snprintf(path->dev_info.dev.bus_id, BUS_ID_SIZE, name);
+ 
+ 	if (device_register(&path->dev_info.dev)) {
+ 		SYS_ERROR("error in registering path class dev\n");
+-- 
+1.5.2
+

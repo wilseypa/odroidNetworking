@@ -1,0 +1,134 @@
+From ad87a69e77d8c9ea104b8e56c334b6e247082196 Mon Sep 17 00:00:00 2001
+From: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+Date: Tue, 18 Nov 2008 14:44:00 +0200
+Subject: [PATCH] mlx4: Saving port configuration
+
+Added a list of port configurations per PCI device,
+now when the driver is recovering from catastrophic event
+it will be able to restore its previous configuration.
+
+Signed-off-by: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+---
+ drivers/net/mlx4/main.c |   62 +++++++++++++++++++++++++++++++++++++++++++++-
+ 1 files changed, 60 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/mlx4/main.c b/drivers/net/mlx4/main.c
+index d64fa0f..14d6b3c 100644
+--- a/drivers/net/mlx4/main.c
++++ b/drivers/net/mlx4/main.c
+@@ -152,6 +152,24 @@ module_param_named(use_prio, use_prio, bool, 0444);
+ MODULE_PARM_DESC(use_prio, "Enable steering by VLAN priority on ETH ports "
+ 		  "(0/1, default 0)");
+ 
++struct mlx4_port_config
++{
++	struct list_head list;
++	enum mlx4_port_type port_type[MLX4_MAX_PORTS + 1];
++	struct pci_dev *pdev;
++};
++static LIST_HEAD(config_list);
++
++static void mlx4_config_cleanup(void)
++{
++	struct mlx4_port_config *config, *tmp;
++
++	list_for_each_entry_safe(config, tmp, &config_list, list) {
++		list_del(&config->list);
++		kfree(config);
++	}
++}
++
+ int mlx4_check_port_params(struct mlx4_dev *dev,
+ 				  enum mlx4_port_type *port_type)
+ {
+@@ -301,8 +319,6 @@ static int mlx4_dev_cap(struct mlx4_dev *dev, struct mlx4_dev_cap *dev_cap)
+ 		}
+ 	}
+ 
+-	mlx4_set_port_mask(dev);
+-
+ 	dev->caps.reserved_qps_cnt[MLX4_QP_REGION_FW] = dev_cap->reserved_qps;
+ 	dev->caps.reserved_qps_cnt[MLX4_QP_REGION_ETH_ADDR] =
+ 		dev->caps.reserved_qps_cnt[MLX4_QP_REGION_FC_ADDR] =
+@@ -320,6 +336,32 @@ static int mlx4_dev_cap(struct mlx4_dev *dev, struct mlx4_dev_cap *dev_cap)
+ 	return 0;
+ }
+ 
++static int mlx4_save_config(struct mlx4_dev *dev)
++{
++	struct mlx4_port_config *config;
++	int i;
++
++	list_for_each_entry(config, &config_list, list) {
++		if (config->pdev == dev->pdev) {
++			for (i = 1; i <= dev->caps.num_ports; i++)
++				config->port_type[i] = dev->caps.possible_type[i];
++			return 0;
++		}
++	}
++
++	config = kmalloc(sizeof(struct mlx4_port_config), GFP_KERNEL);
++	if (!config)
++		return -ENOMEM;
++
++	config->pdev = dev->pdev;
++	for (i = 1; i <= dev->caps.num_ports; i++)
++		config->port_type[i] = dev->caps.possible_type[i];
++
++	list_add_tail(&config->list, &config_list);
++
++	return 0;
++}
++
+ /* Changes the port configuration of the device.
+  * Every user of this function must hold the port lock */
+ int mlx4_change_port_types(struct mlx4_dev *dev,
+@@ -349,6 +391,7 @@ int mlx4_change_port_types(struct mlx4_dev *dev,
+ 			}
+ 		}
+ 		mlx4_set_port_mask(dev);
++		mlx4_save_config(dev);
+ 		err = mlx4_register_device(dev);
+ 	}
+ 
+@@ -772,8 +815,10 @@ static int mlx4_init_hca(struct mlx4_dev *dev)
+ 	struct mlx4_mod_stat_cfg   mlx4_cfg;
+ 	struct mlx4_profile	   profile;
+ 	struct mlx4_init_hca_param init_hca;
++	struct mlx4_port_config	  *config;
+ 	u64 icm_size;
+ 	int err;
++	int i;
+ 
+ 	err = mlx4_QUERY_FW(dev);
+ 	if (err) {
+@@ -802,6 +847,18 @@ static int mlx4_init_hca(struct mlx4_dev *dev)
+ 	process_mod_param_profile();
+ 	profile = default_profile;
+ 
++	list_for_each_entry(config, &config_list, list) {
++		if (config->pdev == dev->pdev) {
++			for (i = 1; i <= dev->caps.num_ports; i++) {
++				dev->caps.possible_type[i] = config->port_type[i];
++				if (config->port_type[i] != MLX4_PORT_TYPE_AUTO)
++					dev->caps.port_type[i] = config->port_type[i];
++			}
++		}
++	}
++
++	mlx4_set_port_mask(dev);
++
+ 	icm_size = mlx4_make_profile(dev, &profile, &dev_cap, &init_hca);
+ 	if ((long long) icm_size < 0) {
+ 		err = icm_size;
+@@ -1385,6 +1442,7 @@ static void __exit mlx4_cleanup(void)
+ {
+ 	pci_unregister_driver(&mlx4_driver);
+ 	mlx4_catas_cleanup();
++	mlx4_config_cleanup();
+ }
+ 
+ module_init(mlx4_init);
+-- 
+1.5.3
+

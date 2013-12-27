@@ -1,0 +1,70 @@
+---
+ drivers/infiniband/core/uverbs_main.c        |    6 +++---
+ drivers/infiniband/hw/ipath/ipath_file_ops.c |    4 ++--
+ drivers/infiniband/hw/ipath/ipath_fs.c       |    6 +++---
+ 3 files changed, 8 insertions(+), 8 deletions(-)
+
+Index: ofed_kernel/drivers/infiniband/core/uverbs_main.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/core/uverbs_main.c
++++ ofed_kernel/drivers/infiniband/core/uverbs_main.c
+@@ -565,9 +565,9 @@ struct file *ib_uverbs_alloc_event_file(
+ 	 * module reference.
+ 	 */
+ 	filp->f_op 	   = fops_get(&uverbs_event_fops);
+-	filp->f_path.mnt 	   = mntget(uverbs_event_mnt);
+-	filp->f_path.dentry 	   = dget(uverbs_event_mnt->mnt_root);
+-	filp->f_mapping    = filp->f_path.dentry->d_inode->i_mapping;
++	filp->f_vfsmnt 	   = mntget(uverbs_event_mnt);
++	filp->f_dentry 	   = dget(uverbs_event_mnt->mnt_root);
++	filp->f_mapping    = filp->f_dentry->d_inode->i_mapping;
+ 	filp->f_flags      = O_RDONLY;
+ 	filp->f_mode       = FMODE_READ;
+ 	filp->private_data = ev_file;
+Index: ofed_kernel/drivers/infiniband/hw/ipath/ipath_file_ops.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/hw/ipath/ipath_file_ops.c
++++ ofed_kernel/drivers/infiniband/hw/ipath/ipath_file_ops.c
+@@ -1868,9 +1868,9 @@ static int ipath_assign_port(struct file
+ 		goto done_chk_sdma;
+ 	}
+ 
+-	i_minor = iminor(fp->f_path.dentry->d_inode) - IPATH_USER_MINOR_BASE;
++	i_minor = iminor(fp->f_dentry->d_inode) - IPATH_USER_MINOR_BASE;
+ 	ipath_cdbg(VERBOSE, "open on dev %lx (minor %d)\n",
+-		   (long)fp->f_path.dentry->d_inode->i_rdev, i_minor);
++		   (long)fp->f_dentry->d_inode->i_rdev, i_minor);
+ 
+ 	if (i_minor)
+ 		ret = find_free_port(i_minor - 1, fp, uinfo);
+Index: ofed_kernel/drivers/infiniband/hw/ipath/ipath_fs.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/hw/ipath/ipath_fs.c
++++ ofed_kernel/drivers/infiniband/hw/ipath/ipath_fs.c
+@@ -113,7 +113,7 @@ static ssize_t atomic_counters_read(stru
+ 	struct infinipath_counters counters;
+ 	struct ipath_devdata *dd;
+ 
+-	dd = file->f_path.dentry->d_inode->i_private;
++	dd = file->f_dentry->d_inode->i_private;
+ 	dd->ipath_f_read_counters(dd, &counters);
+ 
+ 	return simple_read_from_buffer(buf, count, ppos, &counters,
+@@ -153,7 +153,7 @@ static ssize_t flash_read(struct file *f
+ 		goto bail;
+ 	}
+ 
+-	dd = file->f_path.dentry->d_inode->i_private;
++	dd = file->f_dentry->d_inode->i_private;
+ 	if (ipath_eeprom_read(dd, pos, tmp, count)) {
+ 		ipath_dev_err(dd, "failed to read from flash\n");
+ 		ret = -ENXIO;
+@@ -206,7 +206,7 @@ static ssize_t flash_write(struct file *
+ 		goto bail_tmp;
+ 	}
+ 
+-	dd = file->f_path.dentry->d_inode->i_private;
++	dd = file->f_dentry->d_inode->i_private;
+ 	if (ipath_eeprom_write(dd, pos, tmp, count)) {
+ 		ret = -ENXIO;
+ 		ipath_dev_err(dd, "failed to write to flash\n");

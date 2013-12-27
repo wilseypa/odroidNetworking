@@ -1,0 +1,210 @@
+Add effective support for registration of huge pages.
+
+Index: last_stable/drivers/infiniband/core/uverbs_mem.c
+===================================================================
+--- last_stable.orig/drivers/infiniband/core/uverbs_mem.c	2006-09-04 09:10:02.000000000 +0300
++++ last_stable/drivers/infiniband/core/uverbs_mem.c	2006-09-04 09:41:24.000000000 +0300
+@@ -35,6 +35,7 @@
+  */
+ 
+ #include <linux/mm.h>
++#include <linux/hugetlb.h>
+ #include <linux/dma-mapping.h>
+ 
+ #include "uverbs.h"
+@@ -49,7 +50,7 @@
+ static void __ib_umem_release(struct ib_device *dev, struct ib_umem *umem, int dirty)
+ {
+ 	struct ib_umem_chunk *chunk, *tmp;
+-	int i;
++	int i, j;
+ 
+ 	list_for_each_entry_safe(chunk, tmp, &umem->chunk_list, list) {
+ 		dma_unmap_sg(dev->dma_device, chunk->page_list,
+@@ -57,13 +58,48 @@
+ 		for (i = 0; i < chunk->nents; ++i) {
+ 			if (umem->writable && dirty)
+ 				set_page_dirty_lock(chunk->page_list[i].page);
+-			put_page(chunk->page_list[i].page);
++			for (j = 0; j < umem->page_size / PAGE_SIZE; ++j)
++				put_page(chunk->page_list[i].page);
+ 		}
+ 
+ 		kfree(chunk);
+ 	}
+ }
+ 
++#ifdef __ia64__
++	#undef HPAGE_SHIFT
++	#define HPAGE_SHIFT ((ia64_get_rr(HPAGE_REGION_BASE) >> 2) & 0x3f)
++#endif
++
++static int get_page_shift(void *addr, size_t size)
++{
++	struct vm_area_struct *vma;
++	unsigned long va = (unsigned long)addr;
++	int hpage = -1;
++
++next:
++	vma = find_vma(current->mm, va);
++	if (!vma)
++		return -ENOMEM;
++
++	if (va < vma->vm_start)
++		return -ENOMEM;
++
++	if (hpage == -1)
++		hpage = is_vm_hugetlb_page(vma);
++	else
++		if (hpage != is_vm_hugetlb_page(vma))
++			return -ENOMEM;
++
++	if ((va + size)  > vma->vm_end) {
++		size -= (vma->vm_end - va);
++		va = vma->vm_end;
++		goto next;
++	}
++
++	return hpage ? HPAGE_SHIFT : PAGE_SHIFT;
++}
++
+ int ib_umem_get(struct ib_device *dev, struct ib_umem *mem,
+ 		void *addr, size_t size, int write)
+ {
+@@ -73,9 +109,11 @@
+ 	unsigned long lock_limit;
+ 	unsigned long cur_base;
+ 	unsigned long npages;
++	int page_shift, shift_diff, nreg_pages, tmp;
++	unsigned long page_mask, page_size;
+ 	int ret = 0;
+ 	int off;
+-	int i;
++	int i, j, nents;
+ 
+ 	if (!can_do_mlock())
+ 		return -EPERM;
+@@ -84,17 +122,36 @@
+ 	if (!page_list)
+ 		return -ENOMEM;
+ 
++	down_write(&current->mm->mmap_sem);
++
++	page_shift = get_page_shift(addr, size);
++	if (IS_ERR_VALUE(page_shift)) {
++		ret = page_shift;
++		goto exit_up;
++	}
++
++	page_size = 1 << page_shift;
++	page_mask = ~(page_size - 1);
++	shift_diff = page_shift - PAGE_SHIFT;
++
++	/* make sure enough pointers fit into PAGE_SIZE to
++	   contain at least one huge page */
++	if (!(PAGE_SIZE / (sizeof (struct page *) << shift_diff))) {
++		ret = -ENOMEM;
++		goto exit_up;
++	}
++
+ 	mem->user_base = (unsigned long) addr;
+ 	mem->length    = size;
+-	mem->offset    = (unsigned long) addr & ~PAGE_MASK;
+-	mem->page_size = PAGE_SIZE;
++	mem->offset    = (unsigned long) addr & ~page_mask;
++	mem->page_size = page_size;
+ 	mem->writable  = write;
+ 
+ 	INIT_LIST_HEAD(&mem->chunk_list);
+ 
+-	npages = PAGE_ALIGN(size + mem->offset) >> PAGE_SHIFT;
+ 
+-	down_write(&current->mm->mmap_sem);
++	nreg_pages = ALIGN(size + mem->offset, page_size) >>  page_shift;
++	npages = nreg_pages << shift_diff;
+ 
+ 	locked     = npages + current->mm->locked_vm;
+ 	lock_limit = current->rlim[RLIMIT_MEMLOCK].rlim_cur >> PAGE_SHIFT;
+@@ -104,14 +161,15 @@
+ 		goto out;
+ 	}
+ 
+-	cur_base = (unsigned long) addr & PAGE_MASK;
++	cur_base = (unsigned long) addr & page_mask;
+ 
+ 	while (npages) {
++		tmp = min_t(int, npages,
++			    (PAGE_SIZE / (sizeof (struct page *) << shift_diff))
++			        << shift_diff);
+ 		ret = get_user_pages(current, current->mm, cur_base,
+-				     min_t(int, npages,
+-					   PAGE_SIZE / sizeof (struct page *)),
++				     tmp,
+ 				     1, !write, page_list, NULL);
+-
+ 		if (ret < 0)
+ 			goto out;
+ 
+@@ -121,19 +179,27 @@
+ 		off = 0;
+ 
+ 		while (ret) {
+-			chunk = kmalloc(sizeof *chunk + sizeof (struct scatterlist) *
+-					min_t(int, ret, IB_UMEM_MAX_PAGE_CHUNK),
+-					GFP_KERNEL);
++			if (!shift_diff) {
++				nents = min_t(int, ret, IB_UMEM_MAX_PAGE_CHUNK);
++				tmp = sizeof *chunk + sizeof (struct scatterlist) * nents;
++			}
++			else {
++				nents = ret >> shift_diff;
++				tmp = sizeof *chunk +
++					sizeof (struct scatterlist) * nents;
++			}
++
++			chunk = kmalloc(tmp, GFP_KERNEL);
+ 			if (!chunk) {
+ 				ret = -ENOMEM;
+ 				goto out;
+ 			}
++			chunk->nents = nents;
+ 
+-			chunk->nents = min_t(int, ret, IB_UMEM_MAX_PAGE_CHUNK);
+ 			for (i = 0; i < chunk->nents; ++i) {
+-				chunk->page_list[i].page   = page_list[i + off];
++				chunk->page_list[i].page   = page_list[(i << shift_diff) + off];
+ 				chunk->page_list[i].offset = 0;
+-				chunk->page_list[i].length = PAGE_SIZE;
++				chunk->page_list[i].length = page_size;
+ 			}
+ 
+ 			chunk->nmap = dma_map_sg(dev->dma_device,
+@@ -142,15 +208,17 @@
+ 						 DMA_BIDIRECTIONAL);
+ 			if (chunk->nmap <= 0) {
+ 				for (i = 0; i < chunk->nents; ++i)
+-					put_page(chunk->page_list[i].page);
++					for (j = 0; j < (1 << shift_diff); ++j)
++						put_page(chunk->page_list[i].page);
++
+ 				kfree(chunk);
+ 
+ 				ret = -ENOMEM;
+ 				goto out;
+ 			}
+ 
+-			ret -= chunk->nents;
+-			off += chunk->nents;
++			ret -= (chunk->nents << shift_diff);
++			off += (chunk->nents << shift_diff);
+ 			list_add_tail(&chunk->list, &mem->chunk_list);
+ 		}
+ 
+@@ -163,6 +231,7 @@
+ 	else
+ 		current->mm->locked_vm = locked;
+ 
++exit_up:
+ 	up_write(&current->mm->mmap_sem);
+ 	free_page((unsigned long) page_list);
+ 

@@ -1,0 +1,36 @@
+From c055551e97e1ca00781bc41523f829e05a8afed7 Mon Sep 17 00:00:00 2001
+From: Tom Talpey <talpey@netapp.com>
+Date: Fri, 10 Oct 2008 11:32:45 -0400
+Subject: [PATCH] RPC/RDMA: ensure connection attempt is complete before signalling.
+
+The RPC/RDMA connection logic could return early from reconnection
+attempts, leading to additional spurious retries.
+
+Signed-off-by: Tom Talpey <talpey@netapp.com>
+Signed-off-by: Trond Myklebust <Trond.Myklebust@netapp.com>
+
+diff --git a/net/sunrpc/xprtrdma/verbs.c b/net/sunrpc/xprtrdma/verbs.c
+index 170e69c..a5fef5e 100644
+--- a/net/sunrpc/xprtrdma/verbs.c
++++ b/net/sunrpc/xprtrdma/verbs.c
+@@ -804,9 +804,8 @@ rpcrdma_ep_connect(struct rpcrdma_ep *ep, struct rpcrdma_ia *ia)
+ 	struct rdma_cm_id *id;
+ 	int rc = 0;
+ 	int retry_count = 0;
+-	int reconnect = (ep->rep_connected != 0);
+ 
+-	if (reconnect) {
++	if (ep->rep_connected != 0) {
+ 		struct rpcrdma_xprt *xprt;
+ retry:
+ 		rc = rpcrdma_ep_disconnect(ep, ia);
+@@ -871,9 +870,6 @@ if (strnicmp(ia->ri_id->device->dma_device->bus->name, "pci", 3) == 0) {
+ 		goto out;
+ 	}
+ 
+-	if (reconnect)
+-		return 0;
+-
+ 	wait_event_interruptible(ep->rep_connect_wait, ep->rep_connected != 0);
+ 
+ 	/*

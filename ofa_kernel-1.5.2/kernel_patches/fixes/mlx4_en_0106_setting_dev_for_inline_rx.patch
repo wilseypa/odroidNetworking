@@ -1,0 +1,34 @@
+From 28f17011458e3ab00a4b809bc3a9a1a0100ead0b Mon Sep 17 00:00:00 2001
+From: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+Date: Tue, 4 Aug 2009 11:45:42 +0300
+Subject: [PATCH 4/7] mlx4_en: Setting skb->dev for inline RX packets
+
+Signed-off-by: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+---
+ drivers/net/mlx4/en_rx.c |    3 ++-
+ 1 files changed, 2 insertions(+), 1 deletions(-)
+
+diff --git a/drivers/net/mlx4/en_rx.c b/drivers/net/mlx4/en_rx.c
+index 899385e..886fa9e 100644
+--- a/drivers/net/mlx4/en_rx.c
++++ b/drivers/net/mlx4/en_rx.c
+@@ -180,7 +180,7 @@ mlx4_en_alloc_rx_skb(struct mlx4_en_priv *priv,
+ 	struct mlx4_en_dev *mdev = priv->mdev;
+ 	dma_addr_t dma;
+ 	int size = priv->rx_skb_size + NET_IP_ALIGN;
+-	struct sk_buff *new_skb = alloc_skb(size, GFP_ATOMIC);
++	struct sk_buff *new_skb = dev_alloc_skb(size);
+ 
+ 	if (unlikely(new_skb == NULL))
+ 		return -ENOMEM;
+@@ -647,6 +647,7 @@ mlx4_en_get_rx_skb(struct mlx4_en_priv *priv,
+ 		if (unlikely(!skb))
+ 			return NULL;
+ 
++		skb->dev = priv->dev;
+ 		skb_reserve(skb, NET_IP_ALIGN);
+ 		/* We are copying all relevant data to the skb - temporarily
+ 		 * synch buffers for the copy */
+-- 
+1.6.3
+

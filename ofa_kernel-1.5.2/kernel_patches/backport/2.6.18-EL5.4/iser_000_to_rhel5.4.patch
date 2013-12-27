@@ -1,0 +1,385 @@
+from: Or Gerlitz <ogerlitz@voltaire.com>
+
+patch the ofed provided iser code to match the RHEL 5.4 provided 
+iser code, mainly by doing iscsi2_xxx instead of iscsi_xxx calls.
+This trivial transformation works since the 5.4 iser/iscsi stack
+was upgraded to 2.6.30 or so.
+
+Index: ofa_kernel-1.5/drivers/infiniband/ulp/iser/Kconfig
+===================================================================
+--- ofa_kernel-1.5.orig/drivers/infiniband/ulp/iser/Kconfig
++++ ofa_kernel-1.5/drivers/infiniband/ulp/iser/Kconfig
+@@ -1,7 +1,7 @@
+ config INFINIBAND_ISER
+ 	tristate "iSCSI Extensions for RDMA (iSER)"
+ 	depends on SCSI && INET && INFINIBAND_ADDR_TRANS
+-	select SCSI_ISCSI_ATTRS
++	select SCSI_ISCSI2_ATTRS
+ 	---help---
+ 	  Support for the iSCSI Extensions for RDMA (iSER) Protocol
+           over InfiniBand. This allows you to access storage devices
+Index: ofa_kernel-1.5/drivers/infiniband/ulp/iser/iscsi_iser.c
+===================================================================
+--- ofa_kernel-1.5.orig/drivers/infiniband/ulp/iser/iscsi_iser.c
++++ ofa_kernel-1.5/drivers/infiniband/ulp/iser/iscsi_iser.c
+@@ -67,7 +67,7 @@
+ #include <scsi/scsi_tcq.h>
+ #include <scsi/scsi_host.h>
+ #include <scsi/scsi.h>
+-#include <scsi/scsi_transport_iscsi.h>
++#include <scsi/scsi_transport_iscsi2.h>
+ 
+ #include "iscsi_iser.h"
+ 
+@@ -110,13 +110,13 @@ iscsi_iser_recv(struct iscsi_conn *conn,
+ 	/* read AHS */
+ 	ahslen = hdr->hlength * 4;
+ 
+-	rc = iscsi_complete_pdu(conn, hdr, rx_data, rx_data_len);
++	rc = iscsi2_complete_pdu(conn, hdr, rx_data, rx_data_len);
+ 	if (rc && rc != ISCSI_ERR_NO_SCSI_CMD)
+ 		goto error;
+ 
+ 	return;
+ error:
+-	iscsi_conn_failure(conn, rc);
++	iscsi2_conn_failure(conn, rc);
+ }
+ 
+ static int iscsi_iser_pdu_alloc(struct iscsi_task *task, uint8_t opcode)
+@@ -179,7 +179,7 @@ iscsi_iser_mtask_xmit(struct iscsi_conn 
+ 	 * - if no,  the task is recycled at iser_snd_completion
+ 	 */
+ 	if (error && error != -ENOBUFS)
+-		iscsi_conn_failure(conn, ISCSI_ERR_CONN_FAILED);
++		iscsi2_conn_failure(conn, ISCSI_ERR_CONN_FAILED);
+ 
+ 	return error;
+ }
+@@ -194,7 +194,7 @@ iscsi_iser_task_xmit_unsol_data(struct i
+ 
+ 	/* Send data-out PDUs while there's still unsolicited data to send */
+ 	while (iscsi_task_has_unsol_data(task)) {
+-		iscsi_prep_data_out_pdu(task, r2t, &hdr);
++		iscsi2_prep_data_out_pdu(task, r2t, &hdr);
+ 		iser_dbg("Sending data-out: itt 0x%x, data count %d\n",
+ 			   hdr.itt, r2t->data_count);
+ 
+@@ -249,7 +249,7 @@ iscsi_iser_task_xmit(struct iscsi_task *
+ 
+  iscsi_iser_task_xmit_exit:
+ 	if (error && error != -ENOBUFS)
+-		iscsi_conn_failure(conn, ISCSI_ERR_CONN_FAILED);
++		iscsi2_conn_failure(conn, ISCSI_ERR_CONN_FAILED);
+ 	return error;
+ }
+ 
+@@ -257,11 +257,8 @@ static void iscsi_iser_cleanup_task(stru
+ {
+ 	struct iscsi_iser_task *iser_task = task->dd_data;
+ 
+-	/*
+-	 * mgmt tasks do not need special cleanup and we do not
+-	 * allocate anything in the init task callout
+-	 */
+-	if (!task->sc || task->state == ISCSI_TASK_PENDING)
++	/* mgmt tasks do not need special cleanup */
++	if (!task->sc)
+ 		return;
+ 
+ 	if (iser_task->status == ISER_TASK_STATUS_STARTED) {
+@@ -277,7 +274,7 @@ iscsi_iser_conn_create(struct iscsi_cls_
+ 	struct iscsi_cls_conn *cls_conn;
+ 	struct iscsi_iser_conn *iser_conn;
+ 
+-	cls_conn = iscsi_conn_setup(cls_session, sizeof(*iser_conn), conn_idx);
++	cls_conn = iscsi2_conn_setup(cls_session, sizeof(*iser_conn), conn_idx);
+ 	if (!cls_conn)
+ 		return NULL;
+ 	conn = cls_conn->dd_data;
+@@ -302,7 +299,7 @@ iscsi_iser_conn_destroy(struct iscsi_cls
+ 	struct iscsi_iser_conn *iser_conn = conn->dd_data;
+ 	struct iser_conn *ib_conn = iser_conn->ib_conn;
+ 
+-	iscsi_conn_teardown(cls_conn);
++	iscsi2_conn_teardown(cls_conn);
+ 	/*
+ 	 * Userspace will normally call the stop callback and
+ 	 * already have freed the ib_conn, but if it goofed up then
+@@ -325,13 +322,13 @@ iscsi_iser_conn_bind(struct iscsi_cls_se
+ 	struct iscsi_endpoint *ep;
+ 	int error;
+ 
+-	error = iscsi_conn_bind(cls_session, cls_conn, is_leading);
++	error = iscsi2_conn_bind(cls_session, cls_conn, is_leading);
+ 	if (error)
+ 		return error;
+ 
+ 	/* the transport ep handle comes from user space so it must be
+ 	 * verified against the global ib connections list */
+-	ep = iscsi_lookup_endpoint(transport_eph);
++	ep = iscsi2_lookup_endpoint(transport_eph);
+ 	if (!ep) {
+ 		iser_err("can't bind eph %llx\n",
+ 			 (unsigned long long)transport_eph);
+@@ -362,7 +359,7 @@ iscsi_iser_conn_stop(struct iscsi_cls_co
+ 	 * might have only partially setup the connection.
+ 	 */
+ 	if (ib_conn) {
+-		iscsi_conn_stop(cls_conn, flag);
++		iscsi2_conn_stop(cls_conn, flag);
+ 		/*
+ 		 * There is no unbind event so the stop callback
+ 		 * must release the ref from the bind.
+@@ -382,16 +379,16 @@ iscsi_iser_conn_start(struct iscsi_cls_c
+ 	if (err)
+ 		return err;
+ 
+-	return iscsi_conn_start(cls_conn);
++	return iscsi2_conn_start(cls_conn);
+ }
+ 
+ static void iscsi_iser_session_destroy(struct iscsi_cls_session *cls_session)
+ {
+ 	struct Scsi_Host *shost = iscsi_session_to_shost(cls_session);
+ 
+-	iscsi_session_teardown(cls_session);
+-	iscsi_host_remove(shost);
+-	iscsi_host_free(shost);
++	iscsi2_session_teardown(cls_session);
++	iscsi2_host_remove(shost);
++	iscsi2_host_free(shost);
+ }
+ 
+ static struct iscsi_cls_session *
+@@ -404,7 +401,7 @@ iscsi_iser_session_create(struct iscsi_e
+ 	struct Scsi_Host *shost;
+ 	struct iser_conn *ib_conn;
+ 
+-	shost = iscsi_host_alloc(&iscsi_iser_sht, 0, 1);
++	shost = iscsi2_host_alloc(&iscsi_iser_sht, 0, 1);
+ 	if (!shost)
+ 		return NULL;
+ 	shost->transportt = iscsi_iser_scsi_transport;
+@@ -420,7 +417,7 @@ iscsi_iser_session_create(struct iscsi_e
+ 	if (ep)
+ 		ib_conn = ep->dd_data;
+ 
+-	if (iscsi_host_add(shost,
++	if (iscsi2_host_add(shost,
+ 			   ep ? ib_conn->device->ib_device->dma_device : NULL))
+ 		goto free_host;
+ 
+@@ -428,7 +425,7 @@ iscsi_iser_session_create(struct iscsi_e
+ 	 * we do not support setting can_queue cmd_per_lun from userspace yet
+ 	 * because we preallocate so many resources
+ 	 */
+-	cls_session = iscsi_session_setup(&iscsi_iser_transport, shost,
++	cls_session = iscsi2_session_setup(&iscsi_iser_transport, shost,
+ 					  ISCSI_DEF_XMIT_CMDS_MAX,
+ 					  sizeof(struct iscsi_iser_task),
+ 					  initial_cmdsn, 0);
+@@ -440,9 +437,9 @@ iscsi_iser_session_create(struct iscsi_e
+ 	return cls_session;
+ 
+ remove_host:
+-	iscsi_host_remove(shost);
++	iscsi2_host_remove(shost);
+ free_host:
+-	iscsi_host_free(shost);
++	iscsi2_host_free(shost);
+ 	return NULL;
+ }
+ 
+@@ -485,7 +482,7 @@ iscsi_iser_set_param(struct iscsi_cls_co
+ 		}
+ 		break;
+ 	default:
+-		return iscsi_set_param(cls_conn, param, buf, buflen);
++		return iscsi2_set_param(cls_conn, param, buf, buflen);
+ 	}
+ 
+ 	return 0;
+@@ -517,13 +514,14 @@ iscsi_iser_conn_get_stats(struct iscsi_c
+ }
+ 
+ static struct iscsi_endpoint *
+-iscsi_iser_ep_connect(struct sockaddr *dst_addr, int non_blocking)
++iscsi_iser_ep_connect(struct Scsi_Host *shost, struct sockaddr *dst_addr,
++		      int non_blocking)
+ {
+ 	int err;
+ 	struct iser_conn *ib_conn;
+ 	struct iscsi_endpoint *ep;
+ 
+-	ep = iscsi_create_endpoint(sizeof(*ib_conn));
++	ep = iscsi2_create_endpoint(sizeof(*ib_conn));
+ 	if (!ep)
+ 		return ERR_PTR(-ENOMEM);
+ 
+@@ -534,7 +532,7 @@ iscsi_iser_ep_connect(struct sockaddr *d
+ 	err = iser_connect(ib_conn, NULL, (struct sockaddr_in *)dst_addr,
+ 			   non_blocking);
+ 	if (err) {
+-		iscsi_destroy_endpoint(ep);
++		iscsi2_destroy_endpoint(ep);
+ 		return ERR_PTR(err);
+ 	}
+ 	return ep;
+@@ -581,7 +579,7 @@ iscsi_iser_ep_disconnect(struct iscsi_en
+ 		 *
+ 		 * This may not be bound if the ep poll failed.
+ 		 */
+-		iscsi_suspend_tx(ib_conn->iser_conn->iscsi_conn);
++		iscsi2_suspend_tx(ib_conn->iser_conn->iscsi_conn);
+ 
+ 
+ 	iser_err("ib conn %p state %d\n",ib_conn, ib_conn->state);
+@@ -591,15 +589,14 @@ iscsi_iser_ep_disconnect(struct iscsi_en
+ static struct scsi_host_template iscsi_iser_sht = {
+ 	.module                 = THIS_MODULE,
+ 	.name                   = "iSCSI Initiator over iSER, v." DRV_VER,
+-	.queuecommand           = iscsi_queuecommand,
+-	.change_queue_depth	= iscsi_change_queue_depth,
++	.queuecommand           = iscsi2_queuecommand,
++	.change_queue_depth	= iscsi2_change_queue_depth,
+ 	.sg_tablesize           = ISCSI_ISER_SG_TABLESIZE,
+ 	.max_sectors		= 1024,
+ 	.cmd_per_lun            = ISER_DEF_CMD_PER_LUN,
+-	.eh_abort_handler       = iscsi_eh_abort,
+-	.eh_device_reset_handler= iscsi_eh_device_reset,
+-	.eh_target_reset_handler= iscsi_eh_target_reset,
+-	.target_alloc		= iscsi_target_alloc,
++	.eh_abort_handler       = iscsi2_eh_abort,
++	.eh_device_reset_handler= iscsi2_eh_device_reset,
++	.eh_host_reset_handler= iscsi2_eh_target_reset,
+ 	.use_clustering         = DISABLE_CLUSTERING,
+ 	.proc_name              = "iscsi_iser",
+ 	.this_id                = -1,
+@@ -640,22 +637,22 @@ static struct iscsi_transport iscsi_iser
+ 	.bind_conn              = iscsi_iser_conn_bind,
+ 	.destroy_conn           = iscsi_iser_conn_destroy,
+ 	.set_param              = iscsi_iser_set_param,
+-	.get_conn_param		= iscsi_conn_get_param,
+-	.get_session_param	= iscsi_session_get_param,
++	.get_conn_param		= iscsi2_conn_get_param,
++	.get_session_param	= iscsi2_session_get_param,
+ 	.start_conn             = iscsi_iser_conn_start,
+ 	.stop_conn              = iscsi_iser_conn_stop,
+ 	/* iscsi host params */
+-	.get_host_param		= iscsi_host_get_param,
+-	.set_host_param		= iscsi_host_set_param,
++	.get_host_param		= iscsi2_host_get_param,
++	.set_host_param		= iscsi2_host_set_param,
+ 	/* IO */
+-	.send_pdu		= iscsi_conn_send_pdu,
++	.send_pdu		= iscsi2_conn_send_pdu,
+ 	.get_stats		= iscsi_iser_conn_get_stats,
+ 	.init_task		= iscsi_iser_task_init,
+ 	.xmit_task		= iscsi_iser_task_xmit,
+ 	.cleanup_task		= iscsi_iser_cleanup_task,
+ 	.alloc_pdu		= iscsi_iser_pdu_alloc,
+ 	/* recovery */
+-	.session_recovery_timedout = iscsi_session_recovery_timedout,
++	.session_recovery_timedout = iscsi2_session_recovery_timedout,
+ 
+ 	.ep_connect             = iscsi_iser_ep_connect,
+ 	.ep_poll                = iscsi_iser_ep_poll,
+@@ -688,7 +685,7 @@ static int __init iser_init(void)
+ 	mutex_init(&ig.connlist_mutex);
+ 	INIT_LIST_HEAD(&ig.connlist);
+ 
+-	iscsi_iser_scsi_transport = iscsi_register_transport(
++	iscsi_iser_scsi_transport = iscsi2_register_transport(
+ 							&iscsi_iser_transport);
+ 	if (!iscsi_iser_scsi_transport) {
+ 		iser_err("iscsi_register_transport failed\n");
+@@ -707,7 +704,7 @@ register_transport_failure:
+ static void __exit iser_exit(void)
+ {
+ 	iser_dbg("Removing iSER datamover...\n");
+-	iscsi_unregister_transport(&iscsi_iser_transport);
++	iscsi2_unregister_transport(&iscsi_iser_transport);
+ 	kmem_cache_destroy(ig.desc_cache);
+ }
+ 
+Index: ofa_kernel-1.5/drivers/infiniband/ulp/iser/iscsi_iser.h
+===================================================================
+--- ofa_kernel-1.5.orig/drivers/infiniband/ulp/iser/iscsi_iser.h
++++ ofa_kernel-1.5/drivers/infiniband/ulp/iser/iscsi_iser.h
+@@ -42,8 +42,8 @@
+ 
+ #include <linux/types.h>
+ #include <linux/net.h>
+-#include <scsi/libiscsi.h>
+-#include <scsi/scsi_transport_iscsi.h>
++#include <scsi/libiscsi2.h>
++#include <scsi/scsi_transport_iscsi2.h>
+ 
+ #include <linux/wait.h>
+ #include <linux/sched.h>
+Index: ofa_kernel-1.5/drivers/infiniband/ulp/iser/iser_initiator.c
+===================================================================
+--- ofa_kernel-1.5.orig/drivers/infiniband/ulp/iser/iser_initiator.c
++++ ofa_kernel-1.5/drivers/infiniband/ulp/iser/iser_initiator.c
+@@ -592,9 +592,9 @@ void iser_rcv_completion(struct iser_des
+ 
+ 	if (opcode == ISCSI_OP_SCSI_CMD_RSP) {
+ 		spin_lock(&conn->iscsi_conn->session->lock);
+-		task = iscsi_itt_to_ctask(conn->iscsi_conn, hdr->itt);
++		task = iscsi2_itt_to_ctask(conn->iscsi_conn, hdr->itt);
+ 		if (task)
+-			__iscsi_get_task(task);
++			__iscsi2_get_task(task);
+ 		spin_unlock(&conn->iscsi_conn->session->lock);
+ 
+ 		if (!task)
+@@ -606,7 +606,7 @@ void iser_rcv_completion(struct iser_des
+ 			iser_dbg("itt %d task %p\n",hdr->itt, task);
+ 			iser_task->status = ISER_TASK_STATUS_COMPLETED;
+ 			iser_task_rdma_finalize(iser_task);
+-			iscsi_put_task(task);
++			iscsi2_put_task(task);
+ 		}
+ 	}
+ 	iser_dto_buffs_release(dto);
+@@ -669,7 +669,7 @@ void iser_snd_completion(struct iser_des
+ 		task = (void *) ((long)(void *)tx_desc -
+ 				  sizeof(struct iscsi_task));
+ 		if (task->hdr->itt == RESERVED_ITT)
+-			iscsi_put_task(task);
++			iscsi2_put_task(task);
+ 	}
+ }
+ 
+Index: ofa_kernel-1.5/drivers/infiniband/ulp/iser/iser_verbs.c
+===================================================================
+--- ofa_kernel-1.5.orig/drivers/infiniband/ulp/iser/iser_verbs.c
++++ ofa_kernel-1.5/drivers/infiniband/ulp/iser/iser_verbs.c
+@@ -322,7 +322,7 @@ static void iser_conn_release(struct ise
+ 		iser_device_try_release(device);
+ 	if (ib_conn->iser_conn)
+ 		ib_conn->iser_conn->ib_conn = NULL;
+-	iscsi_destroy_endpoint(ib_conn->ep);
++	iscsi2_destroy_endpoint(ib_conn->ep);
+ }
+ 
+ void iser_conn_get(struct iser_conn *ib_conn)
+@@ -438,7 +438,7 @@ static void iser_disconnected_handler(st
+ 	 * terminated asynchronously from the iSCSI layer's perspective.  */
+ 	if (iser_conn_state_comp_exch(ib_conn, ISER_CONN_UP,
+ 				      ISER_CONN_TERMINATING))
+-		iscsi_conn_failure(ib_conn->iser_conn->iscsi_conn,
++		iscsi2_conn_failure(ib_conn->iser_conn->iscsi_conn,
+ 				   ISCSI_ERR_CONN_FAILED);
+ 
+ 	/* Complete the termination process if no posts are pending */
+@@ -762,7 +762,7 @@ static void iser_handle_comp_error(struc
+ 		 * perspective.                                             */
+ 		if (iser_conn_state_comp_exch(ib_conn, ISER_CONN_UP,
+ 		    ISER_CONN_TERMINATING))
+-			iscsi_conn_failure(ib_conn->iser_conn->iscsi_conn,
++			iscsi2_conn_failure(ib_conn->iser_conn->iscsi_conn,
+ 					   ISCSI_ERR_CONN_FAILED);
+ 
+ 		/* complete the termination process if disconnect event was delivered *

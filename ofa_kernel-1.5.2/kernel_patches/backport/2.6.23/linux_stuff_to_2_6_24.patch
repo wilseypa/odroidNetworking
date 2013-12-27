@@ -1,0 +1,21 @@
+---
+ drivers/infiniband/core/Makefile   |    2 ++
+ drivers/infiniband/core/idr.c      |    1 +
+ 2 files changed, 3 insertions(+)
+
+Index: ofed_kernel/drivers/infiniband/core/Makefile
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/core/Makefile
++++ ofed_kernel/drivers/infiniband/core/Makefile
+@@ -30,3 +30,5 @@ ib_umad-y :=			user_mad.o
+ ib_ucm-y :=			ucm.o
+ 
+ ib_uverbs-y :=			uverbs_main.o uverbs_cmd.o uverbs_marshall.o
++
++ib_core-y +=			idr.o
+Index: ofed_kernel/drivers/infiniband/core/idr.c
+===================================================================
+--- /dev/null
++++ ofed_kernel/drivers/infiniband/core/idr.c
+@@ -0,0 +1 @@
++#include "src/idr.c"

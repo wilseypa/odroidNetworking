@@ -1,0 +1,165 @@
+From 455790331499dd90a37c14cebdeef88fbee15357 Mon Sep 17 00:00:00 2001
+From: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+Date: Sun, 31 May 2009 15:11:45 +0300
+Subject: [PATCH 4/8] mlx4_en: napi backport
+
+Signed-off-by: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+---
+ drivers/net/mlx4/en_cq.c     |   21 +++++++++++++++++----
+ drivers/net/mlx4/en_netdev.c |    5 ++---
+ drivers/net/mlx4/en_rx.c     |   26 +++++++++++++++-----------
+ drivers/net/mlx4/mlx4_en.h   |    4 ++--
+ 4 files changed, 36 insertions(+), 20 deletions(-)
+
+Index: ofa_1_5_dev_kernel-20100613-1015_linux-2.6.23_check/drivers/net/mlx4/en_cq.c
+===================================================================
+--- ofa_1_5_dev_kernel-20100613-1015_linux-2.6.23_check.orig/drivers/net/mlx4/en_cq.c	2010-06-13 10:20:08.000000000 +0300
++++ ofa_1_5_dev_kernel-20100613-1015_linux-2.6.23_check/drivers/net/mlx4/en_cq.c	2010-06-13 10:44:25.000000000 +0300
+@@ -34,6 +34,7 @@
+ #include <linux/mlx4/cq.h>
+ #include <linux/mlx4/qp.h>
+ #include <linux/mlx4/cmd.h>
++#include <linux/delay.h>
+ 
+ #include "mlx4_en.h"
+ 
+@@ -106,8 +107,17 @@ int mlx4_en_activate_cq(struct mlx4_en_p
+ 		cq->timer.function = mlx4_en_poll_tx_cq;
+ 		cq->timer.data = (unsigned long) cq;
+ 	} else {
+-		netif_napi_add(cq->dev, &cq->napi, mlx4_en_poll_rx_cq, 64);
+-		napi_enable(&cq->napi);
++		char name[IFNAMSIZ];
++
++		snprintf(name, IFNAMSIZ, "mlx4_en-%d-%d", priv->port, cq->ring);
++		cq->poll_dev = alloc_netdev(0, name, ether_setup);
++		if (!cq->poll_dev)
++			return -ENOMEM;
++
++		cq->poll_dev->priv = cq;
++		cq->poll_dev->weight = 64;
++		cq->poll_dev->poll = mlx4_en_poll_rx_cq;
++		set_bit(__LINK_STATE_START, &cq->poll_dev->state);
+ 	}
+ 
+ 	return 0;
+@@ -130,8 +140,11 @@ void mlx4_en_deactivate_cq(struct mlx4_e
+ 	if (cq->is_tx)
+ 		del_timer(&cq->timer);
+ 	else {
+-		napi_disable(&cq->napi);
+-		netif_napi_del(&cq->napi);
++		while (test_bit(__LINK_STATE_RX_SCHED,
++				&cq->poll_dev->state))
++			msleep(1);
++		free_netdev(cq->poll_dev);
++		cq->poll_dev = NULL;
+ 	}
+ 
+ 	mlx4_cq_free(mdev->dev, &cq->mcq);
+Index: ofa_1_5_dev_kernel-20100613-1015_linux-2.6.23_check/drivers/net/mlx4/en_netdev.c
+===================================================================
+--- ofa_1_5_dev_kernel-20100613-1015_linux-2.6.23_check.orig/drivers/net/mlx4/en_netdev.c	2010-06-13 10:22:20.000000000 +0300
++++ ofa_1_5_dev_kernel-20100613-1015_linux-2.6.23_check/drivers/net/mlx4/en_netdev.c	2010-06-13 10:44:25.000000000 +0300
+@@ -348,7 +348,8 @@ static void mlx4_en_netpoll(struct net_d
+ 	for (i = 0; i < priv->rx_ring_num; i++) {
+ 		cq = &priv->rx_cq[i];
+ 		spin_lock_irqsave(&cq->lock, flags);
+-		napi_synchronize(&cq->napi);
++		while (test_bit(__LINK_STATE_RX_SCHED, &cq->poll_dev->state))
++			msleep(1);
+ 		if (priv->rx_ring[i].use_frags)
+ 			mlx4_en_process_rx_cq(dev, cq, 0);
+ 		else
+@@ -757,8 +758,6 @@ void mlx4_en_stop_port(struct net_device
+ 	/* Free RX Rings */
+ 	for (i = 0; i < priv->rx_ring_num; i++) {
+ 		mlx4_en_deactivate_rx_ring(priv, &priv->rx_ring[i]);
+-		while (test_bit(NAPI_STATE_SCHED, &priv->rx_cq[i].napi.state))
+-			msleep(1);
+ 		mlx4_en_deactivate_cq(priv, &priv->rx_cq[i]);
+ 	}
+ 
+Index: ofa_1_5_dev_kernel-20100613-1015_linux-2.6.23_check/drivers/net/mlx4/en_rx.c
+===================================================================
+--- ofa_1_5_dev_kernel-20100613-1015_linux-2.6.23_check.orig/drivers/net/mlx4/en_rx.c	2010-06-13 10:22:21.000000000 +0300
++++ ofa_1_5_dev_kernel-20100613-1015_linux-2.6.23_check/drivers/net/mlx4/en_rx.c	2010-06-13 10:59:44.000000000 +0300
+@@ -893,40 +893,43 @@ void mlx4_en_rx_irq(struct mlx4_cq *mcq)
+ 	struct mlx4_en_priv *priv = netdev_priv(cq->dev);
+ 
+ 	if (priv->port_up)
+-		napi_schedule(&cq->napi);
++		netif_rx_schedule(cq->poll_dev);
+ 	else
+ 		mlx4_en_arm_cq(priv, cq);
+ }
+ 
+ /* Rx CQ polling - called by NAPI */
+-int mlx4_en_poll_rx_cq(struct napi_struct *napi, int budget)
++int mlx4_en_poll_rx_cq(struct net_device *poll_dev, int *budget)
+ {
+-	struct mlx4_en_cq *cq = container_of(napi, struct mlx4_en_cq, napi);
++	struct mlx4_en_cq *cq = poll_dev->priv;
+ 	struct net_device *dev = cq->dev;
+ 	struct mlx4_en_priv *priv = netdev_priv(dev);
+ 	int done;
++	int work = min(*budget, poll_dev->quota);
+ 
+ 	if (priv->rx_ring[cq->ring].use_frags)
+-		done = mlx4_en_process_rx_cq(dev, cq, budget);
++		done = mlx4_en_process_rx_cq(dev, cq, work);
+ 	else
+-		done = mlx4_en_process_rx_cq_skb(dev, cq, budget);
++		done = mlx4_en_process_rx_cq_skb(dev, cq, work);
++	dev->quota -= done;
++	*budget -= done;
+ 
+ 	/* If we used up all the quota - we're probably not done yet... */
+ 	cq->tot_rx += done;
+-	if (done == budget) {
++	if (done == work) {
+ 		INC_PERF_COUNTER(priv->pstats.napi_quota);
+ 		if (cq->tot_rx >= MIN_RX_ARM) {
+ 			cq->tot_rx -= MIN_RX_ARM;
+ 			mlx4_en_arm_cq(priv, cq);
+ 		}
++		return 1;
+ 	}	
+-	else {
+-		/* Done for now */
+-		napi_complete(napi);
+-		mlx4_en_arm_cq(priv, cq);
+-		cq->tot_rx = 0;
+-	}
+-	return done;
++
++	/* Done for now */
++	netif_rx_complete(poll_dev);
++	mlx4_en_arm_cq(priv, cq);
++	cq->tot_rx = 0;
++	return 0;
+ }
+ 
+ 
+Index: ofa_1_5_dev_kernel-20100613-1015_linux-2.6.23_check/drivers/net/mlx4/mlx4_en.h
+===================================================================
+--- ofa_1_5_dev_kernel-20100613-1015_linux-2.6.23_check.orig/drivers/net/mlx4/mlx4_en.h	2010-06-13 10:22:21.000000000 +0300
++++ ofa_1_5_dev_kernel-20100613-1015_linux-2.6.23_check/drivers/net/mlx4/mlx4_en.h	2010-06-13 10:44:25.000000000 +0300
+@@ -371,7 +371,7 @@ struct mlx4_en_cq {
+ 	int                     ring;
+ 	spinlock_t              lock;
+ 	struct net_device      *dev;
+-	struct napi_struct	napi;
++	struct net_device      *poll_dev; /* for napi */
+ 	/* Per-core Tx cq processing support */
+ 	struct timer_list timer;
+ 	int size;
+@@ -623,7 +623,7 @@ int mlx4_en_process_rx_cq(struct net_dev
+ int mlx4_en_process_rx_cq_skb(struct net_device *dev,
+ 			      struct mlx4_en_cq *cq,
+ 			      int budget);
+-int mlx4_en_poll_rx_cq(struct napi_struct *napi, int budget);
++int mlx4_en_poll_rx_cq(struct net_device *poll_dev, int *budget);;
+ void mlx4_en_fill_qp_context(struct mlx4_en_priv *priv, int size, int stride,
+ 			     int is_tx, int rss, int qpn, int cqn,
+ 			     struct mlx4_qp_context *context);

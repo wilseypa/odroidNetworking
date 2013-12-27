@@ -1,0 +1,12 @@
+Index: ofa_1_5_dev_kernel-20100113-0956_linux-2.6.9-89.ELsmp_check/drivers/infiniband/hw/mlx4/mlx4_ib.h
+===================================================================
+--- ofa_1_5_dev_kernel-20100113-0956_linux-2.6.9-89.ELsmp_check.orig/drivers/infiniband/hw/mlx4/mlx4_ib.h	2010-01-13 11:41:29.000000000 +0200
++++ ofa_1_5_dev_kernel-20100113-0956_linux-2.6.9-89.ELsmp_check/drivers/infiniband/hw/mlx4/mlx4_ib.h	2010-01-13 11:45:57.000000000 +0200
+@@ -37,6 +37,7 @@
+ #include <linux/compiler.h>
+ #include <linux/list.h>
+ #include <linux/mutex.h>
++#include <linux/notifier.h>
+ 
+ #include <rdma/ib_verbs.h>
+ #include <rdma/ib_umem.h>

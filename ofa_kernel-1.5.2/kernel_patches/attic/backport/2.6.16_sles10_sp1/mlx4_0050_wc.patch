@@ -1,0 +1,17 @@
+---
+ drivers/infiniband/hw/mlx4/wc.c |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+Index: ofed_kernel/drivers/infiniband/hw/mlx4/wc.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/hw/mlx4/wc.c
++++ ofed_kernel/drivers/infiniband/hw/mlx4/wc.c
+@@ -143,7 +143,7 @@ static int restore_pat(void)
+ 
+ int mlx4_enable_wc(void)
+ {
+-	struct cpuinfo_x86 *c = &cpu_data(0);
++	struct cpuinfo_x86 *c = &(cpu_data)[0];
+ 	int ret;
+ 
+ 	if (wc_enabled)

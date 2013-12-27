@@ -1,0 +1,18 @@
+backports: 2.6.16_sles10_sp2: include etherdevice.h explicitly
+
+Subsequent kernels included etherdevice.h in if_vlan.h
+
+Signed-off-by: Jack Morgenstein <jackm@dev.mellanox.co.il>
+
+Index: ofed_kernel-2.6.16_sles10_sp2/drivers/net/mlx4/en_rx.c
+===================================================================
+--- ofed_kernel-2.6.16_sles10_sp2.orig/drivers/net/mlx4/en_rx.c	2009-06-08 16:10:05.000000000 +0300
++++ ofed_kernel-2.6.16_sles10_sp2/drivers/net/mlx4/en_rx.c	2009-06-08 16:52:20.000000000 +0300
+@@ -37,6 +37,7 @@
+ #include <linux/if_ether.h>
+ #include <linux/if_vlan.h>
+ #include <linux/vmalloc.h>
++#include <linux/etherdevice.h>
+ 
+ #include "mlx4_en.h"
+ 

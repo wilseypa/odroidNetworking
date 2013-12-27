@@ -1,0 +1,23 @@
+diff -up ofed_kernel-2.6.18-EL5.1/drivers/infiniband/hw/ipath/ipath_verbs.c c/drivers/infiniband/hw/ipath/ipath_verbs.c
+--- ofed_kernel-2.6.18-EL5.1/drivers/infiniband/hw/ipath/ipath_verbs.c	2009-03-03 17:55:38.000000000 -0800
++++ c/drivers/infiniband/hw/ipath/ipath_verbs.c	2009-03-05 16:36:44.000000000 -0800
+@@ -2348,10 +2349,18 @@ static ssize_t show_stats(struct class_d
+ 	for (i = 0; i < qpt->max; i++) {
+ 		struct ipath_qp *qp;
+ 		for (qp = qpt->table[i]; qp != NULL; qp = qp->next) {
++			if (qp->s_last == qp->s_acked &&
++			    qp->s_acked == qp->s_cur &&
++			    qp->s_cur == qp->s_tail &&
++			    qp->s_tail == qp->s_head)
++				continue;
++			if (len + 128 >= PAGE_SIZE)
++				break;
+ 			len += sprintf(buf + len,
+-				"QP%u %x PSN %x %x %x %x %x (%u %u %u %u %u)\n",
++			    "QP%u %x %u PSN %x %x %x %x %x (%u %u %u %u %u)\n",
+ 				qp->ibqp.qp_num,
+ 				qp->s_flags,
++				atomic_read(&qp->s_dma_busy),
+ 				qp->s_last_psn,
+ 				qp->s_psn,
+ 				qp->s_next_psn,

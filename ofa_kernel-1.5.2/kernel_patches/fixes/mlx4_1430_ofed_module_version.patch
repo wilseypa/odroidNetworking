@@ -1,0 +1,30 @@
+Index: ofed_kernel-2.6.16_sles10_sp2/drivers/infiniband/hw/mlx4/main.c
+===================================================================
+--- ofed_kernel-2.6.16_sles10_sp2.orig/drivers/infiniband/hw/mlx4/main.c	2010-08-03 14:07:51.000000000 +0300
++++ ofed_kernel-2.6.16_sles10_sp2/drivers/infiniband/hw/mlx4/main.c	2010-08-03 14:08:24.000000000 +0300
+@@ -51,8 +51,8 @@
+ #include "wc.h"
+ 
+ #define DRV_NAME	MLX4_IB_DRV_NAME
+-#define DRV_VERSION	"1.0"
+-#define DRV_RELDATE	"April 4, 2008"
++#define DRV_VERSION	"1.0-ofed1.5.2"
++#define DRV_RELDATE	"August 4, 2010"
+ 
+ MODULE_AUTHOR("Roland Dreier");
+ MODULE_DESCRIPTION("Mellanox ConnectX HCA InfiniBand driver");
+Index: ofed_kernel-2.6.16_sles10_sp2/drivers/net/mlx4/mlx4.h
+===================================================================
+--- ofed_kernel-2.6.16_sles10_sp2.orig/drivers/net/mlx4/mlx4.h	2010-08-03 14:07:51.000000000 +0300
++++ ofed_kernel-2.6.16_sles10_sp2/drivers/net/mlx4/mlx4.h	2010-08-03 14:09:18.000000000 +0300
+@@ -48,8 +48,8 @@
+ 
+ #define DRV_NAME	"mlx4_core"
+ #define PFX		DRV_NAME ": "
+-#define DRV_VERSION	"1.0"
+-#define DRV_RELDATE	"April 4, 2008"
++#define DRV_VERSION	"1.0-ofed1.5.2"
++#define DRV_RELDATE	"August 4, 2010"
+ 
+ enum {
+ 	MLX4_HCR_BASE		= 0x80680,

@@ -1,0 +1,17 @@
+---
+ drivers/infiniband/hw/ehca/ehca_mrmw.c |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+Index: ofa_kernel-1.5.1/drivers/infiniband/hw/ehca/ehca_mrmw.c
+===================================================================
+--- ofa_kernel-1.5.1.orig/drivers/infiniband/hw/ehca/ehca_mrmw.c
++++ ofa_kernel-1.5.1/drivers/infiniband/hw/ehca/ehca_mrmw.c
+@@ -2463,7 +2463,7 @@ int ehca_create_busmap(void)
+ 	int ret;
+ 
+ 	ehca_mr_len = 0;
+-	ret = walk_memory_resource(0, 1ULL << MAX_PHYSMEM_BITS, NULL,
++	ret = walk_system_ram_range(0, 1ULL << MAX_PHYSMEM_BITS, NULL,
+ 				   ehca_create_busmap_callback);
+ 	return ret;
+ }

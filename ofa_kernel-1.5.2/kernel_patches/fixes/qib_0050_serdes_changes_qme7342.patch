@@ -1,0 +1,160 @@
+diff --git a/drivers/infiniband/hw/qib/qib_iba7322.c b/drivers/infiniband/hw/qib/qib_iba7322.c
+index e6e0445..990949c 100644
+--- a/drivers/infiniband/hw/qib/qib_iba7322.c
++++ b/drivers/infiniband/hw/qib/qib_iba7322.c
+@@ -516,10 +516,9 @@ struct txdds_ent {
+ #define TXDDS_TABLE_SZ 16 /* number of entries per speed in onchip table */
+ #define SERDES_CHANS 4 /* yes, it's obvious, but one less magic number */
+ 
+-/* these are used if not overridden via setup_qmh_params() */
+-#define QMH_DFLT_MEZ1_H1 7
+-#define QMH_DFLT_MEZ2_H1 10
+ #define H1_FORCE_VAL 8
++#define H1_FORCE_QME 7
++#define H1_FORCE_QMH 7 /*  may be overridden via setup_qmh_params() */
+ 
+ /*
+  * Set RxEQ adaptation on or off, possibly different taps differently.
+@@ -545,7 +544,7 @@ static const struct txdds_ent qmh_qdr_txdds =  {  0, 1, 10, 3 };
+ 
+ static const struct txdds_ent qme_sdr_txdds =  { 11, 0,  4,  4};
+ static const struct txdds_ent qme_ddr_txdds =  {  7, 0,  7,  2};
+-static const struct txdds_ent qme_qdr_txdds =  {  0, 1, 14,  3};
++static const struct txdds_ent qme_qdr_txdds =  {  0, 1, 14, 12};
+ 
+ struct qib_chippport_specific {
+ 	u64 __iomem *kpregbase;
+@@ -585,7 +584,7 @@ struct qib_chippport_specific {
+ 	 * Per-bay per-channel rcv QMH H1 values and Tx values for QDR.
+ 	 * entry zero is unused, to simplify indexing
+ 	 */
+-	u16 h1_vals[SERDES_CHANS];
++	u16 h1_val;
+ 	u8 amp[SERDES_CHANS];
+ 	u8 pre[SERDES_CHANS];
+ 	u8 post[SERDES_CHANS];
+@@ -3514,6 +3513,7 @@ static unsigned qib_7322_boardname(struct qib_devdata *dd)
+ 		break;
+ 	case BOARD_QME7342:
+ 		n = "InfiniPath_QME7342";
++		features = 0x24; /* BRINGUP; force QDR for now */
+ 		break;
+ 	case 15:
+ 		n = "InfiniPath_QLE7342_TEST";
+@@ -6291,6 +6291,7 @@ static int qib_init_7322_variables(struct qib_devdata *dd)
+ 		  HWE_MASK(LATriggered));
+ 
+ 	for (pidx = 0; pidx < NUM_IB_PORTS; ++pidx) {
++		struct qib_chippport_specific *cp = ppd->cpspec;
+ 		ppd->link_speed_supported = features &
+ 			(QIB_IB_SDR | QIB_IB_DDR | QIB_IB_QDR);
+ 		features >>= 3;
+@@ -6376,38 +6377,37 @@ static int qib_init_7322_variables(struct qib_devdata *dd)
+ 		}
+ 		ppd->vls_operational = ppd->vls_supported;
+ 
+-		init_waitqueue_head(&ppd->cpspec->autoneg_wait);
+-		INIT_DELAYED_WORK(&ppd->cpspec->autoneg_work,
++		init_waitqueue_head(&cp->autoneg_wait);
++		INIT_DELAYED_WORK(&cp->autoneg_work,
+ 				  autoneg_7322_work);
+-		INIT_DELAYED_WORK(&ppd->cpspec->ipg_work, ipg_7322_work);
++		INIT_DELAYED_WORK(&cp->ipg_work, ipg_7322_work);
+ 
+ 		if (IS_QMH(ppd->dd)) {
+-			struct qib_chippport_specific *cp;
+ 			int i;
+-			u16 h1;
+ 
+-			h1 = QMH_DFLT_MEZ1_H1; /* use for unknown, also */
+ 			/*
+ 			 * set values in case link comes up
+ 			 * before table is written to driver.
+ 			 */
+-			cp = ppd->cpspec;
++			cp->h1_val = H1_FORCE_QMH;
+ 			for (i = 0; i < SERDES_CHANS; i++) {
+-				cp->h1_vals[i] = h1;
+ 				cp->amp[i] = qmh_qdr_txdds.amp;
+ 				cp->pre[i] = qmh_qdr_txdds.pre;
+ 				cp->post[i] = qmh_qdr_txdds.post;
+ 				cp->mainv[i] = qmh_qdr_txdds.main;
+ 			}
+-		}
++		} else if (IS_QME(ppd->dd))
++			cp->h1_val = H1_FORCE_QME;
++		else
++			cp->h1_val = H1_FORCE_VAL;
+ 
+ 		/* Avoid writes to chip for mini_init */
+ 		if (!qib_mini_init)
+ 			write_7322_init_portregs(ppd);
+ 
+-		init_timer(&ppd->cpspec->chase_timer);
+-		ppd->cpspec->chase_timer.function = reenable_chase;
+-		ppd->cpspec->chase_timer.data = (unsigned long)ppd;
++		init_timer(&cp->chase_timer);
++		cp->chase_timer.function = reenable_chase;
++		cp->chase_timer.data = (unsigned long)ppd;
+ 
+ 		ppd++;
+ 	}
+@@ -7461,6 +7461,7 @@ static void ibsd_wr_allchans(struct qib_pportdata *ppd, int addr, unsigned data,
+ static int serdes_7322_init(struct qib_pportdata *ppd)
+ {
+ 	u64 data;
++	u32 le_val;
+ 
+ 	/* Initialize the Tx DDS tables.  Also done every QSFP event. */
+ 	init_txdds_table(ppd);
+@@ -7473,8 +7474,13 @@ static int serdes_7322_init(struct qib_pportdata *ppd)
+ 	ibsd_wr_allchans(ppd, 11, (1 << 11), BMASK(12, 11));
+ 	/* Enable LE2: rxle2en_r2a addr 13 bit [6] = 1, with value 5 */
+ 	ibsd_wr_allchans(ppd, 13, (1 << 6), (1 << 6));
+-	/* LE2_ctl: rxle2en_r2a addr 13 bit [9:7] = 5 */
+-	ibsd_wr_allchans(ppd, 13, (5 << 7), BMASK(9, 7));
++	/* set LE2 to 5 for all but QME, which is 0 */
++	le_val = IS_QME(ppd->dd) ? 0 : 5;
++	ibsd_wr_allchans(ppd, 13, (le_val << 7), BMASK(9, 7));
++
++	/* enable LE1 adaptation for all but QME, which is disabled */
++	le_val = IS_QME(ppd->dd) ? 0 : 1;
++	ibsd_wr_allchans(ppd, 13, (le_val << 5), (1 << 5));
+ 
+ 	/* Timing Recovery: rxtapsel addr 5 bits [9:8] = 0 */
+ 	ibsd_wr_allchans(ppd, 5, (0 << 8), BMASK(9, 8));
+@@ -7522,9 +7528,6 @@ static int serdes_7322_init(struct qib_pportdata *ppd)
+ 	qib_write_kreg_port(ppd, krp_static_adapt_dis(2), 0ULL);
+ 	ppd->cpspec->qdr_dfe_on = 1;
+ 
+-	/* Enable LE1: rxle1en_r2a addr 13 bit [5] = 1; adapts */
+-	ibsd_wr_allchans(ppd, 13, (1 << 5), (1 << 5));
+-
+ 	/* (FLoop LOS gate: PPM filter  enabled */
+ 	ibsd_wr_allchans(ppd, 38, 0 << 10, 1 << 10);
+ 
+@@ -7646,11 +7649,11 @@ static void force_h1(struct qib_pportdata *ppd)
+ 	int chan;
+ 
+ 	qib_cdbg(LINKVERB, "IB%u:%u Force H1 value to %u\n", ppd->dd->unit,
+-		 ppd->port, H1_FORCE_VAL);
++		 ppd->port, ppd->cpspec->h1_val);
+ 
+ 	for (chan = 0; chan < SERDES_CHANS; chan++) {
+ 		set_man_mode_h1(ppd, chan, 1, 0);
+-		set_man_code(ppd, chan, H1_FORCE_VAL);
++		set_man_code(ppd, chan, ppd->cpspec->h1_val);
+ 		clock_man(ppd, chan);
+ 		set_man_mode_h1(ppd, chan, 0, 0);
+ 	}
+@@ -7767,8 +7770,8 @@ static int setup_qmh_params(const char *str, struct kernel_param *kp)
+ 			}
+ 		} else if (ppd) {
+ 			u32 parm = (nf % N_QMH_FIELDS) - 2;
+-			if (parm < SERDES_CHANS)
+-				ppd->cpspec->h1_vals[parm % SERDES_CHANS] = val;
++			if (parm < SERDES_CHANS && !(parm % SERDES_CHANS))
++				ppd->cpspec->h1_val = val;
+ 			else if (parm < (2 * SERDES_CHANS))
+ 				ppd->cpspec->amp[parm % SERDES_CHANS] = val;
+ 			else if (parm < (3 * SERDES_CHANS))

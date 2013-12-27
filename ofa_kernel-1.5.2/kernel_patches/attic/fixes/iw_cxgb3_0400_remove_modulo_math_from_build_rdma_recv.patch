@@ -1,0 +1,27 @@
+commit 1557b4f052cb739a4ae1dd9641249b3e69fb6a0d
+Author: Steve Wise <swise@opengridcomputing.com>
+Date:   Thu Feb 12 21:43:05 2009 -0800
+
+    RDMA/cxgb3: Remove modulo math from build_rdma_recv()
+    
+    Remove modulo usage to avoid a divide in the fast path (not all
+    gcc versions do strength reduction here).
+    
+    Signed-off-by: Steve Wise <swise@opengridcomputing.com>
+    Signed-off-by: Roland Dreier <rolandd@cisco.com>
+
+diff --git a/drivers/infiniband/hw/cxgb3/iwch_qp.c b/drivers/infiniband/hw/cxgb3/iwch_qp.c
+index c84ac5b..b520d86 100644
+--- a/drivers/infiniband/hw/cxgb3/iwch_qp.c
++++ b/drivers/infiniband/hw/cxgb3/iwch_qp.c
+@@ -263,8 +263,8 @@ static int build_rdma_recv(struct iwch_qp *qhp, union t3_wr *wqe,
+ 		wqe->recv.sgl[i].len = cpu_to_be32(wr->sg_list[i].length);
+ 
+ 		/* to in the WQE == the offset into the page */
+-		wqe->recv.sgl[i].to = cpu_to_be64(((u32) wr->sg_list[i].addr) %
+-				(1UL << (12 + page_size[i])));
++		wqe->recv.sgl[i].to = cpu_to_be64(((u32)wr->sg_list[i].addr) &
++				((1UL << (12 + page_size[i])) - 1));
+ 
+ 		/* pbl_addr is the adapters address in the PBL */
+ 		wqe->recv.pbl_addr[i] = cpu_to_be32(pbl_addr[i]);

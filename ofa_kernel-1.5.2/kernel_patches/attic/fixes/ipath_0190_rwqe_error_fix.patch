@@ -1,0 +1,44 @@
+--- a/drivers/infiniband/hw/ipath/ipath_ruc.c	2009-01-23 12:07:05.000000000 -0800
++++ b/drivers/infiniband/hw/ipath/ipath_ruc.c	2009-02-02 14:56:01.000000000 -0800
+@@ -201,22 +201,29 @@ int ipath_get_rwqe(struct ipath_qp *qp, 
+ 	/* Validate tail before using it since it is user writable. */
+ 	if (tail >= rq->size)
+ 		tail = 0;
+-	do {
+-		if (unlikely(tail == wq->head)) {
++	if (unlikely(tail == wq->head)) {
++		ret = 0;
++		goto unlock;
++	}
++	/* Make sure entry is read after head index is read. */
++	smp_rmb();
++	wqe = get_rwqe_ptr(rq, tail);
++	/*
++	 * Even though we update the tail index in memory, the verbs
++	 * consumer is not supposed to post more entries until a
++	 * completion is generated.
++	 */
++	if (++tail >= rq->size)
++		tail = 0;
++	wq->tail = tail;
++	if (!wr_id_only) {
++		qp->r_sge.sg_list = qp->r_sg_list;
++		if (!ipath_init_sge(qp, wqe, &qp->r_len, &qp->r_sge)) {
+ 			ret = 0;
+ 			goto unlock;
+ 		}
+-		/* Make sure entry is read after head index is read. */
+-		smp_rmb();
+-		wqe = get_rwqe_ptr(rq, tail);
+-		if (++tail >= rq->size)
+-			tail = 0;
+-		if (wr_id_only)
+-			break;
+-		qp->r_sge.sg_list = qp->r_sg_list;
+-	} while (!ipath_init_sge(qp, wqe, &qp->r_len, &qp->r_sge));
++	}
+ 	qp->r_wr_id = wqe->wr_id;
+-	wq->tail = tail;
+ 
+ 	ret = 1;
+ 	set_bit(IPATH_R_WRID_VALID, &qp->r_aflags);

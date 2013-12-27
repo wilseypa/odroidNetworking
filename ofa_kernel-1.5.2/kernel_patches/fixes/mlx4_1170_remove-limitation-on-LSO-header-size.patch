@@ -1,0 +1,104 @@
+From 91856f762d956547d261349e7420ceaf75c0cae2 Mon Sep 17 00:00:00 2001
+From: Eli Cohen <eli@mellanox.co.il>
+Date: Sun, 27 Sep 2009 08:44:11 +0200
+Subject: [PATCH] mlx4: remove limitation on LSO header size
+
+Current code has a limitation as for the size of an LSO header not allowed to
+cross a 64 byte boundary. This patch removes this limitation by setting the WQE
+RR for large headers thus allowing LSO headers of any size. The extra buffer
+reserved for MLX4_IB_QP_LSO QPs has been doubled, from 64 to 128 bytes,
+assuming this is reasonable upper limit to header length.
+Also, this patch will cause IB_DEVICE_UD_TSO to be set only of FW versions that
+set MLX4_DEV_CAP_FLAG_BLH; e.g. FW version 2.6.000 and higher.
+
+Signed-off-by: Eli Cohen <eli@mellanox.co.il>
+---
+ drivers/infiniband/hw/mlx4/main.c |    2 +-
+ drivers/infiniband/hw/mlx4/qp.c   |   17 +++++++----------
+ include/linux/mlx4/device.h       |    1 +
+ 3 files changed, 9 insertions(+), 11 deletions(-)
+
+Index: ofed_kernel-fixes/drivers/infiniband/hw/mlx4/main.c
+===================================================================
+--- ofed_kernel-fixes.orig/drivers/infiniband/hw/mlx4/main.c	2009-09-29 09:57:20.000000000 +0200
++++ ofed_kernel-fixes/drivers/infiniband/hw/mlx4/main.c	2009-09-29 09:57:42.000000000 +0200
+@@ -112,7 +112,7 @@ static int mlx4_ib_query_device(struct i
+ 		props->device_cap_flags |= IB_DEVICE_UD_AV_PORT_ENFORCE;
+ 	if (dev->dev->caps.flags & MLX4_DEV_CAP_FLAG_IPOIB_CSUM)
+ 		props->device_cap_flags |= IB_DEVICE_UD_IP_CSUM;
+-	if (dev->dev->caps.max_gso_sz)
++	if (dev->dev->caps.max_gso_sz && dev->dev->caps.flags & MLX4_DEV_CAP_FLAG_BLH)
+ 		props->device_cap_flags |= IB_DEVICE_UD_TSO;
+ 	if (dev->dev->caps.bmme_flags & MLX4_BMME_FLAG_RESERVED_LKEY)
+ 		props->device_cap_flags |= IB_DEVICE_LOCAL_DMA_LKEY;
+Index: ofed_kernel-fixes/drivers/infiniband/hw/mlx4/qp.c
+===================================================================
+--- ofed_kernel-fixes.orig/drivers/infiniband/hw/mlx4/qp.c	2009-09-29 09:57:19.000000000 +0200
++++ ofed_kernel-fixes/drivers/infiniband/hw/mlx4/qp.c	2009-09-29 09:57:42.000000000 +0200
+@@ -278,7 +278,7 @@ static int send_wqe_overhead(enum ib_qp_
+ 	case IB_QPT_UD:
+ 		return sizeof (struct mlx4_wqe_ctrl_seg) +
+ 			sizeof (struct mlx4_wqe_datagram_seg) +
+-			((flags & MLX4_IB_QP_LSO) ? 64 : 0);
++			((flags & MLX4_IB_QP_LSO) ? 128 : 0);
+ 	case IB_QPT_UC:
+ 		return sizeof (struct mlx4_wqe_ctrl_seg) +
+ 			sizeof (struct mlx4_wqe_raddr_seg);
+@@ -1636,16 +1636,11 @@ static void __set_data_seg(struct mlx4_w
+ 
+ static int build_lso_seg(struct mlx4_wqe_lso_seg *wqe, struct ib_send_wr *wr,
+ 			 struct mlx4_ib_qp *qp, unsigned *lso_seg_len,
+-			 __be32 *lso_hdr_sz)
++			 __be32 *lso_hdr_sz, int *blh)
+ {
+ 	unsigned halign = ALIGN(sizeof *wqe + wr->wr.ud.hlen, 16);
+ 
+-	/*
+-	 * This is a temporary limitation and will be removed in
+-	 * a forthcoming FW release:
+-	 */
+-	if (unlikely(halign > 64))
+-		return -EINVAL;
++	*blh = unlikely(halign > 64) ? 1 : 0;
+ 
+ 	if (unlikely(!(qp->flags & MLX4_IB_QP_LSO) &&
+ 		     wr->num_sge > qp->sq.max_gs - (halign >> 4)))
+@@ -1692,6 +1687,7 @@ int mlx4_ib_post_send(struct ib_qp *ibqp
+ 	__be32 *lso_wqe;
+ 	__be32 uninitialized_var(lso_hdr_sz);
+ 	int i;
++	int blh = 0;
+ 
+ 	spin_lock_irqsave(&qp->sq.lock, flags);
+ 
+@@ -1792,7 +1788,7 @@ int mlx4_ib_post_send(struct ib_qp *ibqp
+ 			size += sizeof (struct mlx4_wqe_datagram_seg) / 16;
+ 
+ 			if (wr->opcode == IB_WR_LSO) {
+-				err = build_lso_seg(wqe, wr, qp, &seglen, &lso_hdr_sz);
++				err = build_lso_seg(wqe, wr, qp, &seglen, &lso_hdr_sz, &blh);
+ 				if (unlikely(err)) {
+ 					*bad_wr = wr;
+ 					goto out;
+@@ -1874,7 +1870,8 @@ int mlx4_ib_post_send(struct ib_qp *ibqp
+ 		}
+ 
+ 		ctrl->owner_opcode = mlx4_ib_opcode[wr->opcode] |
+-			(ind & qp->sq.wqe_cnt ? cpu_to_be32(1 << 31) : 0);
++			(ind & qp->sq.wqe_cnt ? cpu_to_be32(1 << 31) : 0) |
++			(blh ? cpu_to_be32(1 << 6) : 0);
+ 
+ 		stamp = ind + qp->sq_spare_wqes;
+ 		ind += DIV_ROUND_UP(size * 16, 1U << qp->sq.wqe_shift);
+Index: ofed_kernel-fixes/include/linux/mlx4/device.h
+===================================================================
+--- ofed_kernel-fixes.orig/include/linux/mlx4/device.h	2009-09-29 09:57:21.000000000 +0200
++++ ofed_kernel-fixes/include/linux/mlx4/device.h	2009-09-29 09:59:05.000000000 +0200
+@@ -63,6 +63,7 @@ enum {
+ 	MLX4_DEV_CAP_FLAG_BAD_QKEY_CNTR	= 1 <<  9,
+ 	MLX4_DEV_CAP_FLAG_DPDP		= 1 << 12,
+ 	MLX4_DEV_CAP_FLAG_RAW_ETY	= 1 << 13,
++	MLX4_DEV_CAP_FLAG_BLH		= 1 << 15,
+ 	MLX4_DEV_CAP_FLAG_MEM_WINDOW	= 1 << 16,
+ 	MLX4_DEV_CAP_FLAG_APM		= 1 << 17,
+ 	MLX4_DEV_CAP_FLAG_ATOMIC	= 1 << 18,

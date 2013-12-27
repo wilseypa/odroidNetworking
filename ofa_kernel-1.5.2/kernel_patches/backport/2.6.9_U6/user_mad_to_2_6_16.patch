@@ -1,0 +1,33 @@
+Remove const qualifier from struct file_operations prior to 2.6.17
+
+This eliminates the compiler warning:
+user_mad.c:1002: warning: assignment discards qualifiers from pointer target type
+user_mad.c:1024: warning: assignment discards qualifiers from pointer target type
+
+Signed-off-by: John Gregor <john.gregor@qlogic.com>
+---
+ drivers/infiniband/core/user_mad.c |    4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+Index: ofed_kernel/drivers/infiniband/core/user_mad.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/core/user_mad.c
++++ ofed_kernel/drivers/infiniband/core/user_mad.c
+@@ -853,7 +853,7 @@ static int ib_umad_close(struct inode *i
+ 	return 0;
+ }
+ 
+-static const struct file_operations umad_fops = {
++static struct file_operations umad_fops = {
+ 	.owner 	 	= THIS_MODULE,
+ 	.read 	 	= ib_umad_read,
+ 	.write 	 	= ib_umad_write,
+@@ -927,7 +927,7 @@ static int ib_umad_sm_close(struct inode
+ 	return ret;
+ }
+ 
+-static const struct file_operations umad_sm_fops = {
++static struct file_operations umad_sm_fops = {
+ 	.owner 	 = THIS_MODULE,
+ 	.open 	 = ib_umad_sm_open,
+ 	.release = ib_umad_sm_close

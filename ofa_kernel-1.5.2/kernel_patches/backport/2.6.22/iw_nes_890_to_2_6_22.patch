@@ -1,0 +1,55 @@
+diff -Nurp linux-2.6/drivers/infiniband/hw/nes/nes.c nes.2_6_22_patch/drivers/infiniband/hw/nes/nes.c
+--- linux-2.6/drivers/infiniband/hw/nes/nes.c	2010-05-10 16:43:23.186012000 +0200
++++ nes.2_6_22_patch/drivers/infiniband/hw/nes/nes.c	2010-05-10 11:21:29.873498000 +0200
+@@ -579,16 +579,22 @@ static int __devinit nes_probe(struct pc
+ 						nesdev->nesadapter->port_count;
+ 	}
+ 
+-	if ((limit_maxrdreqsz ||
+-	     ((nesdev->nesadapter->phy_type[0] == NES_PHY_TYPE_GLADIUS) &&
+-	      (hw_rev == NE020_REV1))) &&
+-	    (pcie_get_readrq(pcidev) > 256)) {
+-		if (pcie_set_readrq(pcidev, 256))
+-			printk(KERN_ERR PFX "Unable to set max read request"
+-				" to 256 bytes\n");
+-		else
+-			nes_debug(NES_DBG_INIT, "Max read request size set"
+-				" to 256 bytes\n");
++	if (limit_maxrdreqsz ||
++	    ((nesdev->nesadapter->phy_type[0] == NES_PHY_TYPE_GLADIUS) &&
++	     (hw_rev == NE020_REV1))) {
++		u16 maxrdreqword;
++		pci_read_config_word(pcidev, 0x68, &maxrdreqword);
++		/* set bits 12-14 to 001b = 256 bytes */
++		if ((maxrdreqword & 0x7000) > 0x1000) {
++			maxrdreqword &= 0x8fff;
++			maxrdreqword |= 0x1000;
++			if (pci_write_config_word(pcidev, 0x68, maxrdreqword))
++				printk(KERN_ERR PFX "Unable to set max read "
++					"request to 256 bytes\n");
++			else
++				nes_debug(NES_DBG_INIT, "Max read request size"
++					"set to 256 bytes\n");
++		}
+ 	}
+ 
+ 	tasklet_init(&nesdev->dpc_tasklet, nes_dpc, (unsigned long)nesdev);
+diff -Nurp linux-2.6/drivers/infiniband/hw/nes/nes.h nes.2_6_22_patch/drivers/infiniband/hw/nes/nes.h
+--- linux-2.6/drivers/infiniband/hw/nes/nes.h	2010-05-10 11:20:10.950358000 +0200
++++ nes.2_6_22_patch/drivers/infiniband/hw/nes/nes.h	2010-05-10 11:21:29.878493000 +0200
+@@ -277,14 +277,7 @@ static inline __le32 get_crc_value(struc
+ 	u32 crc_value;
+ 	crc_value = crc32c(~0, (void *)nes_quad, sizeof (struct nes_v4_quad));
+ 
+-	/*
+-	 * With commit ef19454b ("[LIB] crc32c: Keep intermediate crc
+-	 * state in cpu order"), behavior of crc32c changes on
+-	 * big-endian platforms.  Our algorithm expects the previous
+-	 * behavior; otherwise we have RDMA connection establishment
+-	 * issue on big-endian.
+-	 */
+-	return cpu_to_le32(crc_value);
++	return crc_value;
+ }
+ 
+ static inline void

@@ -1,0 +1,110 @@
+From 8e110a2fff1f110a9211f240acc12b8310e5cbd3 Mon Sep 17 00:00:00 2001
+From: Stefan Roscher <ossrosch@linux.vnet.ibm.com>
+Date: Wed, 22 Oct 2008 15:54:38 -0700
+Subject: [PATCH] IB/ehca: Reject dynamic memory add/remove when ehca adapter is present
+
+Since the ehca device driver does not support dynamic memory add and
+remove operations, the driver must explicitly reject such requests in
+order to prevent unpredictable behaviors related to existing memory
+regions that cover all of memory being used by InfiniBand protocols in
+the kernel.
+
+The solution (for now at least) is to add a memory notifier to the
+ehca device driver and if a request for dynamic memory add or remove
+comes in, ehca will always reject it.  The user can add or remove
+memory by hot-removing the ehca adapter, performing the memory
+operation, and then hot-adding the ehca adapter back.
+
+Signed-off-by: Stefan Roscher <stefan.roscher@de.ibm.com>
+Signed-off-by: Roland Dreier <rolandd@cisco.com>
+---
+ drivers/infiniband/hw/ehca/ehca_main.c |   47 --------------------------------
+ 1 files changed, 0 insertions(+), 47 deletions(-)
+
+Index: ofa_kernel-1.5/drivers/infiniband/hw/ehca/ehca_main.c
+===================================================================
+--- ofa_kernel-1.5.orig/drivers/infiniband/hw/ehca/ehca_main.c	2009-09-25 12:41:13.000000000 +0200
++++ ofa_kernel-1.5/drivers/infiniband/hw/ehca/ehca_main.c	2009-09-25 12:42:48.000000000 +0200
+@@ -44,8 +44,6 @@
+ #include <linux/slab.h>
+ #endif
+ 
+-#include <linux/notifier.h>
+-#include <linux/memory.h>
+ #include "ehca_classes.h"
+ #include "ehca_iverbs.h"
+ #include "ehca_mrmw.h"
+@@ -973,41 +971,6 @@
+ 	spin_unlock(&shca_list_lock);
+ }
+ 
+-static int ehca_mem_notifier(struct notifier_block *nb,
+-			     unsigned long action, void *data)
+-{
+-	static unsigned long ehca_dmem_warn_time;
+-	unsigned long flags;
+-
+-	switch (action) {
+-	case MEM_CANCEL_OFFLINE:
+-	case MEM_CANCEL_ONLINE:
+-	case MEM_ONLINE:
+-	case MEM_OFFLINE:
+-		return NOTIFY_OK;
+-	case MEM_GOING_ONLINE:
+-	case MEM_GOING_OFFLINE:
+-		/* only ok if no hca is attached to the lpar */
+-		spin_lock_irqsave(&shca_list_lock, flags);
+-		if (list_empty(&shca_list)) {
+-			spin_unlock_irqrestore(&shca_list_lock, flags);
+-			return NOTIFY_OK;
+-		} else {
+-			spin_unlock_irqrestore(&shca_list_lock, flags);
+-			if (printk_timed_ratelimit(&ehca_dmem_warn_time,
+-						   30 * 1000))
+-				ehca_gen_err("DMEM operations are not allowed"
+-					     "in conjunction with eHCA");
+-			return NOTIFY_BAD;
+-		}
+-	}
+-	return NOTIFY_OK;
+-}
+-
+-static struct notifier_block ehca_mem_nb = {
+-	.notifier_call = ehca_mem_notifier,
+-};
+-
+ static int __init ehca_module_init(void)
+ {
+ 	int ret;
+@@ -1035,12 +998,6 @@
+ 		goto module_init2;
+ 	}
+ 
+-	ret = register_memory_notifier(&ehca_mem_nb);
+-	if (ret) {
+-		ehca_gen_err("Failed registering memory add/remove notifier");
+-		goto module_init3;
+-	}
+-
+ 	if (ehca_poll_all_eqs != 1) {
+ 		ehca_gen_err("WARNING!!!");
+ 		ehca_gen_err("It is possible to lose interrupts.");
+@@ -1053,9 +1010,6 @@
+ 
+ 	return 0;
+ 
+-module_init3:
+-	ibmebus_unregister_driver(&ehca_driver);
+-
+ module_init2:
+ 	ehca_destroy_slab_caches();
+ 
+@@ -1071,8 +1025,6 @@
+ 
+ 	ibmebus_unregister_driver(&ehca_driver);
+ 
+-	unregister_memory_notifier(&ehca_mem_nb);
+-
+ 	ehca_destroy_slab_caches();
+ 
+ 	ehca_destroy_comp_pool();

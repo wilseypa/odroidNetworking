@@ -1,0 +1,508 @@
+From ffb9eac4c5613fcb1ee42c782fa238de6a3e6840 Mon Sep 17 00:00:00 2001
+From: Eli Cohen <eli@mellanox.co.il>
+Date: Wed, 10 Feb 2010 09:21:19 +0200
+Subject: [PATCH 11/12] mlx4: Add vlan support to IBoE
+
+This patch allows IBoE traffic to be encapsulated in 802.1q tagged VLAN
+frames. The VLAN tag is encoded in the GID and derived from it by a simple
+computation. The netdev notifier callback is modified to catch new VLAN devices
+addition/removal and the port's GID table is updated to reflect the change such
+that for each netdevice there is an entry in the GID table. When the port's GID
+table is exhausted, GID entries will not be added. Only children of the main
+interface's can add to the GID table. If a vlan interface is added on another
+vlan interface (e.g. vconfig add eth2.6 8), then that interfaces will not add
+an entry to the GID table.
+
+Signed-off-by: Eli Cohen <eli@mellanox.co.il>
+---
+ drivers/infiniband/hw/mlx4/ah.c        |   17 +++++--
+ drivers/infiniband/hw/mlx4/main.c      |   78 +++++++++++++++++++++++++++-----
+ drivers/infiniband/hw/mlx4/mlx4_ib.h   |    4 +-
+ drivers/infiniband/hw/mlx4/qp.c        |   49 +++++++++++++++++---
+ drivers/net/mlx4/en_netdev.c           |   10 ++++
+ drivers/net/mlx4/mlx4_en.h             |    1 +
+ drivers/net/mlx4/port.c                |   19 ++++++++
+ include/linux/mlx4/device.h            |    1 +
+ include/linux/mlx4/qp.h                |    2 +-
+ 10 files changed, 155 insertions(+), 28 deletions(-)
+
+Index: ofed_kernel-fixes/drivers/infiniband/hw/mlx4/ah.c
+===================================================================
+--- ofed_kernel-fixes.orig/drivers/infiniband/hw/mlx4/ah.c	2010-07-12 12:26:40.000000000 +0300
++++ ofed_kernel-fixes/drivers/infiniband/hw/mlx4/ah.c	2010-07-12 12:30:45.000000000 +0300
+@@ -99,14 +99,18 @@
+ 	u8 mac[6];
+ 	int err;
+ 	int is_mcast;
++	u16 vlan_tag;
+ 
+ 	err = mlx4_ib_resolve_grh(ibdev, ah_attr, mac, &is_mcast, ah_attr->port_num);
+ 	if (err)
+ 		return ERR_PTR(err);
+ 
+ 	memcpy(ah->av.eth.mac, mac, 6);
++	vlan_tag = rdma_get_vlan_id(&ah_attr->grh.dgid);
++	vlan_tag |= (ah_attr->sl & 7) << 13;
+ 	ah->av.eth.port_pd = cpu_to_be32(to_mpd(pd)->pdn | (ah_attr->port_num << 24));
+ 	ah->av.eth.gid_index = ah_attr->grh.sgid_index;
++	ah->av.eth.vlan = cpu_to_be16(vlan_tag);
+ 	if (ah_attr->static_rate) {
+ 		ah->av.eth.stat_rate = ah_attr->static_rate + MLX4_STAT_RATE_OFFSET;
+ 		while (ah->av.eth.stat_rate > IB_RATE_2_5_GBPS + MLX4_STAT_RATE_OFFSET &&
+@@ -195,7 +199,7 @@
+ }
+ 
+ int mlx4_ib_get_eth_l2_addr(struct ib_device *device, u8 port, union ib_gid *dgid,
+-			    int sgid_idx, u8 *mac)
++			    int sgid_idx, u8 *mac, u16 *vlan_id)
+ {
+ 	int err;
+ 	struct mlx4_ib_dev *ibdev = to_mdev(device);
+@@ -213,6 +217,7 @@
+ 	err = ib_get_cached_gid(device, port, sgid_idx, &sgid);
+ 	if (err)
+ 		return err;
++	*vlan_id = rdma_get_vlan_id(&sgid);
+ 	return 0;
+ }
+ 
+Index: ofed_kernel-fixes/drivers/infiniband/hw/mlx4/main.c
+===================================================================
+--- ofed_kernel-fixes.orig/drivers/infiniband/hw/mlx4/main.c	2010-07-12 12:26:42.000000000 +0300
++++ ofed_kernel-fixes/drivers/infiniband/hw/mlx4/main.c	2010-07-12 12:34:16.000000000 +0300
+@@ -37,6 +37,7 @@
+ #include <linux/netdevice.h>
+ #include <linux/inetdevice.h>
+ #include <linux/rtnetlink.h>
++#include <linux/if_vlan.h>
+ 
+ #include <rdma/ib_smi.h>
+ #include <rdma/ib_user_verbs.h>
+@@ -93,6 +94,8 @@
+ 	mad->method	   = IB_MGMT_METHOD_GET;
+ }
+ 
++static union ib_gid zgid;
++
+ static int mlx4_ib_query_device(struct ib_device *ibdev,
+ 				struct ib_device_attr *props)
+ {
+@@ -1037,12 +1040,17 @@
+ 	.attrs  = diag_rprt_attrs
+ };
+ 
+-static void mlx4_addrconf_ifid_eui48(u8 *eui, struct net_device *dev)
++static void mlx4_addrconf_ifid_eui48(u8 *eui, int is_vlan, u16 vlan_id, struct net_device *dev)
+ {
+ 	memcpy(eui, dev->dev_addr, 3);
+ 	memcpy(eui + 5, dev->dev_addr + 3, 3);
+-	eui[3] = 0xFF;
+-	eui[4] = 0xFE;
++	if (is_vlan) {
++		eui[3] = vlan_id >> 8;
++		eui[4] = vlan_id & 0xff;
++	} else {
++		eui[3] = 0xff;
++		eui[4] = 0xfe;
++	}
+ 	eui[0] ^= 2;
+ }
+ 
+@@ -1084,28 +1092,102 @@
+ {
+ 	struct net_device *ndev = dev->rocee.netdevs[port - 1];
+ 	struct update_gid_work *work;
++	struct net_device *tmp;
++	int i;
++	u8 *hits;
++	int ret;
++	union ib_gid gid;
++	int free;
++	int found;
++	int need_update = 0;
++	int is_vlan;
++	u16 vid;
+ 
+ 	work = kzalloc(sizeof *work, GFP_ATOMIC);
+ 	if (!work)
+ 		return -ENOMEM;
+ 
+-	if (!clear) {
+-		mlx4_addrconf_ifid_eui48(&work->gids[0].raw[8], ndev);
+-		work->gids[0].global.subnet_prefix = cpu_to_be64(0xfe80000000000000LL);
++	hits = kzalloc(128, GFP_ATOMIC);
++	if (!hits) {
++		ret = -ENOMEM;
++		goto out;
+ 	}
+ 
+-	INIT_WORK(&work->work, update_gids_task);
+-	work->port = port;
+-	work->dev = dev;
+-	queue_work(wq, &work->work);
++	read_lock(&dev_base_lock);
++	for_each_netdev(&init_net, tmp) {
++		if (ndev && (tmp == ndev
++#if defined(CONFIG_VLAN_8021Q) || defined(CONFIG_VLAN_8021Q_MODULE)
++			 || vlan_dev_real_dev(tmp) == ndev)) {
++#else
++						)) {
++#endif
++			gid.global.subnet_prefix = cpu_to_be64(0xfe80000000000000LL);
++#if defined(CONFIG_VLAN_8021Q) || defined(CONFIG_VLAN_8021Q_MODULE)
++			vid = vlan_dev_vlan_id(tmp);
++			is_vlan = tmp->priv_flags & IFF_802_1Q_VLAN;
++#else
++			vid = 0;
++			is_vlan = 0;
++#endif
++			mlx4_addrconf_ifid_eui48(&gid.raw[8], is_vlan, vid, ndev);
++			found = 0;
++			free = -1;
++			for (i = 0; i < 128; ++i) {
++				if (free < 0 &&
++				    !memcmp(&dev->iboe.gid_table[port - 1][i], &zgid, sizeof zgid))
++					free = i;
++				if (!memcmp(&dev->iboe.gid_table[port - 1][i], &gid, sizeof gid)) {
++					hits[i] = 1;
++					found = 1;
++					break;
++				}
++			}
++
++			if (!found) {
++				if (tmp == ndev  && (memcmp(&dev->iboe.gid_table[port - 1][0], &gid, sizeof gid) || !memcmp(&dev->iboe.gid_table[port - 1][0], &zgid, sizeof gid))) {
++					dev->iboe.gid_table[port - 1][0] = gid;
++					++need_update;
++					hits[0] = 1;
++				} else if (free >= 0) {
++					dev->iboe.gid_table[port - 1][free] = gid;
++					hits[free] = 1;
++					++need_update;
++				}
++			}
++		}
++	}
++	read_unlock(&dev_base_lock);
+ 
++	for (i = 0; i < 128; ++i)
++		if (!hits[i]) {
++			if (memcmp(&dev->iboe.gid_table[port - 1][i], &zgid, sizeof zgid))
++				++need_update;
++			dev->iboe.gid_table[port - 1][i] = zgid;
++		}
++
++
++	if (need_update) {
++		memcpy(work->gids, dev->iboe.gid_table[port - 1], sizeof work->gids);
++		INIT_WORK(&work->work, update_gids_task);
++		work->port = port;
++		work->dev = dev;
++		queue_work(wq, &work->work);
++	} else
++		kfree(work);
++
++	kfree(hits);
+ 	return 0;
++
++out:
++	kfree(work);
++	return ret;
+ }
+ 
+ static void handle_en_event(struct mlx4_ib_dev *dev, int port, unsigned long event)
+ {
+ 	switch (event) {
+ 	case NETDEV_UP:
++	case NETDEV_CHANGEADDR:
+ 		update_ipv6_gids(dev, port, 0);
+ 		break;
+ 
+@@ -1152,9 +1234,19 @@
+ 		}
+ 	}
+ 
+-	if (dev == rocee->netdevs[0])
++	if (dev == iboe->netdevs[0]
++#if defined(CONFIG_VLAN_8021Q) || defined(CONFIG_VLAN_8021Q_MODULE)
++			|| (iboe->netdevs[0] && vlan_dev_real_dev(dev) == iboe->netdevs[0]))
++#else
++			)
++#endif
+ 		handle_en_event(ibdev, 1, event);
+-	else if (dev == rocee->netdevs[1])
++	else if (dev == iboe->netdevs[1]
++#if defined(CONFIG_VLAN_8021Q) || defined(CONFIG_VLAN_8021Q_MODULE)
++			|| (iboe->netdevs[1] && vlan_dev_real_dev(dev) == iboe->netdevs[1]))
++#else
++			)
++#endif
+ 		handle_en_event(ibdev, 2, event);
+ 
+ 	spin_unlock(&rocee->lock);
+Index: ofed_kernel-fixes/drivers/infiniband/hw/mlx4/mlx4_ib.h
+===================================================================
+--- ofed_kernel-fixes.orig/drivers/infiniband/hw/mlx4/mlx4_ib.h	2010-07-12 12:26:41.000000000 +0300
++++ ofed_kernel-fixes/drivers/infiniband/hw/mlx4/mlx4_ib.h	2010-07-12 12:31:08.000000000 +0300
+@@ -393,7 +393,7 @@
+ 			u8 *mac, int *is_mcast, u8 port);
+ 
+ int mlx4_ib_get_eth_l2_addr(struct ib_device *device, u8 port, union ib_gid *dgid,
+-			    int sgid_idx, u8 *mac);
++			    int sgid_idx, u8 *mac, u16 *vlan_id);
+ 
+ static inline int mlx4_ib_ah_grh_present(struct mlx4_ib_ah *ah)
+ {
+Index: ofed_kernel-fixes/drivers/infiniband/hw/mlx4/qp.c
+===================================================================
+--- ofed_kernel-fixes.orig/drivers/infiniband/hw/mlx4/qp.c	2010-07-12 12:26:42.000000000 +0300
++++ ofed_kernel-fixes/drivers/infiniband/hw/mlx4/qp.c	2010-07-12 12:31:13.000000000 +0300
+@@ -36,6 +36,7 @@
+ 
+ #include <rdma/ib_cache.h>
+ #include <rdma/ib_pack.h>
++#include <rdma/ib_addr.h>
+ 
+ #include <linux/mlx4/qp.h>
+ 
+@@ -959,6 +960,8 @@
+ 		IB_LINK_LAYER_ETHERNET ? 1 : 0;
+ 	u8 mac[6];
+ 	int is_mcast;
++	u16 vlan_tag;
++	int vidx;
+ 
+ 	path->grh_mylmc     = ah->src_path_bits & 0x7f;
+ 	path->rlid	    = cpu_to_be16(ah->dlid);
+@@ -986,10 +989,10 @@
+ 		memcpy(path->rgid, ah->grh.dgid.raw, 16);
+ 	}
+ 
+-	path->sched_queue = MLX4_IB_DEFAULT_SCHED_QUEUE |
+-		((port - 1) << 6) | ((ah->sl & 0xf) << 2);
+-
+ 	if (is_eth) {
++		path->sched_queue = MLX4_IB_DEFAULT_SCHED_QUEUE |
++			((port - 1) << 6) | ((ah->sl & 0xf) << 3);
++
+ 		if (!(ah->ah_flags & IB_AH_GRH))
+ 			return -1;
+ 
+@@ -1001,7 +1004,18 @@
+ 		path->ackto = MLX4_IB_LINK_TYPE_ETH;
+ 		/* use index 0 into MAC table for RoCEE */
+ 		path->grh_mylmc &= 0x80;
+-	}
++
++		vlan_tag = rdma_get_vlan_id(&dev->iboe.gid_table[port - 1][ah->grh.sgid_index]);
++		if (vlan_tag) {
++			if (mlx4_find_cached_vlan(dev->dev, port, vlan_tag, &vidx))
++				return -ENOENT;
++
++			path->vlan_index = vidx;
++			path->fl = 1 << 6;
++		}
++	} else
++		path->sched_queue = MLX4_IB_DEFAULT_SCHED_QUEUE |
++			((port - 1) << 6) | ((ah->sl & 0xf) << 2);
+ 
+ 	return 0;
+ }
+@@ -1452,7 +1466,9 @@
+ 	union ib_gid sgid;
+ 	int is_eth;
+ 	int is_grh;
++	int is_vlan = 0;
+ 	int err;
++	__be16 vlan = 0;
+ 
+ 	send_size = 0;
+ 	for (i = 0; i < wr->num_sge; ++i)
+@@ -1464,7 +1480,13 @@
+ 				ah->av.ib.gid_index, &sgid);
+ 	if (err)
+ 		return err;
+-	ib_ud_header_init(send_size, !is_eth, is_eth, is_grh, 0, &sqp->ud_header);
++
++	if (is_eth) {
++		vlan = cpu_to_be16(rdma_get_vlan_id(&sgid));
++		is_vlan = !!vlan;
++	}
++
++	ib_ud_header_init(send_size, !is_eth, is_eth, is_vlan, is_grh, 0, &sqp->ud_header);
+ 	if (!is_eth) {
+ 		sqp->ud_header.lrh.service_level =
+ 			be32_to_cpu(ah->av.ib.sl_tclass_flowlabel) >> 28;
+@@ -1516,8 +1538,15 @@
+ 		memcpy(sqp->ud_header.eth.smac_h, smac, 6);
+ 		if (!memcmp(sqp->ud_header.eth.smac_h, sqp->ud_header.eth.dmac_h, 6))
+ 			mlx->flags |= cpu_to_be32(MLX4_WQE_CTRL_FORCE_LOOPBACK);
+-
+-		sqp->ud_header.eth.type = cpu_to_be16(MLX4_ROCEE_ETHERTYPE);
++		if (!is_vlan)
++			sqp->ud_header.eth.type = cpu_to_be16(MLX4_IBOE_ETHERTYPE);
++		else {
++			u16 pcp;
++
++			sqp->ud_header.vlan.type = cpu_to_be16(MLX4_IBOE_ETHERTYPE);
++			pcp = be32_to_cpu(ah->av.ib.sl_tclass_flowlabel) >> 23 & 0xe0;
++			sqp->ud_header.vlan.tag = vlan | pcp;
++		}
+ 	} else {
+ 		sqp->ud_header.lrh.virtual_lane    = !sqp->qp.ibqp.qp_num ? 15 : 0;
+ 		if (sqp->ud_header.lrh.destination_lid == IB_LID_PERMISSIVE)
+@@ -1679,13 +1708,14 @@
+ }
+ 
+ static void set_datagram_seg(struct mlx4_wqe_datagram_seg *dseg,
+-			     struct ib_send_wr *wr)
++			     struct ib_send_wr *wr, __be16 *vlan)
+ {
+ 	memcpy(dseg->av, &to_mah(wr->wr.ud.ah)->av, sizeof (struct mlx4_av));
+ 	dseg->dqpn = cpu_to_be32(wr->wr.ud.remote_qpn);
+ 	dseg->qkey = cpu_to_be32(wr->wr.ud.remote_qkey);
+ 	dseg->vlan = to_mah(wr->wr.ud.ah)->av.eth.vlan;
+ 	memcpy(dseg->mac, to_mah(wr->wr.ud.ah)->av.eth.mac, 6);
++	*vlan = dseg->vlan;
+ }
+ 
+ static void set_mlx_icrc_seg(void *dseg)
+@@ -1787,6 +1817,7 @@
+ 	__be32 uninitialized_var(lso_hdr_sz);
+ 	int i;
+ 	int blh = 0;
++	__be16 vlan = 0;
+ 
+ 	spin_lock_irqsave(&qp->sq.lock, flags);
+ 
+@@ -1896,7 +1927,7 @@
+ 			break;
+ 
+ 		case IB_QPT_UD:
+-			set_datagram_seg(wqe, wr);
++			set_datagram_seg(wqe, wr, &vlan);
+ 			wqe  += sizeof (struct mlx4_wqe_datagram_seg);
+ 			size += sizeof (struct mlx4_wqe_datagram_seg) / 16;
+ 
+@@ -1986,6 +2017,11 @@
+ 			(ind & qp->sq.wqe_cnt ? cpu_to_be32(1 << 31) : 0) |
+ 			(blh ? cpu_to_be32(1 << 6) : 0);
+ 
++		if (vlan) {
++			ctrl->ins_vlan = 1 << 6;
++			ctrl->vlan_tag = vlan;
++		}
++
+ 		stamp = ind + qp->sq_spare_wqes;
+ 		ind += DIV_ROUND_UP(size * 16, 1U << qp->sq.wqe_shift);
+ 
+Index: ofed_kernel-fixes/drivers/net/mlx4/en_netdev.c
+===================================================================
+--- ofed_kernel-fixes.orig/drivers/net/mlx4/en_netdev.c	2010-07-12 12:24:35.000000000 +0300
++++ ofed_kernel-fixes/drivers/net/mlx4/en_netdev.c	2010-07-12 12:31:12.000000000 +0300
+@@ -68,6 +68,7 @@
+ 	struct mlx4_en_priv *priv = netdev_priv(dev);
+ 	struct mlx4_en_dev *mdev = priv->mdev;
+ 	int err;
++	int idx;
+ 
+ 	if (!priv->vlgrp)
+ 		return;
+@@ -82,7 +83,10 @@
+ 		if (err)
+ 			mlx4_err(mdev, "Failed configuring VLAN filter\n");
+ 	}
++	if (mlx4_register_vlan(mdev->dev, priv->port, vid, &idx))
++		en_err(priv, "failed adding vlan %d\n", vid);
+ 	mutex_unlock(&mdev->state_lock);
++
+ }
+ 
+ static void mlx4_en_vlan_rx_kill_vid(struct net_device *dev, unsigned short vid)
+@@ -90,6 +94,7 @@
+ 	struct mlx4_en_priv *priv = netdev_priv(dev);
+ 	struct mlx4_en_dev *mdev = priv->mdev;
+ 	int err;
++	int idx;
+ 
+ 	if (!priv->vlgrp)
+ 		return;
+@@ -101,6 +106,11 @@
+ 
+ 	/* Remove VID from port VLAN filter */
+ 	mutex_lock(&mdev->state_lock);
++	if (!mlx4_find_cached_vlan(mdev->dev, priv->port, vid, &idx))
++		mlx4_unregister_vlan(mdev->dev, priv->port, idx);
++	else
++		en_err(priv, "could not find vid %d in cache\n", vid);
++
+ 	if (mdev->device_up && priv->port_up) {
+ 		err = mlx4_SET_VLAN_FLTR(mdev->dev, priv->port, priv->vlgrp);
+ 		if (err)
+Index: ofed_kernel-fixes/drivers/net/mlx4/mlx4_en.h
+===================================================================
+--- ofed_kernel-fixes.orig/drivers/net/mlx4/mlx4_en.h	2010-07-12 12:24:35.000000000 +0300
++++ ofed_kernel-fixes/drivers/net/mlx4/mlx4_en.h	2010-07-12 12:31:06.000000000 +0300
+@@ -487,6 +487,7 @@
+ 	struct mlx4_en_port_stats port_stats;
+ 	struct dev_mc_list *mc_list;
+ 	struct mlx4_en_stat_out_mbox hw_stats;
++	int vids[128];
+ };
+ 
+ 
+Index: ofed_kernel-fixes/drivers/net/mlx4/port.c
+===================================================================
+--- ofed_kernel-fixes.orig/drivers/net/mlx4/port.c	2010-07-12 12:26:38.000000000 +0300
++++ ofed_kernel-fixes/drivers/net/mlx4/port.c	2010-07-12 12:26:43.000000000 +0300
+@@ -186,6 +186,25 @@
+ 	return err;
+ }
+ 
++int mlx4_find_cached_vlan(struct mlx4_dev *dev, u8 port, u16 vid, int *idx)
++{
++	struct mlx4_vlan_table *table = &mlx4_priv(dev)->port[port].vlan_table;
++	int i;
++
++	for (i = 0; i < MLX4_MAX_VLAN_NUM; ++i) {
++		if (table->refs[i] &&
++		    (vid == (MLX4_VLAN_MASK &
++			      be32_to_cpu(table->entries[i])))) {
++			/* Vlan already registered, increase refernce count */
++			*idx = i;
++			return 0;
++		}
++	}
++
++	return -ENOENT;
++}
++EXPORT_SYMBOL_GPL(mlx4_find_cached_vlan);
++
+ int mlx4_register_vlan(struct mlx4_dev *dev, u8 port, u16 vlan, int *index)
+ {
+ 	struct mlx4_vlan_table *table = &mlx4_priv(dev)->port[port].vlan_table;
+Index: ofed_kernel-fixes/include/linux/mlx4/device.h
+===================================================================
+--- ofed_kernel-fixes.orig/include/linux/mlx4/device.h	2010-07-12 12:26:43.000000000 +0300
++++ ofed_kernel-fixes/include/linux/mlx4/device.h	2010-07-12 12:31:11.000000000 +0300
+@@ -565,6 +565,7 @@
+ int mlx4_register_mac(struct mlx4_dev *dev, u8 port, u64 mac, int *index);
+ void mlx4_unregister_mac(struct mlx4_dev *dev, u8 port, int index);
+ 
++int mlx4_find_cached_vlan(struct mlx4_dev *dev, u8 port, u16 vid, int *idx);
+ int mlx4_register_vlan(struct mlx4_dev *dev, u8 port, u16 vlan, int *index);
+ void mlx4_unregister_vlan(struct mlx4_dev *dev, u8 port, int index);
+ 
+Index: ofed_kernel-fixes/include/linux/mlx4/qp.h
+===================================================================
+--- ofed_kernel-fixes.orig/include/linux/mlx4/qp.h	2010-07-12 12:26:42.000000000 +0300
++++ ofed_kernel-fixes/include/linux/mlx4/qp.h	2010-07-12 12:31:10.000000000 +0300
+@@ -111,7 +111,7 @@
+ 	__be32			tclass_flowlabel;
+ 	u8			rgid[16];
+ 	u8			sched_queue;
+-	u8			snooper_flags;
++	u8			vlan_index;
+ 	u8			reserved3[2];
+ 	u8			counter_index;
+ 	u8			reserved4;

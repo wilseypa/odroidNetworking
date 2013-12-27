@@ -1,0 +1,20 @@
+Backport patches for rdma cm patches
+
+Back port patch for ipv6_route_output() for kernels 2.6.25 and earlier.
+
+Signed-of-by: David Wilder <dwilder@us.ibm.com>
+---
+diff -Naurp ofa_kernel.orig/drivers/infiniband/core/addr.c ofa_kernel/drivers/infiniband/core/addr.c
+--- ofa_kernel.orig/drivers/infiniband/core/addr.c	2009-12-08 11:11:04.000000000 -0600
++++ ofa_kernel/drivers/infiniband/core/addr.c	2009-12-08 11:13:44.000000000 -0600
+@@ -244,7 +244,7 @@ static int addr6_resolve(struct sockaddr
+ 	ipv6_addr_copy(&fl.fl6_src, &src_in->sin6_addr);
+ 	fl.oif = addr->bound_dev_if;
+ 
+-	dst = ip6_route_output(&init_net, NULL, &fl);
++	dst = ip6_route_output(NULL, &fl);
+ 	if ((ret = dst->error))
+ 		goto put;
+ 
+
+

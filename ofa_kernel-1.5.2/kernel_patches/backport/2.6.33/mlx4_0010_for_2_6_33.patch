@@ -1,0 +1,12 @@
+Index: ofed_kernel/drivers/net/mlx4/mlx4.h
+===================================================================
+--- ofed_kernel.orig/drivers/net/mlx4/mlx4.h	2010-08-09 17:36:40.000000000 +0300
++++ ofed_kernel/drivers/net/mlx4/mlx4.h	2010-08-09 20:00:07.000000000 +0300
+@@ -41,6 +41,7 @@
+ #include <linux/radix-tree.h>
+ #include <linux/timer.h>
+ #include <linux/workqueue.h>
++#include <linux/semaphore.h>
+ 
+ #include <linux/mlx4/device.h>
+ #include <linux/mlx4/driver.h>

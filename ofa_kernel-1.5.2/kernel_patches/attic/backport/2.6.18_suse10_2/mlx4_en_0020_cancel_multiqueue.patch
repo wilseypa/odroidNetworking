@@ -1,0 +1,88 @@
+From b0f37433227a9c88f289f7ff69d7b7d11b5c0ba4 Mon Sep 17 00:00:00 2001
+From: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+Date: Sun, 31 May 2009 13:00:22 +0300
+Subject: [PATCH 2/8] mlx4_en: cancel multiqueue
+
+Signed-off-by: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+---
+ drivers/net/mlx4/en_netdev.c |    3 +--
+ drivers/net/mlx4/en_tx.c     |    8 ++++----
+ drivers/net/mlx4/mlx4_en.h   |    1 -
+ 3 files changed, 5 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/net/mlx4/en_netdev.c b/drivers/net/mlx4/en_netdev.c
+index 4ad5f3c..34e082c 100644
+--- a/drivers/net/mlx4/en_netdev.c
++++ b/drivers/net/mlx4/en_netdev.c
+@@ -942,7 +942,7 @@ int mlx4_en_init_netdev(struct mlx4_en_dev *mdev, int port,
+ 	int i;
+ 	int err;
+ 
+-	dev = alloc_etherdev_mq(sizeof(struct mlx4_en_priv), prof->tx_ring_num);
++	dev = alloc_etherdev(sizeof(struct mlx4_en_priv));
+ 	if (dev == NULL) {
+ 		mlx4_err(mdev, "Net device allocation failed\n");
+ 		return -ENOMEM;
+@@ -1011,7 +1011,6 @@ int mlx4_en_init_netdev(struct mlx4_en_dev *mdev, int port,
+ 	dev->open		= mlx4_en_open;
+ 	dev->stop		= mlx4_en_close;
+ 	dev->hard_start_xmit	= mlx4_en_xmit,
+-	dev->select_queue	= mlx4_en_select_queue,
+ 	dev->get_stats		= mlx4_en_get_stats,
+ 	dev->set_multicast_list	= mlx4_en_set_multicast,
+ 	dev->set_mac_address	= mlx4_en_set_mac,
+diff --git a/drivers/net/mlx4/en_tx.c b/drivers/net/mlx4/en_tx.c
+index 2a86d08..cba7a02 100644
+--- a/drivers/net/mlx4/en_tx.c
++++ b/drivers/net/mlx4/en_tx.c
+@@ -386,7 +386,7 @@ static void mlx4_en_process_tx_cq(struct net_device *dev, struct mlx4_en_cq *cq)
+ 		if ((u32) (ring->prod - ring->cons) <=
+ 		     ring->size - HEADROOM - MAX_DESC_TXBBS) {
+ 			ring->blocked = 0;
+-			netif_tx_wake_queue(netdev_get_tx_queue(dev, cq->ring));
++			netif_wake_queue(dev);
+ 			priv->port_stats.wake_queue++;
+ 		}
+ 	}
+@@ -605,7 +605,7 @@ static void build_inline_wqe(struct mlx4_en_tx_desc *tx_desc, struct sk_buff *sk
+ 	tx_desc->ctrl.fence_size = (real_size / 16) & 0x3f;
+ }
+ 
+-u16 mlx4_en_select_queue(struct net_device *dev, struct sk_buff *skb)
++static int mlx4_en_select_queue(struct net_device *dev, struct sk_buff *skb)
+ {
+ 	struct mlx4_en_priv *priv = netdev_priv(dev);
+ 	u16 vlan_tag = 0;
+@@ -697,7 +697,7 @@ int mlx4_en_xmit(struct sk_buff *skb, struct net_device *dev)
+ 		return NETDEV_TX_OK;
+ 	}
+ 
+-	tx_ind = skb->queue_mapping;
++	tx_ind = mlx4_en_select_queue(dev, skb);
+ 	ring = &priv->tx_ring[tx_ind];
+ 	if (priv->vlgrp && vlan_tx_tag_present(skb))
+ 		vlan_tag = vlan_tx_tag_get(skb);
+@@ -706,7 +706,7 @@ int mlx4_en_xmit(struct sk_buff *skb, struct net_device *dev)
+ 	if (unlikely(((int)(ring->prod - ring->cons)) >
+ 		     ring->size - HEADROOM - MAX_DESC_TXBBS)) {
+ 		/* every full Tx ring stops queue */
+-		netif_tx_stop_queue(netdev_get_tx_queue(dev, tx_ind));
++		netif_stop_queue(dev);
+ 		ring->blocked = 1;
+ 		priv->port_stats.queue_stopped++;
+ 
+diff --git a/drivers/net/mlx4/mlx4_en.h b/drivers/net/mlx4/mlx4_en.h
+index b45774c..f35f318 100644
+--- a/drivers/net/mlx4/mlx4_en.h
++++ b/drivers/net/mlx4/mlx4_en.h
+@@ -556,7 +556,6 @@ int mlx4_en_arm_cq(struct mlx4_en_priv *priv, struct mlx4_en_cq *cq);
+ 
+ void mlx4_en_poll_tx_cq(unsigned long data);
+ void mlx4_en_tx_irq(struct mlx4_cq *mcq);
+-u16 mlx4_en_select_queue(struct net_device *dev, struct sk_buff *skb);
+ int mlx4_en_xmit(struct sk_buff *skb, struct net_device *dev);
+ 
+ int mlx4_en_create_tx_ring(struct mlx4_en_priv *priv, struct mlx4_en_tx_ring *ring,
+-- 
+1.6.1.3
+

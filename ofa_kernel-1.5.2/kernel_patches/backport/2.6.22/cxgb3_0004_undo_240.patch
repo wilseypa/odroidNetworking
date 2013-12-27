@@ -1,0 +1,86 @@
+commit 708fa8bd1abfe3bcf539a074bbe6107578310ee5
+Author: root <root@almus.(none)>
+Date:   Sun Jun 14 08:54:00 2009 -0700
+
+    cxgb3_0004_undo_240.patch
+
+diff --git a/drivers/net/cxgb3/adapter.h b/drivers/net/cxgb3/adapter.h
+index 900e42e..11ef2c7 100644
+--- a/drivers/net/cxgb3/adapter.h
++++ b/drivers/net/cxgb3/adapter.h
+@@ -78,7 +78,6 @@ enum {				/* adapter flags */
+ 	USING_MSIX = (1 << 2),
+ 	QUEUES_BOUND = (1 << 3),
+ 	TP_PARITY_INIT = (1 << 4),
+-	NAPI_INIT = (1 << 5),
+ };
+ 
+ struct fl_pg_chunk {
+diff --git a/drivers/net/cxgb3/cxgb3_main.c b/drivers/net/cxgb3/cxgb3_main.c
+index 73ab94b..3d196c0 100644
+--- a/drivers/net/cxgb3/cxgb3_main.c
++++ b/drivers/net/cxgb3/cxgb3_main.c
+@@ -521,13 +521,6 @@ static void init_napi(struct adapter *adap)
+ 			netif_napi_add(qs->netdev, &qs->napi, qs->napi.poll,
+ 				       64);
+ 	}
+-
+-	/*
+-	 * netif_napi_add() can be called only once per napi_struct because it
+-	 * adds each new napi_struct to a list.  Be careful not to call it a
+-	 * second time, e.g., during EEH recovery, by making a note of it.
+-	 */
+-	adap->flags |= NAPI_INIT;
+ }
+ 
+ /*
+@@ -1042,8 +1035,7 @@ static int cxgb_up(struct adapter *adap)
+ 			goto out;
+ 
+ 		setup_rss(adap);
+-		if (!(adap->flags & NAPI_INIT))
+-			init_napi(adap);
++		init_napi(adap);
+ 
+ 		t3_start_sge_timers(adap);
+ 		adap->flags |= FULL_INIT_DONE;
+@@ -1143,7 +1135,7 @@ static int offload_open(struct net_device *dev)
+ 		return 0;
+ 
+ 	if (!adap_up && (err = cxgb_up(adapter)) < 0)
+-		goto out;
++		return err;
+ 
+ 	t3_tp_set_offload_mode(adapter, 1);
+ 	tdev->lldev = adapter->port[0];
+@@ -1205,8 +1197,10 @@ static int cxgb_open(struct net_device *dev)
+ 	int other_ports = adapter->open_device_map & PORT_MASK;
+ 	int err;
+ 
+-	if (!adapter->open_device_map && (err = cxgb_up(adapter)) < 0)
++	if (!adapter->open_device_map && (err = cxgb_up(adapter)) < 0) {
++		quiesce_rx(adapter);
+ 		return err;
++	}
+ 
+ 	set_bit(pi->port_id, &adapter->open_device_map);
+ 	if (is_offload(adapter) && !ofld_disable) {
+@@ -2747,8 +2741,7 @@ static int t3_reenable_adapter(struct adapter *adapter)
+ 	}
+ 	pci_set_master(adapter->pdev);
+ 
+-	if (t3_prep_adapter(adapter, adapter->params.info, 1))
+-		goto err;
++	t3_prep_adapter(adapter, adapter->params.info, 1);
+ 
+ 	return 0;
+ err:
+@@ -2837,7 +2830,7 @@ static pci_ers_result_t t3_io_error_detected(struct pci_dev *pdev,
+ 
+ 	ret = t3_adapter_error(adapter, 0);
+ 
+-	/* Request a slot reset. */
++	/* Request a slot slot reset. */
+ 	return PCI_ERS_RESULT_NEED_RESET;
+ }
+ 

@@ -1,0 +1,186 @@
+Revert the following patch:
+
+commit 43cb76d91ee85f579a69d42bc8efc08bac560278
+Author: Greg Kroah-Hartman <gregkh@suse.de>
+Date:   Tue Apr 9 12:14:34 2002 -0700
+
+    Network: convert network devices to use struct device instead of class_device
+
+    This lets the network core have the ability to handle suspend/resume
+    issues, if it wants to.
+
+    Thanks to Frederik Deweerdt <frederik.deweerdt@gmail.com> for the arm
+    driver fixes.
+
+    Signed-off-by: Greg Kroah-Hartman <gregkh@suse.de>
+
+---
+ drivers/infiniband/ulp/ipoib/ipoib_cm.c   |   13 ++++++-------
+ drivers/infiniband/ulp/ipoib/ipoib_main.c |   26 ++++++++++++++------------
+ drivers/infiniband/ulp/ipoib/ipoib_vlan.c |   10 ++++++----
+ 3 files changed, 26 insertions(+), 23 deletions(-)
+
+Index: ofed_kernel/drivers/infiniband/ulp/ipoib/ipoib_cm.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/ipoib/ipoib_cm.c
++++ ofed_kernel/drivers/infiniband/ulp/ipoib/ipoib_cm.c
+@@ -47,6 +47,8 @@ MODULE_PARM_DESC(max_nonsrq_conn_qp,
+ 		 "Max number of connected-mode QPs per interface "
+ 		 "(applied only if shared receive queue is not available)");
+ 
++#define to_net_dev(class) container_of(class, struct net_device, class_dev)
++
+ #ifdef CONFIG_INFINIBAND_IPOIB_DEBUG_DATA
+ static int data_debug_level;
+ 
+@@ -1433,9 +1435,7 @@ static void ipoib_cm_stale_task(struct w
+ 	spin_unlock_irq(&priv->lock);
+ }
+ 
+-
+-static ssize_t show_mode(struct device *d, struct device_attribute *attr,
+-			 char *buf)
++static ssize_t show_mode(struct class_device *d, char *buf)
+ {
+ 	struct ipoib_dev_priv *priv = netdev_priv(to_net_dev(d));
+ 
+@@ -1445,8 +1445,7 @@ static ssize_t show_mode(struct device *
+ 		return sprintf(buf, "datagram\n");
+ }
+ 
+-static ssize_t set_mode(struct device *d, struct device_attribute *attr,
+-			const char *buf, size_t count)
++static ssize_t set_mode(struct class_device *d, const char *buf, size_t count)
+ {
+ 	struct net_device *dev = to_net_dev(d);
+ 	struct ipoib_dev_priv *priv = netdev_priv(dev);
+@@ -1490,11 +1489,11 @@ static ssize_t set_mode(struct device *d
+ 	return -EINVAL;
+ }
+ 
+-static DEVICE_ATTR(mode, S_IWUSR | S_IRUGO, show_mode, set_mode);
++static CLASS_DEVICE_ATTR(mode, S_IWUSR | S_IRUGO, show_mode, set_mode);
+ 
+ int ipoib_cm_add_mode_attr(struct net_device *dev)
+ {
+-	return device_create_file(&dev->dev, &dev_attr_mode);
++	return class_device_create_file(&dev->class_dev, &class_device_attr_mode);
+ }
+ 
+ static void ipoib_cm_create_srq(struct net_device *dev, int max_sge)
+Index: ofed_kernel/drivers/infiniband/ulp/ipoib/ipoib_main.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/ipoib/ipoib_main.c
++++ ofed_kernel/drivers/infiniband/ulp/ipoib/ipoib_main.c
+@@ -100,6 +100,8 @@ static struct ib_client ipoib_client = {
+ 	.remove = ipoib_remove_one
+ };
+ 
++#define to_net_dev(class) container_of(class, struct net_device, class_dev)
++
+ int ipoib_open(struct net_device *dev)
+ {
+ 	struct ipoib_dev_priv *priv = netdev_priv(dev);
+@@ -1123,14 +1125,13 @@ struct ipoib_dev_priv *ipoib_intf_alloc(
+ 	return netdev_priv(dev);
+ }
+ 
+-static ssize_t show_pkey(struct device *dev,
+-			 struct device_attribute *attr, char *buf)
++static ssize_t show_pkey(struct class_device *dev, char *buf)
+ {
+ 	struct ipoib_dev_priv *priv = netdev_priv(to_net_dev(dev));
+ 
+ 	return sprintf(buf, "0x%04x\n", priv->pkey);
+ }
+-static DEVICE_ATTR(pkey, S_IRUGO, show_pkey, NULL);
++static CLASS_DEVICE_ATTR(pkey, S_IRUGO, show_pkey, NULL);
+ 
+ static ssize_t show_umcast(struct device *dev,
+ 			   struct device_attribute *attr, char *buf)
+@@ -1163,8 +1164,7 @@ int ipoib_add_umcast_attr(struct net_dev
+ 	return device_create_file(&dev->dev, &dev_attr_umcast);
+ }
+ 
+-static ssize_t create_child(struct device *dev,
+-			    struct device_attribute *attr,
++static ssize_t create_child(struct class_device *dev,
+ 			    const char *buf, size_t count)
+ {
+ 	int pkey;
+@@ -1186,10 +1186,9 @@ static ssize_t create_child(struct devic
+ 
+ 	return ret ? ret : count;
+ }
+-static DEVICE_ATTR(create_child, S_IWUGO, NULL, create_child);
++static CLASS_DEVICE_ATTR(create_child, S_IWUGO, NULL, create_child);
+ 
+-static ssize_t delete_child(struct device *dev,
+-			    struct device_attribute *attr,
++static ssize_t delete_child(struct class_device *dev,
+ 			    const char *buf, size_t count)
+ {
+ 	int pkey;
+@@ -1206,11 +1205,12 @@ static ssize_t delete_child(struct devic
+ 	return ret ? ret : count;
+ 
+ }
+-static DEVICE_ATTR(delete_child, S_IWUGO, NULL, delete_child);
++static CLASS_DEVICE_ATTR(delete_child, S_IWUGO, NULL, delete_child);
+ 
+ int ipoib_add_pkey_attr(struct net_device *dev)
+ {
+-	return device_create_file(&dev->dev, &dev_attr_pkey);
++	return class_device_create_file(&dev->class_dev,
++					&class_device_attr_pkey);
+ }
+ 
+ static struct net_device *ipoib_add_port(const char *format,
+@@ -1324,9 +1324,11 @@ static struct net_device *ipoib_add_port
+ 		goto sysfs_failed;
+ 	if (ipoib_add_umcast_attr(priv->dev))
+ 		goto sysfs_failed;
+-	if (device_create_file(&priv->dev->dev, &dev_attr_create_child))
++	if (class_device_create_file(&priv->dev->class_dev,
++				     &class_device_attr_create_child))
+ 		goto sysfs_failed;
+-	if (device_create_file(&priv->dev->dev, &dev_attr_delete_child))
++	if (class_device_create_file(&priv->dev->class_dev,
++				     &class_device_attr_delete_child))
+ 		goto sysfs_failed;
+ 
+ 	return priv->dev;
+Index: ofed_kernel/drivers/infiniband/ulp/ipoib/ipoib_vlan.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/ipoib/ipoib_vlan.c
++++ ofed_kernel/drivers/infiniband/ulp/ipoib/ipoib_vlan.c
+@@ -40,15 +40,16 @@
+ 
+ #include "ipoib.h"
+ 
+-static ssize_t show_parent(struct device *d, struct device_attribute *attr,
+-			   char *buf)
++#define to_net_dev(class) container_of(class, struct net_device, class_dev)
++
++static ssize_t show_parent(struct class_device *d, char *buf)
+ {
+ 	struct net_device *dev = to_net_dev(d);
+ 	struct ipoib_dev_priv *priv = netdev_priv(dev);
+ 
+ 	return sprintf(buf, "%s\n", priv->parent->name);
+ }
+-static DEVICE_ATTR(parent, S_IRUGO, show_parent, NULL);
++static CLASS_DEVICE_ATTR(parent, S_IRUGO, show_parent, NULL);
+ 
+ int ipoib_vlan_add(struct net_device *pdev, unsigned short pkey)
+ {
+@@ -124,7 +125,8 @@ int ipoib_vlan_add(struct net_device *pd
+ 	if (ipoib_add_umcast_attr(priv->dev))
+ 		goto sysfs_failed;
+ 
+-	if (device_create_file(&priv->dev->dev, &dev_attr_parent))
++	if (class_device_create_file(&priv->dev->class_dev,
++				     &class_device_attr_parent))
+ 		goto sysfs_failed;
+ 
+ 	list_add_tail(&priv->list, &ppriv->child_intfs);

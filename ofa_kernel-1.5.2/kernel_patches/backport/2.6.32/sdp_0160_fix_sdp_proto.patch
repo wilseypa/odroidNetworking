@@ -1,0 +1,13 @@
+Index: ofed_kernel/drivers/infiniband/ulp/sdp/sdp_main.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/ulp/sdp/sdp_main.c	2010-07-24 04:33:07.000000000 -0700
++++ ofed_kernel/drivers/infiniband/ulp/sdp/sdp_main.c	2010-07-24 04:33:38.000000000 -0700
+@@ -1171,7 +1171,7 @@
+ 
+ /* SOL_SOCKET level options are handled by sock_setsockopt */
+ static int sdp_setsockopt(struct sock *sk, int level, int optname,
+-			  char __user *optval, int optlen)
++			  char __user *optval, unsigned optlen)
+ {
+ 	struct sdp_sock *ssk = sdp_sk(sk);
+ 	int val;

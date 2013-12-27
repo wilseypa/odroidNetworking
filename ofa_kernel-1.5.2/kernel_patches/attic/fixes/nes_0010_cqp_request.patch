@@ -1,0 +1,137 @@
+diff --git a/drivers/infiniband/hw/nes/nes_cm.c b/drivers/infiniband/hw/nes/nes_cm.c
+index 2caf9da..2a1d6c7 100644
+--- a/drivers/infiniband/hw/nes/nes_cm.c
++++ b/drivers/infiniband/hw/nes/nes_cm.c
+@@ -519,7 +519,7 @@ static void nes_cm_timer_tick(unsigned long pass)
+ 		do {
+ 			send_entry = cm_node->send_entry;
+ 			if (!send_entry)
+-				continue;
++				break;
+ 			if (time_after(send_entry->timetosend, jiffies)) {
+ 				if (cm_node->state != NES_CM_STATE_TSA) {
+ 					if ((nexttimeout >
+@@ -528,18 +528,18 @@ static void nes_cm_timer_tick(unsigned long pass)
+ 						nexttimeout =
+ 							send_entry->timetosend;
+ 						settimer = 1;
+-						continue;
++						break;
+ 					}
+ 				} else {
+ 					free_retrans_entry(cm_node);
+-					continue;
++					break;
+ 				}
+ 			}
+ 
+ 			if ((cm_node->state == NES_CM_STATE_TSA) ||
+ 				(cm_node->state == NES_CM_STATE_CLOSED)) {
+ 				free_retrans_entry(cm_node);
+-				continue;
++				break;
+ 			}
+ 
+ 			if (!send_entry->retranscount ||
+@@ -557,7 +557,7 @@ static void nes_cm_timer_tick(unsigned long pass)
+ 						NES_CM_EVENT_ABORTED);
+ 				spin_lock_irqsave(&cm_node->retrans_list_lock,
+ 					flags);
+-				continue;
++				break;
+ 			}
+ 			atomic_inc(&send_entry->skb->users);
+ 			cm_packets_retrans++;
+@@ -583,7 +583,7 @@ static void nes_cm_timer_tick(unsigned long pass)
+ 				send_entry->retrycount--;
+ 				nexttimeout = jiffies + NES_SHORT_TIME;
+ 				settimer = 1;
+-				continue;
++				break;
+ 			} else {
+ 				cm_packets_sent++;
+ 			}
+diff --git a/drivers/infiniband/hw/nes/nes_verbs.c b/drivers/infiniband/hw/nes/nes_verbs.c
+index d36c9a0..4fdb724 100644
+--- a/drivers/infiniband/hw/nes/nes_verbs.c
++++ b/drivers/infiniband/hw/nes/nes_verbs.c
+@@ -1696,13 +1696,8 @@ static struct ib_cq *nes_create_cq(struct ib_device *ibdev, int entries,
+ 			/* use 4k pbl */
+ 			nes_debug(NES_DBG_CQ, "pbl_entries=%u, use a 4k PBL\n", pbl_entries);
+ 			if (nesadapter->free_4kpbl == 0) {
+-				if (cqp_request->dynamic) {
+-					spin_unlock_irqrestore(&nesadapter->pbl_lock, flags);
+-					kfree(cqp_request);
+-				} else {
+-					list_add_tail(&cqp_request->list, &nesdev->cqp_avail_reqs);
+-					spin_unlock_irqrestore(&nesadapter->pbl_lock, flags);
+-				}
++				spin_unlock_irqrestore(&nesadapter->pbl_lock, flags);
++				nes_free_cqp_request(nesdev, cqp_request);
+ 				if (!context)
+ 					pci_free_consistent(nesdev->pcidev, nescq->cq_mem_size, mem,
+ 							nescq->hw_cq.cq_pbase);
+@@ -1718,13 +1713,8 @@ static struct ib_cq *nes_create_cq(struct ib_device *ibdev, int entries,
+ 			/* use 256 byte pbl */
+ 			nes_debug(NES_DBG_CQ, "pbl_entries=%u, use a 256 byte PBL\n", pbl_entries);
+ 			if (nesadapter->free_256pbl == 0) {
+-				if (cqp_request->dynamic) {
+-					spin_unlock_irqrestore(&nesadapter->pbl_lock, flags);
+-					kfree(cqp_request);
+-				} else {
+-					list_add_tail(&cqp_request->list, &nesdev->cqp_avail_reqs);
+-					spin_unlock_irqrestore(&nesadapter->pbl_lock, flags);
+-				}
++				spin_unlock_irqrestore(&nesadapter->pbl_lock, flags);
++				nes_free_cqp_request(nesdev, cqp_request);
+ 				if (!context)
+ 					pci_free_consistent(nesdev->pcidev, nescq->cq_mem_size, mem,
+ 							nescq->hw_cq.cq_pbase);
+@@ -1929,13 +1919,8 @@ static int nes_reg_mr(struct nes_device *nesdev, struct nes_pd *nespd,
+ 			/* Two level PBL */
+ 			if ((pbl_count+1) > nesadapter->free_4kpbl) {
+ 				nes_debug(NES_DBG_MR, "Out of 4KB Pbls for two level request.\n");
+-				if (cqp_request->dynamic) {
+-					spin_unlock_irqrestore(&nesadapter->pbl_lock, flags);
+-					kfree(cqp_request);
+-				} else {
+-					list_add_tail(&cqp_request->list, &nesdev->cqp_avail_reqs);
+-					spin_unlock_irqrestore(&nesadapter->pbl_lock, flags);
+-				}
++				spin_unlock_irqrestore(&nesadapter->pbl_lock, flags);
++				nes_free_cqp_request(nesdev, cqp_request);
+ 				return -ENOMEM;
+ 			} else {
+ 				nesadapter->free_4kpbl -= pbl_count+1;
+@@ -1943,13 +1928,8 @@ static int nes_reg_mr(struct nes_device *nesdev, struct nes_pd *nespd,
+ 		} else if (residual_page_count > 32) {
+ 			if (pbl_count > nesadapter->free_4kpbl) {
+ 				nes_debug(NES_DBG_MR, "Out of 4KB Pbls.\n");
+-				if (cqp_request->dynamic) {
+-					spin_unlock_irqrestore(&nesadapter->pbl_lock, flags);
+-					kfree(cqp_request);
+-				} else {
+-					list_add_tail(&cqp_request->list, &nesdev->cqp_avail_reqs);
+-					spin_unlock_irqrestore(&nesadapter->pbl_lock, flags);
+-				}
++				spin_unlock_irqrestore(&nesadapter->pbl_lock, flags);
++				nes_free_cqp_request(nesdev, cqp_request);
+ 				return -ENOMEM;
+ 			} else {
+ 				nesadapter->free_4kpbl -= pbl_count;
+@@ -1957,13 +1937,8 @@ static int nes_reg_mr(struct nes_device *nesdev, struct nes_pd *nespd,
+ 		} else {
+ 			if (pbl_count > nesadapter->free_256pbl) {
+ 				nes_debug(NES_DBG_MR, "Out of 256B Pbls.\n");
+-				if (cqp_request->dynamic) {
+-					spin_unlock_irqrestore(&nesadapter->pbl_lock, flags);
+-					kfree(cqp_request);
+-				} else {
+-					list_add_tail(&cqp_request->list, &nesdev->cqp_avail_reqs);
+-					spin_unlock_irqrestore(&nesadapter->pbl_lock, flags);
+-				}
++				spin_unlock_irqrestore(&nesadapter->pbl_lock, flags);
++				nes_free_cqp_request(nesdev, cqp_request);
+ 				return -ENOMEM;
+ 			} else {
+ 				nesadapter->free_256pbl -= pbl_count;

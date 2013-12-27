@@ -1,0 +1,24 @@
+Remove const qualifier from struct file_operations prior to 2.6.17
+
+This eliminates the compiler warning:
+ucm.c:1254: warning: passing arg 2 of `cdev_init' discards qualifiers from pointer target type
+
+Signed-off-by: John Gregor <john.gregor@qlogic.com>
+
+---
+ drivers/infiniband/core/ucm.c |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+Index: ofed_kernel/drivers/infiniband/core/ucm.c
+===================================================================
+--- ofed_kernel.orig/drivers/infiniband/core/ucm.c
++++ ofed_kernel/drivers/infiniband/core/ucm.c
+@@ -1218,7 +1218,7 @@ static void ucm_release_class_dev(struct
+ 	kfree(dev);
+ }
+ 
+-static const struct file_operations ucm_fops = {
++static struct file_operations ucm_fops = {
+ 	.owner 	 = THIS_MODULE,
+ 	.open 	 = ib_ucm_open,
+ 	.release = ib_ucm_close,

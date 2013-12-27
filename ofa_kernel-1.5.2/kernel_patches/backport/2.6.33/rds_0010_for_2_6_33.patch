@@ -1,0 +1,231 @@
+Index: ofed_kernel/net/rds/sysctl.c
+===================================================================
+--- ofed_kernel.orig/net/rds/sysctl.c	2010-08-09 14:24:43.000000000 +0300
++++ ofed_kernel/net/rds/sysctl.c	2010-08-09 20:06:21.000000000 +0300
+@@ -58,7 +58,6 @@
+ 
+ static ctl_table rds_sysctl_rds_table[] = {
+ 	{
+-		.ctl_name       = CTL_UNNUMBERED,
+ 		.procname       = "reconnect_min_delay_ms",
+ 		.data		= &rds_sysctl_reconnect_min_jiffies,
+ 		.maxlen         = sizeof(unsigned long),
+@@ -68,7 +67,6 @@
+ 		.extra2		= &rds_sysctl_reconnect_max_jiffies,
+ 	},
+ 	{
+-		.ctl_name       = CTL_UNNUMBERED,
+ 		.procname       = "reconnect_max_delay_ms",
+ 		.data		= &rds_sysctl_reconnect_max_jiffies,
+ 		.maxlen         = sizeof(unsigned long),
+@@ -78,7 +76,6 @@
+ 		.extra2		= &rds_sysctl_reconnect_max,
+ 	},
+ 	{
+-		.ctl_name       = CTL_UNNUMBERED,
+ 		.procname       = "pf_rds",
+ 		.data		= &rds_sysctl_pf_rds,
+ 		.maxlen         = sizeof(int),
+@@ -86,7 +83,6 @@
+ 		.proc_handler   = &proc_dointvec,
+ 	},
+ 	{
+-		.ctl_name       = CTL_UNNUMBERED,
+ 		.procname       = "sol_rds",
+ 		.data		= &rds_sysctl_sol_rds,
+ 		.maxlen         = sizeof(int),
+@@ -94,7 +90,6 @@
+ 		.proc_handler   = &proc_dointvec,
+ 	},
+ 	{
+-		.ctl_name	= CTL_UNNUMBERED,
+ 		.procname	= "max_unacked_packets",
+ 		.data		= &rds_sysctl_max_unacked_packets,
+ 		.maxlen         = sizeof(unsigned long),
+@@ -102,7 +97,6 @@
+ 		.proc_handler   = &proc_dointvec,
+ 	},
+ 	{
+-		.ctl_name	= CTL_UNNUMBERED,
+ 		.procname	= "max_unacked_bytes",
+ 		.data		= &rds_sysctl_max_unacked_bytes,
+ 		.maxlen         = sizeof(unsigned long),
+@@ -110,19 +104,18 @@
+ 		.proc_handler   = &proc_dointvec,
+ 	},
+ 	{
+-		.ctl_name	= CTL_UNNUMBERED,
+ 		.procname	= "ping_enable",
+ 		.data		= &rds_sysctl_ping_enable,
+ 		.maxlen         = sizeof(int),
+ 		.mode           = 0644,
+ 		.proc_handler   = &proc_dointvec,
+ 	},
+-	{ .ctl_name = 0}
++	{ }
+ };
+ 
+ static struct ctl_path rds_sysctl_path[] = {
+-	{ .procname = "net", .ctl_name = CTL_NET, },
+-	{ .procname = "rds", .ctl_name = CTL_UNNUMBERED, },
++	{ .procname = "net", },
++	{ .procname = "rds", },
+ 	{ }
+ };
+ 
+Index: ofed_kernel/net/rds/ib_sysctl.c
+===================================================================
+--- ofed_kernel.orig/net/rds/ib_sysctl.c	2010-08-09 14:24:43.000000000 +0300
++++ ofed_kernel/net/rds/ib_sysctl.c	2010-08-09 20:10:33.000000000 +0300
+@@ -67,7 +67,6 @@
+ 
+ ctl_table rds_ib_sysctl_table[] = {
+ 	{
+-		.ctl_name       = CTL_UNNUMBERED,
+ 		.procname       = "max_send_wr",
+ 		.data		= &rds_ib_sysctl_max_send_wr,
+ 		.maxlen         = sizeof(unsigned long),
+@@ -77,7 +76,6 @@
+ 		.extra2		= &rds_ib_sysctl_max_wr_max,
+ 	},
+ 	{
+-		.ctl_name       = CTL_UNNUMBERED,
+ 		.procname       = "max_recv_wr",
+ 		.data		= &rds_ib_sysctl_max_recv_wr,
+ 		.maxlen         = sizeof(unsigned long),
+@@ -87,7 +85,6 @@
+ 		.extra2		= &rds_ib_sysctl_max_wr_max,
+ 	},
+ 	{
+-		.ctl_name       = CTL_UNNUMBERED,
+ 		.procname       = "max_unsignaled_wr",
+ 		.data		= &rds_ib_sysctl_max_unsig_wrs,
+ 		.maxlen         = sizeof(unsigned long),
+@@ -97,7 +94,6 @@
+ 		.extra2		= &rds_ib_sysctl_max_unsig_wr_max,
+ 	},
+ 	{
+-		.ctl_name       = CTL_UNNUMBERED,
+ 		.procname       = "max_unsignaled_bytes",
+ 		.data		= &rds_ib_sysctl_max_unsig_bytes,
+ 		.maxlen         = sizeof(unsigned long),
+@@ -107,7 +103,6 @@
+ 		.extra2		= &rds_ib_sysctl_max_unsig_bytes_max,
+ 	},
+ 	{
+-		.ctl_name       = CTL_UNNUMBERED,
+ 		.procname       = "max_recv_allocation",
+ 		.data		= &rds_ib_sysctl_max_recv_allocation,
+ 		.maxlen         = sizeof(unsigned long),
+@@ -115,20 +110,19 @@
+ 		.proc_handler   = &proc_doulongvec_minmax,
+ 	},
+ 	{
+-		.ctl_name	= CTL_UNNUMBERED,
+ 		.procname	= "flow_control",
+ 		.data		= &rds_ib_sysctl_flow_control,
+ 		.maxlen		= sizeof(rds_ib_sysctl_flow_control),
+ 		.mode		= 0644,
+ 		.proc_handler	= &proc_dointvec,
+ 	},
+-	{ .ctl_name = 0}
++	{ }
+ };
+ 
+ static struct ctl_path rds_ib_sysctl_path[] = {
+-	{ .procname = "net", .ctl_name = CTL_NET, },
+-	{ .procname = "rds", .ctl_name = CTL_UNNUMBERED, },
+-	{ .procname = "ib", .ctl_name = CTL_UNNUMBERED, },
++	{ .procname = "net", },
++	{ .procname = "rds", },
++	{ .procname = "ib", },
+ 	{ }
+ };
+ 
+Index: ofed_kernel/net/rds/iw_sysctl.c
+===================================================================
+--- ofed_kernel.orig/net/rds/iw_sysctl.c	2010-08-09 14:24:43.000000000 +0300
++++ ofed_kernel/net/rds/iw_sysctl.c	2010-08-09 20:26:35.000000000 +0300
+@@ -57,7 +57,6 @@
+ 
+ ctl_table rds_iw_sysctl_table[] = {
+ 	{
+-		.ctl_name       = CTL_UNNUMBERED,
+ 		.procname       = "max_send_wr",
+ 		.data		= &rds_iw_sysctl_max_send_wr,
+ 		.maxlen         = sizeof(unsigned long),
+@@ -67,7 +66,6 @@
+ 		.extra2		= &rds_iw_sysctl_max_wr_max,
+ 	},
+ 	{
+-		.ctl_name       = CTL_UNNUMBERED,
+ 		.procname       = "max_recv_wr",
+ 		.data		= &rds_iw_sysctl_max_recv_wr,
+ 		.maxlen         = sizeof(unsigned long),
+@@ -77,7 +75,6 @@
+ 		.extra2		= &rds_iw_sysctl_max_wr_max,
+ 	},
+ 	{
+-		.ctl_name       = CTL_UNNUMBERED,
+ 		.procname       = "max_unsignaled_wr",
+ 		.data		= &rds_iw_sysctl_max_unsig_wrs,
+ 		.maxlen         = sizeof(unsigned long),
+@@ -87,7 +84,6 @@
+ 		.extra2		= &rds_iw_sysctl_max_unsig_wr_max,
+ 	},
+ 	{
+-		.ctl_name       = CTL_UNNUMBERED,
+ 		.procname       = "max_unsignaled_bytes",
+ 		.data		= &rds_iw_sysctl_max_unsig_bytes,
+ 		.maxlen         = sizeof(unsigned long),
+@@ -97,7 +93,6 @@
+ 		.extra2		= &rds_iw_sysctl_max_unsig_bytes_max,
+ 	},
+ 	{
+-		.ctl_name       = CTL_UNNUMBERED,
+ 		.procname       = "max_recv_allocation",
+ 		.data		= &rds_iw_sysctl_max_recv_allocation,
+ 		.maxlen         = sizeof(unsigned long),
+@@ -105,20 +100,19 @@
+ 		.proc_handler   = &proc_doulongvec_minmax,
+ 	},
+ 	{
+-		.ctl_name	= CTL_UNNUMBERED,
+ 		.procname	= "flow_control",
+ 		.data		= &rds_iw_sysctl_flow_control,
+ 		.maxlen		= sizeof(rds_iw_sysctl_flow_control),
+ 		.mode		= 0644,
+ 		.proc_handler	= &proc_dointvec,
+ 	},
+-	{ .ctl_name = 0}
++	{ }
+ };
+ 
+ static struct ctl_path rds_iw_sysctl_path[] = {
+-	{ .procname = "net", .ctl_name = CTL_NET, },
+-	{ .procname = "rds", .ctl_name = CTL_UNNUMBERED, },
+-	{ .procname = "iw", .ctl_name = CTL_UNNUMBERED, },
++	{ .procname = "net", },
++	{ .procname = "rds", },
++	{ .procname = "iw", },
+ 	{ }
+ };
+ 
+Index: ofed_kernel/net/rds/tcp_listen.c
+===================================================================
+--- ofed_kernel.orig/net/rds/tcp_listen.c	2010-08-09 14:24:43.000000000 +0300
++++ ofed_kernel/net/rds/tcp_listen.c	2010-08-09 20:35:13.000000000 +0300
+@@ -67,10 +67,10 @@
+ 	inet = inet_sk(new_sock->sk);
+ 
+ 	rdsdebug("accepted tcp %u.%u.%u.%u:%u -> %u.%u.%u.%u:%u\n",
+-		  NIPQUAD(inet->saddr), ntohs(inet->sport),
+-		  NIPQUAD(inet->daddr), ntohs(inet->dport));
++		  NIPQUAD(inet->inet_saddr), ntohs(inet->inet_sport),
++		  NIPQUAD(inet->inet_daddr), ntohs(inet->inet_dport));
+ 
+-	conn = rds_conn_create(inet->saddr, inet->daddr, &rds_tcp_transport,
++	conn = rds_conn_create(inet->inet_saddr, inet->inet_daddr, &rds_tcp_transport,
+ 			       GFP_KERNEL);
+ 	if (IS_ERR(conn)) {
+ 		ret = PTR_ERR(conn);

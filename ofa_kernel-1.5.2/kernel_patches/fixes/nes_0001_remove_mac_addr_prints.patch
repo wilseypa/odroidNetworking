@@ -1,0 +1,76 @@
+diff --git a/drivers/infiniband/hw/nes/nes.c b/drivers/infiniband/hw/nes/nes.c
+index cbde0cf..487b342 100644
+--- a/drivers/infiniband/hw/nes/nes.c
++++ b/drivers/infiniband/hw/nes/nes.c
+@@ -351,15 +351,6 @@ struct ib_qp *nes_get_qp(struct ib_device *device, int qpn)
+ 
+ 
+ /**
+- * nes_print_macaddr
+- */
+-static void nes_print_macaddr(struct net_device *netdev)
+-{
+-	nes_debug(NES_DBG_INIT, "%s: %pM, IRQ %u\n",
+-		  netdev->name, netdev->dev_addr, netdev->irq);
+-}
+-
+-/**
+  * nes_interrupt - handle interrupts
+  */
+ static irqreturn_t nes_interrupt(int irq, void *dev_id)
+@@ -673,7 +664,6 @@ static int __devinit nes_probe(struct pci_dev *pcidev, const struct pci_device_i
+ 			goto bail7;
+ 		}
+ 
+-		nes_print_macaddr(netdev);
+ 		/* create a CM core for this netdev */
+ 		nesvnic = netdev_priv(netdev);
+ 
+diff --git a/drivers/infiniband/hw/nes/nes_cm.c b/drivers/infiniband/hw/nes/nes_cm.c
+index 11c7d66..b8ee4a5 100644
+--- a/drivers/infiniband/hw/nes/nes_cm.c
++++ b/drivers/infiniband/hw/nes/nes_cm.c
+@@ -1092,9 +1092,6 @@ static int nes_addr_resolve_neigh(struct nes_vnic *nesvnic, u32 dst_ip)
+ 	neigh = neigh_lookup(&arp_tbl, &rt->rt_gateway, nesvnic->netdev);
+ 	if (neigh) {
+ 		if (neigh->nud_state & NUD_VALID) {
+-			nes_debug(NES_DBG_CM, "Neighbor MAC address for 0x%08X"
+-				  " is %pM, Gateway is 0x%08X \n", dst_ip,
+-				  neigh->ha, ntohl(rt->rt_gateway));
+ 			nes_manage_arp_cache(nesvnic->netdev, neigh->ha,
+ 					     dst_ip, NES_ARP_ADD);
+ 			rc = nes_arp_table(nesvnic->nesdev, dst_ip, NULL,
+@@ -1188,9 +1185,6 @@ static struct nes_cm_node *make_cm_node(struct nes_cm_core *cm_core,
+ 
+ 	/* copy the mac addr to node context */
+ 	memcpy(cm_node->rem_mac, nesadapter->arp_table[arpindex].mac_addr, ETH_ALEN);
+-	nes_debug(NES_DBG_CM, "Remote mac addr from arp table: %pM\n",
+-		  cm_node->rem_mac);
+-
+ 	add_hte_node(cm_core, cm_node);
+ 	atomic_inc(&cm_nodes_created);
+ 
+diff --git a/drivers/infiniband/hw/nes/nes_nic.c b/drivers/infiniband/hw/nes/nes_nic.c
+index c6e6611..26df3c2 100644
+--- a/drivers/infiniband/hw/nes/nes_nic.c
++++ b/drivers/infiniband/hw/nes/nes_nic.c
+@@ -785,8 +785,6 @@ static int nes_netdev_set_mac_address(struct net_device *netdev, void *p)
+ 		return -EADDRNOTAVAIL;
+ 
+ 	memcpy(netdev->dev_addr, mac_addr->sa_data, netdev->addr_len);
+-	printk(PFX "%s: Address length = %d, Address = %pM\n",
+-	       __func__, netdev->addr_len, mac_addr->sa_data);
+ 	macaddr_high  = ((u16)netdev->dev_addr[0]) << 8;
+ 	macaddr_high += (u16)netdev->dev_addr[1];
+ 	macaddr_low   = ((u32)netdev->dev_addr[2]) << 24;
+@@ -891,10 +889,6 @@ static void nes_netdev_set_multicast_list(struct net_device *netdev)
+ 			if (mc_index >= max_pft_entries_avaiable)
+ 				break;
+ 			if (multicast_addr) {
+-				nes_debug(NES_DBG_NIC_RX, "Assigning MC Address %pM to register 0x%04X nic_idx=%d\n",
+-					  multicast_addr->dmi_addr,
+-					  perfect_filter_register_address+(mc_index * 8),
+-					  mc_nic_index);
+ 				macaddr_high  = ((u16)multicast_addr->dmi_addr[0]) << 8;
+ 				macaddr_high += (u16)multicast_addr->dmi_addr[1];
+ 				macaddr_low   = ((u32)multicast_addr->dmi_addr[2]) << 24;

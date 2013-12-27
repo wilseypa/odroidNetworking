@@ -1,0 +1,34 @@
+commit cfe2462c6af309ee70e4aeefa55cae976071b9e2
+Author: Divy Le Ray <divy@chelsio.com>
+Date:   Tue Jul 7 19:48:38 2009 +0000
+
+    cxgb3: Fix T3C MAC max packet size access
+    
+    Max packet size is not the only field in T3C's High Water Mark register.
+    Mask the register to access this field.
+    
+    Signed-off-by: Divy Le Ray <divy@chelsio.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+
+diff --git a/drivers/net/cxgb3/xgmac.c b/drivers/net/cxgb3/xgmac.c
+index f87f943..0109ee4 100644
+--- a/drivers/net/cxgb3/xgmac.c
++++ b/drivers/net/cxgb3/xgmac.c
+@@ -447,11 +447,12 @@ int t3_mac_set_speed_duplex_fc(struct cmac *mac, int speed, int duplex, int fc)
+ 
+ 	val = t3_read_reg(adap, A_XGM_RXFIFO_CFG + oft);
+ 	val &= ~V_RXFIFOPAUSEHWM(M_RXFIFOPAUSEHWM);
+-	if (fc & PAUSE_TX)
+-		val |= V_RXFIFOPAUSEHWM(rx_fifo_hwm(
+-						t3_read_reg(adap,
+-						A_XGM_RX_MAX_PKT_SIZE
+-						+ oft)) / 8);
++	if (fc & PAUSE_TX) {
++		u32 rx_max_pkt_size =
++		    G_RXMAXPKTSIZE(t3_read_reg(adap,
++					       A_XGM_RX_MAX_PKT_SIZE + oft));
++		val |= V_RXFIFOPAUSEHWM(rx_fifo_hwm(rx_max_pkt_size) / 8);
++	}
+ 	t3_write_reg(adap, A_XGM_RXFIFO_CFG + oft, val);
+ 
+ 	t3_set_reg_field(adap, A_XGM_TX_CFG + oft, F_TXPAUSEEN,

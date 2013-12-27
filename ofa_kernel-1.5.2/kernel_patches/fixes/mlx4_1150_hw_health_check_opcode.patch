@@ -1,0 +1,25 @@
+From 5c7eb4bea610c39f9d8c340af89ea90278d3050b Mon Sep 17 00:00:00 2001
+From: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+Date: Wed, 2 Sep 2009 11:45:17 +0300
+Subject: [PATCH 3/7] mlx4: Added HW_HEALTH_CHECK command opcode
+
+Signed-off-by: Yevgeny Petrilin <yevgenyp@mellanox.co.il>
+---
+ include/linux/mlx4/cmd.h |    1 +
+ 1 files changed, 1 insertions(+), 0 deletions(-)
+
+diff --git a/include/linux/mlx4/cmd.h b/include/linux/mlx4/cmd.h
+index 0f82293..78a1b96 100644
+--- a/include/linux/mlx4/cmd.h
++++ b/include/linux/mlx4/cmd.h
+@@ -56,6 +56,7 @@ enum {
+ 	MLX4_CMD_QUERY_HCA	 = 0xb,
+ 	MLX4_CMD_QUERY_PORT	 = 0x43,
+ 	MLX4_CMD_SENSE_PORT	 = 0x4d,
++	MLX4_CMD_HW_HEALTH_CHECK = 0x50,
+ 	MLX4_CMD_SET_PORT	 = 0xc,
+ 	MLX4_CMD_ACCESS_DDR	 = 0x2e,
+ 	MLX4_CMD_MAP_ICM	 = 0xffa,
+-- 
+1.6.3
+
