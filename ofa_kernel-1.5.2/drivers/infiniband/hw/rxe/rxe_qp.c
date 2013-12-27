@@ -35,6 +35,7 @@
 
 #include <linux/skbuff.h>
 #include <linux/debugfs.h>
+#include <linux/delay.h>
 
 #include "rxe.h"
 #include "rxe_loc.h"
