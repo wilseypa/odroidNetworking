@@ -1,1 +1,0 @@
-ofed_scripts/ofa_kernel.spec
