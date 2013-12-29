@@ -601,6 +601,14 @@ int rxe_requester(void *arg)
 	int mtu;
 	int opcode;
 
+        pr_warn("In rxe_requester\n");
+
+        /* Don't process GSI QP's; this is a temporary fix for the mystery QP type bug */
+        if (qp_type(qp) == IB_QPT_GSI) {
+          pr_warn("Killing GSI QP %p\n", qp);
+          return 0;
+        }
+
 	if (!qp->valid || qp->req.state == QP_STATE_ERROR)
 		goto exit;
 
@@ -656,6 +664,11 @@ int rxe_requester(void *arg)
 
 	mtu = get_mtu(qp, wqe);
 	payload = (mask & RXE_WRITE_OR_SEND) ? wqe->dma.resid : 0;
+        pr_warn("mask == %xh\n", mask);
+        pr_warn("RXE_WRITE_OR_SEND == %xh\n", RXE_WRITE_OR_SEND);
+        pr_warn("wqe->dma.resid == %xh\n", wqe->dma.resid);
+        pr_warn("mtu == %d\n", mtu);
+        pr_warn("payload == %xh\n", payload);
 	if (payload > mtu) {
 		if (qp_type(qp) == IB_QPT_UD) {
 			/* believe it or not this is

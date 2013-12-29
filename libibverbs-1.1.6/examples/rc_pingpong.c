@@ -380,6 +380,7 @@ static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
 		};
 
 		ctx->qp = ibv_create_qp(ctx->pd, &attr);
+                printf("qp_type == %xh\n", attr.qp_type);
 		if (!ctx->qp)  {
 			fprintf(stderr, "Couldn't create QP\n");
 			return NULL;
@@ -689,7 +690,6 @@ int main(int argc, char *argv[])
 	inet_ntop(AF_INET6, &my_dest.gid, gid, sizeof gid);
 	printf("  local address:  LID 0x%04x, QPN 0x%06x, PSN 0x%06x, GID %s\n",
 	       my_dest.lid, my_dest.qpn, my_dest.psn, gid);
-
 
 	if (servername)
 		rem_dest = pp_client_exch_dest(servername, port, &my_dest);

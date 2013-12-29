@@ -42,10 +42,17 @@ static int check_type_state(struct rxe_dev *rxe, struct rxe_pkt_info *pkt,
 	if (unlikely(!qp->valid))
 		goto err1;
 
+        pr_warn("qp_type(qp) == %xh\n", qp_type(qp));
+        pr_warn("IB_QPT_RC == %xh\n", IB_QPT_RC);
+        pr_warn("IB_QPT_UC == %xh\n", IB_QPT_UC);
+        pr_warn("IB_QPT_UD == %xh\n", IB_QPT_UD);
+        pr_warn("IB_QPT_SMI == %xh\n", IB_QPT_SMI);
+        pr_warn("IB_QPT_GSI == %xh\n", IB_QPT_GSI);
+
 	switch (qp_type(qp)) {
 	case IB_QPT_RC:
 		if (unlikely((pkt->opcode >> 5) != 0)) {
-			pr_warn("bad qp type\n");
+                  pr_warn("bad qp type: pkt->opcode == %xh\n", pkt->opcode);
 			goto err1;
 		}
 		break;
@@ -223,6 +230,8 @@ static int hdr_check(struct rxe_pkt_info *pkt)
 	int index;
 	int err;
 
+        pr_warn("In hdr_check\n");
+
 	if (unlikely(bth_tver(pkt) != BTH_TVER)) {
 		pr_warn("bad tver\n");
 		goto err1;
@@ -304,6 +313,8 @@ static void rxe_rcv_mcast_pkt(struct rxe_dev *rxe, struct sk_buff *skb)
 	struct rxe_mc_elem *mce;
 	struct rxe_qp *qp;
 	int err;
+
+        pr_warn("In rxe_rcv_mcast_pkt\n");
 
 	/* lookup mcast group corresponding to mgid, takes a ref */
 	mcg = rxe_pool_get_key(&rxe->mc_grp_pool, grh_dgid(pkt));

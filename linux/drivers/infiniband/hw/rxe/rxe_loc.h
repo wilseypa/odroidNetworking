@@ -182,6 +182,7 @@ static inline int qp_num(struct rxe_qp *qp)
 
 static inline enum ib_qp_type qp_type(struct rxe_qp *qp)
 {
+  pr_warn("qp_type == %xh; qp == %p\n", qp->ibqp.qp_type, qp);
 	return qp->ibqp.qp_type;
 }
 
