@@ -1,6 +1,0 @@
-config INFINIBAND_RXE
-	tristate "Soft IBXoE Driver"
-	depends on 64BIT && NET
-	---help---
-	This is a driver for a soft implementation of IBXoE/RXoE.
-
