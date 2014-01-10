@@ -742,11 +742,9 @@ int rxe_requester(void *arg)
 		goto done;
 
 complete:
-	if (qp_type(qp) != IB_QPT_RC) {
-          pr_warn("Will now wait for rxe_completer on qp %p\n", qp);
-		while (rxe_completer(qp) == 0)
-			;
-	}
+        pr_warn("Will now wait for rxe_completer on qp %p\n", qp);
+        while (rxe_completer(qp) == 0)
+          ;
 done:
         pr_warn("rxe_requester completed successfully\n");
 	return 0;
