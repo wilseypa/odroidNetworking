@@ -72,6 +72,8 @@ static void req_retry(struct rxe_qp *qp)
 	int npsn;
 	int first = 1;
 
+        pr_warn("In req_retry\n");
+
 	wqe = queue_head(qp->sq.queue);
 	npsn = (qp->comp.psn - wqe->first_psn) & BTH_PSN_MASK;
 
@@ -127,6 +129,8 @@ static struct rxe_send_wqe *req_next_wqe(struct rxe_qp *qp)
 {
 	struct rxe_send_wqe *wqe = queue_head(qp->sq.queue);
 
+        pr_warn("In rxe_send_wqe\n");
+
 	if (unlikely(qp->req.state == QP_STATE_DRAIN)) {
 		/* check to see if we are drained;
 		 * state_lock used by requester and completer */
@@ -161,23 +165,30 @@ static struct rxe_send_wqe *req_next_wqe(struct rxe_qp *qp)
 		} while (0);
 	}
 
-	if (qp->req.wqe_index == producer_index(qp->sq.queue))
-		return NULL;
+	if (qp->req.wqe_index == producer_index(qp->sq.queue)) {
+          pr_warn("qp->req.wqe_index == producer_index(qp->sq.queue) Apparently this is a problem.\n");
+          return NULL;
+        }
 
 	wqe = addr_from_index(qp->sq.queue, qp->req.wqe_index);
 
 	if (qp->req.state == QP_STATE_DRAIN ||
-	    qp->req.state == QP_STATE_DRAINED)
-		if (wqe->state != wqe_state_processing)
-			return NULL;
+	    qp->req.state == QP_STATE_DRAINED) {
+          if (wqe->state != wqe_state_processing) {
+            pr_warn("QP is drained. Returning NULL\n");
+            return NULL;
+          }
+        }
 
 	if ((wqe->ibwr.send_flags & IB_SEND_FENCE) &&
 	    (qp->req.wqe_index != consumer_index(qp->sq.queue))) {
 		qp->req.wait_fence = 1;
+                pr_warn("Infiniband send fence violation. Returning NULL\n");
 		return NULL;
 	}
 
 	wqe->mask = wr_opcode_mask(wqe->ibwr.opcode, qp);
+        pr_warn("Found a good wqe\n");
 	return wqe;
 }
 
@@ -609,8 +620,10 @@ int rxe_requester(void *arg)
         /*   return 0; */
         /* } */
 
-	if (!qp->valid || qp->req.state == QP_STATE_ERROR)
-		goto exit;
+	if (!qp->valid || qp->req.state == QP_STATE_ERROR) {
+          pr_warn("Queue pair is invalid or a request error has occurred\n");
+          goto exit;
+        }
 
 	if (qp->req.state == QP_STATE_RESET) {
 		qp->req.wqe_index = consumer_index(qp->sq.queue);
@@ -618,6 +631,7 @@ int rxe_requester(void *arg)
 		qp->req.need_rd_atomic = 0;
 		qp->req.wait_psn = 0;
 		qp->req.need_retry = 0;
+                pr_warn("qp->req.state == QP_STATE_RESET\n");
 		goto exit;
 	}
 
@@ -627,8 +641,11 @@ int rxe_requester(void *arg)
 	}
 
 	wqe = req_next_wqe(qp);
-	if (!wqe)
-		goto exit;
+	if (!wqe) {
+          pr_warn("null wqe\n");
+          goto exit;
+        }
+                
 
 	/* heuristic sliding window algorithm to keep
 	   sender from overrunning receiver queues */
@@ -636,6 +653,7 @@ int rxe_requester(void *arg)
 		if (psn_compare(qp->req.psn, qp->comp.psn +
 				rxe_max_req_comp_gap) > 0) {
 			qp->req.wait_psn = 1;
+                        pr_warn("psn_compare returns greater than zero\n");
 			goto exit;
 		}
 	}
@@ -646,6 +664,7 @@ int rxe_requester(void *arg)
 	   rate control or application level flow control */
 	if (atomic_read(&qp->req_skb_out) > rxe_max_skb_per_qp) {
 		qp->need_req_skb = 1;
+                pr_warn("Sender is overrunning output queue\n");
 		goto exit;
 	}
 
@@ -653,6 +672,7 @@ int rxe_requester(void *arg)
 	if (opcode < 0) {
 		wqe->status = IB_WC_LOC_QP_OP_ERR;
 		/* TODO most be more to do here ?? */
+                pr_warn("Bad opcode %xh\n", opcode);
 		goto exit;
 	}
 
@@ -693,6 +713,7 @@ int rxe_requester(void *arg)
 
 	pkt = init_req_packet(qp, wqe, opcode, payload);
 	if (!pkt) {
+          pr_warn("Null packet address\n");
 		qp->need_req_skb = 1;
 		goto exit;
 	}
@@ -717,12 +738,15 @@ int rxe_requester(void *arg)
 
 complete:
 	if (qp_type(qp) != IB_QPT_RC) {
+          pr_warn("Will now wait for rxe_completer on qp %p\n", qp);
 		while (rxe_completer(qp) == 0)
 			;
 	}
 done:
+        pr_warn("rxe_requester completed successfully\n");
 	return 0;
 
 exit:
+        pr_warn("Exiting rxe_requester with code EAGAIN\n");
 	return -EAGAIN;
 }
