@@ -603,11 +603,11 @@ int rxe_requester(void *arg)
 
         pr_warn("In rxe_requester\n");
 
-        /* Don't process GSI QP's; this is a temporary fix for the mystery QP type bug */
-        if (qp_type(qp) == IB_QPT_GSI) {
-          pr_warn("Killing GSI QP %p\n", qp);
-          return 0;
-        }
+        /* /\* Don't process GSI QP's; this is a temporary fix for the mystery QP type bug *\/ */
+        /* if (qp_type(qp) == IB_QPT_GSI) { */
+        /*   pr_warn("Killing GSI QP %p\n", qp); */
+        /*   return 0; */
+        /* } */
 
 	if (!qp->valid || qp->req.state == QP_STATE_ERROR)
 		goto exit;
