@@ -570,6 +570,8 @@ static void update_state(struct rxe_qp *qp, struct rxe_send_wqe *wqe,
 	/* number of packets left to send including current one */
 	int num_pkt = (wqe->dma.resid + payload + qp->mtu - 1) / qp->mtu;
 
+        pr_warn("In update_state for qp %p\n", qp);
+        pr_warn("Remaining packets: %d\n", num_pkt);
 	/* handle zero length packet case */
 	if (num_pkt == 0)
 		num_pkt = 1;
@@ -730,6 +732,9 @@ int rxe_requester(void *arg)
 		xmit_one_packet(to_rdev(qp->ibqp.device), qp, PKT_TO_SKB(pkt));
 	else
 		arbiter_skb_queue(to_rdev(qp->ibqp.device), qp, PKT_TO_SKB(pkt));
+
+        pr_warn("mask == %xh\n", mask);
+        pr_warn("RXE_END_MASK == %xh\n", RXE_END_MASK);
 
 	if (mask & RXE_END_MASK)
 		goto complete;
