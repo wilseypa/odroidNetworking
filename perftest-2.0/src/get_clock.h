@@ -90,9 +90,6 @@ static inline void init_perfcounters (unsigned int do_reset, unsigned int enable
 
   value |= 16;
 
-  // Enable access to performance counters from userspace
-  asm volatile("mcr p15, 0, %0, c9, c14, 0" :: "r"(1));
-
   // program the performance-counter control-register:
   asm volatile ("MCR p15, 0, %0, c9, c12, 0\t\n" :: "r"(value));
 
