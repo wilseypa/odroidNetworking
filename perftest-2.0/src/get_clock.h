@@ -71,6 +71,45 @@ static inline cycles_t get_cycles()
 	return ret;
 }
 
+#elif defined(__arm__)
+typedef unsigned int cycles_t;
+static inline void init_perfcounters (unsigned int do_reset, unsigned int enable_divider)
+{
+  // in general enable all counters (including cycle counter)
+  unsigned int value = 1;
+
+  // peform reset:
+  if (do_reset)
+    {
+      value |= 2;     // reset all counters to zero.
+      value |= 4;     // reset cycle counter to zero.
+    }
+
+  if (enable_divider)
+    value |= 8;     // enable "by 64" divider for CCNT.
+
+  value |= 16;
+
+  // Enable access to performance counters from userspace
+  asm volatile("mcr p15, 0, %0, c9, c14, 0" :: "r"(1));
+
+  // program the performance-counter control-register:
+  asm volatile ("MCR p15, 0, %0, c9, c12, 0\t\n" :: "r"(value));
+
+  // enable all counters:
+  asm volatile ("MCR p15, 0, %0, c9, c12, 1\t\n" :: "r"(0x8000000f));
+
+  // clear overflows:
+  asm volatile ("MCR p15, 0, %0, c9, c12, 3\t\n" :: "r"(0x8000000f));
+}
+
+static inline cycles_t get_cycles()
+{
+  cycles_t ret;
+  asm volatile ("MRC p15, 0, %0, c9, c13, 0\t\n": "=r"(ret));
+  return ret;
+}
+
 #else
 #warning get_cycles not implemented for this architecture: attempt asm/timex.h
 #include <asm/timex.h>

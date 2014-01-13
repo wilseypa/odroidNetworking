@@ -469,6 +469,8 @@ int __cdecl main(int argc, char *argv[]) {
 	struct perftest_parameters user_param;
 	struct perftest_comm	   user_comm;
 
+        init_perfcounters(1,0);
+
 	/* init default values to user's parameters */
 	memset(&ctx,		0, sizeof(struct pingpong_context));
 	memset(&user_param, 0, sizeof(struct perftest_parameters));
