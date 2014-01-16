@@ -407,6 +407,7 @@ int run_iter(struct pingpong_context *ctx,
 		if (scnt < user_param->iters) {
 
 			tstamp[scnt++] = get_cycles();
+                        printf("Timestamp %xh\n", (unsigned int)tstamp[scnt-1]);
 
 			if (scnt % user_param->cq_mod == 0 || scnt == user_param->iters) {
 				poll = 1;
