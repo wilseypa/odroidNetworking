@@ -140,6 +140,8 @@ int __cdecl main(int argc, char *argv[]) {
 	struct mcast_parameters     mcg_params;
 	int                      	ret_parser,i = 0;
 	int                      	size_max_pow = 24;
+
+        init_perfcounters(1,0);
     
 	/* init default values to user's parameters */
 	memset(&ctx, 0,sizeof(struct pingpong_context));

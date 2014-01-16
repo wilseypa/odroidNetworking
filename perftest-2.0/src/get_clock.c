@@ -177,7 +177,12 @@ static double proc_get_cpu_mhz(int no_cpu_freq_fail)
 	return mhz;
 }
 
-
+#if defined (__arm__)
+double get_cpu_mhz(int no_cpu_freq_fail)
+{
+  return 1992.29;
+}
+#else
 double get_cpu_mhz(int no_cpu_freq_fail)
 {
 	double sample, proc, delta;
@@ -196,3 +201,4 @@ double get_cpu_mhz(int no_cpu_freq_fail)
 	}
 	return proc;
 }
+#endif

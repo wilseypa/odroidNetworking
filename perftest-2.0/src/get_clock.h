@@ -73,7 +73,9 @@ static inline cycles_t get_cycles()
 
 #elif defined(__arm__)
 typedef unsigned int cycles_t;
-static inline void init_perfcounters (unsigned int do_reset, unsigned int enable_divider)
+
+/* This method copied from http://stackoverflow.com/questions/3247373/how-to-measure-program-execution-time-in-arm-cortex-a8-processor */
+static inline void init_perfcounters(unsigned int do_reset, unsigned int enable_divider)
 {
   // in general enable all counters (including cycle counter)
   unsigned int value = 1;
