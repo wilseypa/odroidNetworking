@@ -34,7 +34,7 @@ if ( !$server ) {
 }
 
 for my $test (@tests) {
-  for my $sizes (@sizes) {
+  for my $size (@sizes) {
     for my $option (@options) {
       my $opt_string;
       if ( $option eq '' ) {
