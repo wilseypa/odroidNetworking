@@ -11,7 +11,7 @@ my $iterations = 1000;
 
 my @tests = ('ib_send_lat');
 my @connection_types = ('RC', 'UC');
-my @options = ('', '-z', '-R');
+my @options = ('', '-z');
 
 my $target;
 my $server;
