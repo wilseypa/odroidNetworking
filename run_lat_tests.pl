@@ -9,7 +9,7 @@ my $output_file = 'lat_tests.csv';
 
 my $iterations = 1000;
 
-my @tests = ('ib_send_lat');
+my @tests = ('ib_send_lat', 'ib_write_lat');
 my @connection_types = ('RC', 'UC');
 my @options = ('', '-z');
 
@@ -33,8 +33,8 @@ if ( !$server ) {
   print OUT "Benchmark,Message Size,Connection Type,Connection Specifics,Latency Results\n";
 }
 
-for my $size (@sizes) {
-  for my $test (@tests) {
+for my $test (@tests) {
+  for my $sizes (@sizes) {
     for my $option (@options) {
       my $opt_string;
       if ( $option eq '' ) {
