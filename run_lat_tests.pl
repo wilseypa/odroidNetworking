@@ -30,6 +30,7 @@ else {
 
 if ( !$server ) {
   open(OUT, ">$output_file") || die "Could not open $output_file for writing\n";
+  print OUT "Benchmark,Message Size,Connection Type,Connection Specifics,Latency Results\n";
 }
 
 for my $size (@sizes) {
@@ -37,7 +38,7 @@ for my $size (@sizes) {
     for my $option (@options) {
       my $opt_string;
       if ( $option eq '' ) {
-        $opt_string = 'IB Connection';
+        $opt_string = 'IB Verbs Connection';
       } elsif ( $option eq '-z' ) {
         $opt_string = 'RDMA CM Connection with IB QPs';
       } elsif ( $option eq '-R' ) {
@@ -49,7 +50,7 @@ for my $size (@sizes) {
         }
         my $output = `$test -c $type $option -n $iterations -s $size $target`;
         if ( !$server ) {
-          print OUT "$test ${size}B $type $opt_string,";
+          print OUT "${test},${size}B,${type},${opt_string},";
           my @lines = split("\n", $output);
           for (@lines) {
             if ( /^([0-9]+), ([0-9.]+)$/ ) {
