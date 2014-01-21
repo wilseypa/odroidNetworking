@@ -7,7 +7,7 @@ my $mode = shift || 'server';
 my @sizes = (1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192, 12288, 16384, 24576, 32768);
 my $output_file = 'lat_tests.csv';
 
-my $iterations = 1000;
+my $iterations = 1001;
 
 my @tests = ('ib_send_lat', 'ib_write_lat');
 my @connection_types = ('RC', 'UC');
@@ -34,17 +34,17 @@ if ( !$server ) {
 }
 
 for my $test (@tests) {
-  for my $size (@sizes) {
-    for my $option (@options) {
-      my $opt_string;
-      if ( $option eq '' ) {
-        $opt_string = 'IB Verbs Connection';
-      } elsif ( $option eq '-z' ) {
-        $opt_string = 'RDMA CM Connection with IB QPs';
-      } elsif ( $option eq '-R' ) {
-        $opt_string = 'RDMA CM QPs';
-      }
-      for my $type (@connection_types) {
+  for my $option (@options) {
+    my $opt_string;
+    if ( $option eq '' ) {
+      $opt_string = 'IB Verbs Connection';
+    } elsif ( $option eq '-z' ) {
+      $opt_string = 'RDMA CM Connection with IB QPs';
+    } elsif ( $option eq '-R' ) {
+      $opt_string = 'RDMA CM QPs';
+    }
+    for my $type (@connection_types) {
+      for my $size (@sizes) {
         if ( !$server ) {
           sleep 1;
         }
