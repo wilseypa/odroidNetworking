@@ -671,6 +671,7 @@ static int rxe_post_send(struct ib_qp *ibqp, struct ib_send_wr *wr,
 		}
 
 		length = 0;
+                // This method of calculating the send length could be a problem...
 		for (i = 0; i < wr->num_sge; i++)
 			length += wr->sg_list[i].length;
 
@@ -695,6 +696,8 @@ static int rxe_post_recv(struct ib_qp *ibqp, struct ib_recv_wr *wr,
 	int err = 0;
 	struct rxe_qp *qp = to_rqp(ibqp);
 	struct rxe_rq *rq = &qp->rq;
+
+        pr_warn("In rxe_post_recv\n");
 
 	if (unlikely((qp_state(qp) < IB_QPS_INIT) || !qp->valid)) {
 		*bad_wr = wr;

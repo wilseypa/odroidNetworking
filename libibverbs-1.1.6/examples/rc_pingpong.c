@@ -476,6 +476,8 @@ static int pp_post_send(struct pingpong_context *ctx)
 		.length = ctx->size,
 		.lkey	= ctx->mr->lkey
 	};
+        printf("ctx->buf == %ull\n", (unsigned long long) ctx->buf);
+        printf("ctx->size == %xh\n", ctx->size);
 	struct ibv_send_wr wr = {
 		.wr_id	    = PINGPONG_SEND_WRID,
 		.sg_list    = &list,

@@ -124,6 +124,7 @@ void rxe_mem_cleanup(void *arg)
 
 static int rxe_mem_alloc(struct rxe_dev *rxe, struct rxe_mem *mem, int num_buf)
 {
+  pr_warn("In rxe_mem_alloc\n");
 	int i;
 	int num_map;
 	struct rxe_map **map = mem->map;
@@ -131,11 +132,13 @@ static int rxe_mem_alloc(struct rxe_dev *rxe, struct rxe_mem *mem, int num_buf)
 	num_map = (num_buf + RXE_BUF_PER_MAP - 1) / RXE_BUF_PER_MAP;
 
 	mem->map = kmalloc(num_map*sizeof(*map), GFP_KERNEL);
+        pr_warn("mem->map == %p\n", mem->map);
 	if (!mem->map)
 		goto err1;
 
 	for (i = 0; i < num_map; i++) {
 		mem->map[i] = kmalloc(sizeof(**map), GFP_KERNEL);
+                pr_warn("mem->map[%d] == %p", i, mem->map[i]);
 		if (!mem->map[i])
 			goto err2;
 	}
@@ -270,6 +273,10 @@ int rxe_mem_init_user(struct rxe_dev *rxe, struct rxe_pd *pd, u64 start,
 	mem->page_shift		= ilog2(umem->page_size);
 	mem->page_mask		= umem->page_size - 1;
 
+        pr_warn("umem->page_size == %xh\n", umem->page_size);
+        pr_warn("mem->page_shift == %xh\n", mem->page_shift);
+        pr_warn("mem->page_mask == %xh\n", mem->page_mask);
+
 	num_buf			= 0;
 	map			= mem->map;
 	if (length > 0) {
@@ -277,8 +284,13 @@ int rxe_mem_init_user(struct rxe_dev *rxe, struct rxe_pd *pd, u64 start,
 
 		list_for_each_entry(chunk, &umem->chunk_list, list) {
 			for (i = 0; i < chunk->nents; i++) {
-				vaddr = page_address(sg_page(&chunk->
-							     page_list[i]));
+                          pr_warn("Looking up page address as in page_address(sg_page(&chunk->page_list[i]))");
+                          pr_warn("&chunk == %p\n", &chunk);
+                          pr_warn("&chunk->page_list == %p\n", &chunk->page_list);
+                          pr_warn("&chunk->page_list[%d] == %p\n", i, &chunk->page_list[i]);
+                          pr_warn("sg_page(&chunk->page_list[%d]) == %p\n", i, sg_page(&chunk->page_list[i]));
+                          vaddr = page_address(sg_page(&chunk->page_list[i]));
+                                pr_warn("vaddr ==  %p\n", vaddr);
 				if (!vaddr) {
 					pr_warn("null vaddr\n");
 					err = -ENOMEM;
@@ -566,13 +578,20 @@ int copy_data(
 	u64			iova;
 	int			err;
 
-	if (length == 0)
+        pr_warn("In copy_data\n");
+
+	if (length == 0 || sge->length == 0)
 		return 0;
 
 	if (length > resid) {
 		err = -EINVAL;
 		goto err2;
 	}
+
+        pr_warn("sge == %p\n", sge);
+        pr_warn("offset == %xh\n", offset);
+        pr_warn("resid == %xh\n", resid);
+        pr_warn("sge->length == %xh\n", sge->length);
 
 	if (sge->length && (offset < sge->length)) {
 		mem = lookup_mem(pd, access, sge->lkey, lookup_local);
@@ -584,6 +603,7 @@ int copy_data(
 
 	while (length > 0) {
 		bytes = length;
+                pr_warn("bytes == %d\n", bytes);
 
 		if (offset >= sge->length) {
 			if (mem) {
@@ -615,6 +635,7 @@ int copy_data(
 
 		if (bytes > 0) {
 			iova = sge->addr + offset;
+                        pr_warn("iova == %llu\n", (unsigned long long) iova);
 
 			err = rxe_mem_copy(mem, iova, addr, bytes, dir, crcp);
 			if (err)
@@ -686,6 +707,8 @@ struct rxe_mem *lookup_mem(struct rxe_pd *pd, int access, u32 key,
 	struct rxe_mem *mem;
 	struct rxe_dev *rxe = to_rdev(pd->ibpd.device);
 	int index = key >> 8;
+
+        pr_warn("In lookup_mem\n");
 
 	if (index >= RXE_MIN_MR_INDEX && index <= RXE_MAX_MR_INDEX) {
 		mem = rxe_pool_get_index(&rxe->mr_pool, index);

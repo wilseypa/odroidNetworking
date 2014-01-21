@@ -513,6 +513,8 @@ static int fill_packet(struct rxe_qp *qp, struct rxe_send_wqe *wqe,
 	u32 crc = 0;
 	u8 *p;
 
+        pr_warn("In fill_packet\n");
+
 	if (!rxe_crc_disable)
 		crc = rxe_icrc_hdr(pkt);
 
@@ -528,6 +530,9 @@ static int fill_packet(struct rxe_qp *qp, struct rxe_send_wqe *wqe,
 			wqe->dma.resid -= payload;
 			wqe->dma.sge_offset += payload;
 		} else {
+                  pr_warn("pkt == %p\n", pkt);
+                  pr_warn("payload_addr(pkt) == %p\n", payload_addr(pkt));
+                  pr_warn("payload == %xh\n", payload);
 			if (copy_data(rxe, qp->pd, 0, &wqe->dma,
 				      payload_addr(pkt), payload,
 				      direction_out, !rxe_crc_disable ?
@@ -601,6 +606,8 @@ int rxe_requester(void *arg)
 	int mtu;
 	int opcode;
 
+        pr_warn("In rxe_requester\n");
+
 	if (!qp->valid || qp->req.state == QP_STATE_ERROR)
 		goto exit;
 
@@ -655,7 +662,9 @@ int rxe_requester(void *arg)
 	}
 
 	mtu = get_mtu(qp, wqe);
+        pr_warn("mtu == %d\n", mtu);
 	payload = (mask & RXE_WRITE_OR_SEND) ? wqe->dma.resid : 0;
+        pr_warn("payload == %d\n", payload);
 	if (payload > mtu) {
 		if (qp_type(qp) == IB_QPT_UD) {
 			/* believe it or not this is
