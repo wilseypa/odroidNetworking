@@ -50,7 +50,7 @@ for my $test (@tests) {
         }
         my $output = `$test -c $type $option -n $iterations -s $size $target`;
         if ( !$server ) {
-          print OUT "${test},${size}B,${type},${opt_string},";
+          print OUT "${test},${size},${type},${opt_string},";
           my @lines = split("\n", $output);
           for (@lines) {
             if ( /^([0-9]+), ([0-9.]+)$/ ) {
