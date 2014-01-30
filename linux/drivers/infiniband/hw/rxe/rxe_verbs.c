@@ -912,7 +912,6 @@ static struct ib_mr *rxe_reg_user_mr(struct ib_pd *ibpd,
 	struct rxe_mem *mr;
 
 	mr = rxe_alloc(&rxe->mr_pool);
-	pr_warn("mr == %p\n", mr);
 	if (!mr) {
 		err = -ENOMEM;
 		goto err2;
