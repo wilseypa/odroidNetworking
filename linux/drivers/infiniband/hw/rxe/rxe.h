@@ -49,6 +49,8 @@
 #include "rxe_param.h"
 #include "rxe_verbs.h"
 
+#define pr_warn(fmt, ...) 1
+
 #define RXE_UVERBS_ABI_VERSION		(1)
 
 #define IB_PHYS_STATE_LINK_UP		(5)
