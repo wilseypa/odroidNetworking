@@ -35,6 +35,7 @@
 #include "rxe_loc.h"
 
 #include <linux/kernel.h>
+#include <linux/highmem.h>
 
 /*
  * lfsr (linear feedback shift register) with period 255
@@ -246,8 +247,6 @@ int rxe_mem_init_user(struct rxe_dev *rxe, struct rxe_pd *pd, u64 start,
 	int err;
 
 	umem = ib_umem_get(pd->ibpd.uobject->context, start, length, access, 0);
-	pr_warn("mem == %p\n", mem);
-	pr_warn("umem == %p\n", umem);
 	if (IS_ERR(umem)) {
 		pr_warn("err %d from rxe_umem_get\n",
 			 (int)PTR_ERR(umem));
@@ -263,8 +262,6 @@ int rxe_mem_init_user(struct rxe_dev *rxe, struct rxe_pd *pd, u64 start,
 
 	rxe_mem_init(access, mem);
 
-	pr_warn("num_buf == %d\n", num_buf);
-
 	err = rxe_mem_alloc(rxe, mem, num_buf);
 	if (err) {
 		pr_warn("err %d from rxe_mem_alloc\n", err);
@@ -278,22 +275,15 @@ int rxe_mem_init_user(struct rxe_dev *rxe, struct rxe_pd *pd, u64 start,
 
 	num_buf			= 0;
 	map			= mem->map;
-	pr_warn("length == %llu", (unsigned long long)length);
-	pr_warn("map == %p", (void*)map);
 	if (length > 0) {
 		buf = map[0]->buf;
-		pr_warn("buf == %p\n", buf);
 
 		list_for_each_entry(chunk, &umem->chunk_list, list) {
 			for (i = 0; i < chunk->nents; i++) {
-			  pr_warn("chunk == %p\n", &chunk);
-			  pr_warn("i == %d\n", i);
-			  pr_warn("&chunk->page_list[i] == %p\n", &chunk->page_list[i]);
-			  pr_warn("sg_page(&chunk->page_list[i]) == %p\n", sg_page(&chunk->page_list[i]));
-				vaddr = sg_page(&chunk->page_list[i]);
+			  vaddr = kmap(sg_page(&chunk->page_list[i]));
 				if (!vaddr) {
 					pr_warn("null vaddr\n");
-					dump_stack();
+					/* dump_stack(); */
 					err = -ENOMEM;
 					goto err1;
 				}
