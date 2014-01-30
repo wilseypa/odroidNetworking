@@ -776,8 +776,8 @@ config ARCH_EXYNOS
 	select HAVE_S3C2410_WATCHDOG if WATCHDOG
 	select ARCH_HAS_OPP
 	select PM_OPP if PM
-	select MIGHT_HAVE_PCI
-        select ARM_AMBA
+	select PCI
+	select ARM_AMBA
 	help
 	  Samsung EXYNOS series based systems
 

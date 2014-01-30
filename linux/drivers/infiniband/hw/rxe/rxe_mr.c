@@ -34,6 +34,8 @@
 #include "rxe.h"
 #include "rxe_loc.h"
 
+#include <linux/kernel.h>
+
 /*
  * lfsr (linear feedback shift register) with period 255
  */
@@ -74,7 +76,6 @@ int mem_check_range(struct rxe_mem *mem, u64 iova, size_t length)
 
 static void rxe_mem_init(int access, struct rxe_mem *mem)
 {
-  pr_warn("In rxe_mem_init\n");
 	u32 lkey = mem->pelem.index << 8 | rxe_get_key();
 	u32 rkey = (access & IB_ACCESS_REMOTE) ? lkey : 0;
 
@@ -125,19 +126,18 @@ void rxe_mem_cleanup(void *arg)
 
 static int rxe_mem_alloc(struct rxe_dev *rxe, struct rxe_mem *mem, int num_buf)
 {
-  pr_warn("In rxe_mem_alloc\n");
 	int i;
 	int num_map;
 	struct rxe_map **map = mem->map;
 
 	num_map = (num_buf + RXE_BUF_PER_MAP - 1) / RXE_BUF_PER_MAP;
 
-	mem->map = kmalloc(num_map*sizeof(*map), GFP_KERNEL);
+	mem->map = kmalloc(num_map*sizeof(map[0]), GFP_KERNEL);
 	if (!mem->map)
 		goto err1;
 
 	for (i = 0; i < num_map; i++) {
-		mem->map[i] = kmalloc(sizeof(**map), GFP_KERNEL);
+		mem->map[i] = kmalloc(sizeof(*map[0]), GFP_KERNEL);
 		if (!mem->map[i])
 			goto err2;
 	}
@@ -150,8 +150,6 @@ static int rxe_mem_alloc(struct rxe_dev *rxe, struct rxe_mem *mem, int num_buf)
 	mem->num_buf = num_buf;
 	mem->num_map = num_map;
 	mem->max_buf = num_map*RXE_BUF_PER_MAP;
-
-        pr_warn("rxe_mem_alloc was successful\n");
 
 	return 0;
 
@@ -181,7 +179,6 @@ int rxe_mem_init_phys(struct rxe_dev *rxe, struct rxe_pd *pd, int access,
 		      u64 iova, struct ib_phys_buf *phys_buf, int num_buf,
 		      struct rxe_mem *mem)
 {
-  pr_warn("In rxe_mem_init_phys\n");
 	int i;
 	struct rxe_map **map;
 	struct ib_phys_buf *buf;
@@ -204,10 +201,8 @@ int rxe_mem_init_phys(struct rxe_dev *rxe, struct rxe_pd *pd, int access,
 
 	for (i = 0; i < num_buf; i++) {
 		length	+= phys_buf->size;
-                pr_warn("phys_buf->size == %llx\n", (unsigned long long) phys_buf->size);
 		max_size = max_t(int, max_size, phys_buf->size);
 		min_size = min_t(int, min_size, phys_buf->size);
-                pr_warn("buf %d max_size == %x min_size == %x\n", i, max_size, min_size);
 		*buf++	= *phys_buf++;
 		n++;
 
@@ -241,7 +236,6 @@ int rxe_mem_init_user(struct rxe_dev *rxe, struct rxe_pd *pd, u64 start,
 	u64 length, u64 iova, int access, struct ib_udata *udata,
 	struct rxe_mem *mem)
 {
-  pr_warn("In rxe_mem_init_user\n");
 	int			i;
 	struct rxe_map		**map;
 	struct ib_phys_buf	*buf = NULL;
@@ -252,7 +246,8 @@ int rxe_mem_init_user(struct rxe_dev *rxe, struct rxe_pd *pd, u64 start,
 	int err;
 
 	umem = ib_umem_get(pd->ibpd.uobject->context, start, length, access, 0);
-        pr_warn("umem == %p\n", umem);
+	pr_warn("mem == %p\n", mem);
+	pr_warn("umem == %p\n", umem);
 	if (IS_ERR(umem)) {
 		pr_warn("err %d from rxe_umem_get\n",
 			 (int)PTR_ERR(umem));
@@ -268,6 +263,8 @@ int rxe_mem_init_user(struct rxe_dev *rxe, struct rxe_pd *pd, u64 start,
 
 	rxe_mem_init(access, mem);
 
+	pr_warn("num_buf == %d\n", num_buf);
+
 	err = rxe_mem_alloc(rxe, mem, num_buf);
 	if (err) {
 		pr_warn("err %d from rxe_mem_alloc\n", err);
@@ -281,15 +278,22 @@ int rxe_mem_init_user(struct rxe_dev *rxe, struct rxe_pd *pd, u64 start,
 
 	num_buf			= 0;
 	map			= mem->map;
+	pr_warn("length == %llu", (unsigned long long)length);
+	pr_warn("map == %p", (void*)map);
 	if (length > 0) {
 		buf = map[0]->buf;
+		pr_warn("buf == %p\n", buf);
 
 		list_for_each_entry(chunk, &umem->chunk_list, list) {
 			for (i = 0; i < chunk->nents; i++) {
-				vaddr = page_address(sg_page(&chunk->
-							     page_list[i]));
+			  pr_warn("chunk == %p\n", &chunk);
+			  pr_warn("i == %d\n", i);
+			  pr_warn("&chunk->page_list[i] == %p\n", &chunk->page_list[i]);
+			  pr_warn("sg_page(&chunk->page_list[i]) == %p\n", sg_page(&chunk->page_list[i]));
+				vaddr = sg_page(&chunk->page_list[i]);
 				if (!vaddr) {
 					pr_warn("null vaddr\n");
+					dump_stack();
 					err = -ENOMEM;
 					goto err1;
 				}
@@ -327,7 +331,6 @@ err1:
 int rxe_mem_init_fast(struct rxe_dev *rxe, struct rxe_pd *pd,
 	int max_pages, struct rxe_mem *mem)
 {
-  pr_warn("In rxe_mem_init_fast\n");
 	int err;
 
 	rxe_mem_init(0, mem);	/* TODO what access does this have */
@@ -405,21 +408,11 @@ static void lookup_iova(
 	int			buf_index;
 	u64			length;
 
-        pr_warn("In lookup_iova\n");
-        pr_warn("offset == %zx\n", offset);
-        pr_warn("mem->page_shift == %x\n", mem->page_shift);
-        pr_warn("mem->page_mask == %x\n", mem->page_mask);
-        pr_warn("iova == %llx\n", (unsigned long long) iova);
-
 	if (likely(mem->page_shift)) {
 		*offset_out = offset & mem->page_mask;
 		offset >>= mem->page_shift;
 		*n_out = offset & mem->map_mask;
 		*m_out = offset >> mem->map_shift;
-                pr_warn("*offset_out == %zx\n", *offset_out);
-                pr_warn("recalculated offset == %zx\n", offset);
-                pr_warn("*n_out == %x\n", *n_out);
-                pr_warn("*m_out == %x\n", *m_out);
 	} else {
 		map_index = 0;
 		buf_index = 0;
@@ -508,10 +501,6 @@ int rxe_mem_copy(struct rxe_mem *mem, u64 iova, void *addr, int length,
 		if (crcp)
 			*crcp = crc32_le(*crcp, src, length);
 
-                pr_warn("DMA Source is %p\n", src);
-                pr_warn("DMA Destination is %p\n", dest);
-                pr_warn("DMA Length is %x\n", length);
-
 		memcpy(dest, src, length);
 
 		return 0;
@@ -533,28 +522,17 @@ int rxe_mem_copy(struct rxe_mem *mem, u64 iova, void *addr, int length,
 	while (length > 0) {
 		uint8_t *src, *dest;
 
-                pr_warn("addr == %p\n", addr);
-                pr_warn("buf->addr == %llx\n", (unsigned long long) buf->addr);
-
 		va	= (u8 *)(uintptr_t)buf->addr + offset;
-                pr_warn("va == %p\n", va);
-
 		src  = (dir == direction_in) ? addr : va;
 		dest = (dir == direction_in) ? va : addr;
 
 		bytes	= buf->size - offset;
-
-                pr_warn("Source is %p\n", src);
-                pr_warn("Destination is %p\n", dest);
-                pr_warn("Remaining length of message is %x\n", length);
 
 		if (bytes > length)
 			bytes = length;
 
 		if (crcp)
 			crc = crc32_le(crc, src, bytes);
-
-                pr_warn("Bytes for this copy is %x\n", length);
 
 		memcpy(dest, src, bytes);
 
@@ -651,8 +629,6 @@ int copy_data(
 		if (bytes > 0) {
 			iova = sge->addr + offset;
 
-                        pr_warn("Calling rxe_mem_copy from copy_data\n");
-
 			err = rxe_mem_copy(mem, iova, addr, bytes, dir, crcp);
 			if (err)
 				goto err2;
@@ -720,28 +696,21 @@ int advance_dma_data(struct rxe_dma_info *dma, unsigned int length)
 struct rxe_mem *lookup_mem(struct rxe_pd *pd, int access, u32 key,
 			   enum lookup_type type)
 {
-  pr_warn("In lookup_mem\n");
 	struct rxe_mem *mem;
 	struct rxe_dev *rxe = to_rdev(pd->ibpd.device);
 	int index = key >> 8;
 
 	if (index >= RXE_MIN_MR_INDEX && index <= RXE_MAX_MR_INDEX) {
-          pr_warn("Found an MR index\n");
 		mem = rxe_pool_get_index(&rxe->mr_pool, index);
-                pr_warn("The MR address is %p\n", mem);
 		if (!mem)
 			goto err1;
 	} else if (index >= RXE_MIN_FMR_INDEX && index <= RXE_MAX_FMR_INDEX) {
-          pr_warn("Found an FMR index\n");
 		mem = rxe_pool_get_index(&rxe->fmr_pool, index);
-                pr_warn("The FMR address is %p\n", mem);
 		if (!mem)
 			goto err1;
 	} else if (index >= RXE_MIN_MW_INDEX && index <= RXE_MAX_MW_INDEX) {
-          pr_warn("Found an MW index\n");
 		mem = rxe_pool_get_index(&rxe->mw_pool, index);
-                pr_warn("The MW address is %p\n", mem);
-                if (!mem)
+		if (!mem)
 			goto err1;
 	} else
 		goto err1;

@@ -25,6 +25,8 @@
 #include <linux/slab.h>
 #include "pci.h"
 
+#define PCIBIOS_MIN_IO 0
+#define PCIBIOS_MIN_MEM 0
 
 void pci_update_resource(struct pci_dev *dev, int resno)
 {

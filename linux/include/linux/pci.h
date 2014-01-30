@@ -19,11 +19,6 @@
 
 #include <linux/pci_regs.h>	/* The pci register defines */
 
-/* Added by Eric Carver as a hack to enable PCI probing on ODROID-U2 (Samsung Exynos4) */
-#define pcibios_assign_all_busses()     1
-#define PCIBIOS_MIN_IO                  0x44000000
-#define PCIBIOS_MIN_MEM                 0x50000000
-
 /*
  * The PCI interface treats multi-function devices as independent
  * devices.  The slot/function address of each device is encoded

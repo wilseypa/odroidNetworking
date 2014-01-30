@@ -393,7 +393,6 @@ void rxe_drop_index(void *arg)
 
 void *rxe_alloc(struct rxe_pool *pool)
 {
-  pr_warn("In rxe_alloc\n");
 	struct rxe_pool_entry *elem;
 
 	if (!(pool->flags & RXE_POOL_ATOMIC)
@@ -424,8 +423,6 @@ void *rxe_alloc(struct rxe_pool *pool)
 				 (pool->flags & RXE_POOL_ATOMIC) ?
 				 GFP_ATOMIC : GFP_KERNEL);
 
-        pr_warn("elem == %p\n", elem);
-
 	elem->pool = pool;
 	kref_init(&elem->ref_cnt);
 
@@ -449,7 +446,6 @@ void rxe_elem_release(struct kref *kref)
 
 void *rxe_pool_get_index(struct rxe_pool *pool, u32 index)
 {
-  pr_warn("In rxe_pool_get_index\n");
 	struct rb_node *node = NULL;
 	struct rxe_pool_entry *elem = NULL;
 
@@ -476,8 +472,6 @@ void *rxe_pool_get_index(struct rxe_pool *pool, u32 index)
 
 out:
 	spin_unlock_bh(&pool->pool_lock);
-        pr_warn("node == %p\n", node);
-        pr_warn("elem == %p\n", elem);
 	return node ? (void *)elem : NULL;
 }
 

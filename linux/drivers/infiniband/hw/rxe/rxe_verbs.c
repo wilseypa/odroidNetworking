@@ -438,14 +438,11 @@ static struct ib_qp *rxe_create_qp(struct ib_pd *ibpd,
 	struct rxe_pd *pd = to_rpd(ibpd);
 	struct rxe_qp *qp;
 
-        pr_warn("In rxe_create_qp; init->qp_type == %xh\n", init->qp_type);
 	err = rxe_qp_chk_init(rxe, init);
-        pr_warn("init->qp_type == %xh\n", init->qp_type);
 	if (err)
 		goto err1;
 
 	qp = rxe_alloc(&rxe->qp_pool);
-        pr_warn("qp == %p\n", qp);
 	if (!qp) {
 		err = -ENOMEM;
 		goto err1;
@@ -548,8 +545,6 @@ static int init_send_wqe(struct rxe_qp *qp, struct ib_send_wr *ibwr,
 	u8 *p;
 
 	memcpy(&wqe->ibwr, ibwr, sizeof(wqe->ibwr));
-
-        pr_warn("qp_type in init_send_wqe is %xh and qp isat %p\n", qp_type(qp), qp);
 
 	if (qp_type(qp) == IB_QPT_UD
 	    || qp_type(qp) == IB_QPT_SMI
@@ -909,13 +904,13 @@ static struct ib_mr *rxe_reg_user_mr(struct ib_pd *ibpd,
 				     u64 iova,
 				     int access, struct ib_udata *udata)
 {
-  pr_warn("In rxe_reg_user_mr\n");
 	int err;
 	struct rxe_dev *rxe = to_rdev(ibpd->device);
 	struct rxe_pd *pd = to_rpd(ibpd);
 	struct rxe_mem *mr;
 
 	mr = rxe_alloc(&rxe->mr_pool);
+	pr_warn("mr == %p\n", mr);
 	if (!mr) {
 		err = -ENOMEM;
 		goto err2;
@@ -953,7 +948,6 @@ static int rxe_dereg_mr(struct ib_mr *ibmr)
 
 static struct ib_mr *rxe_alloc_fast_reg_mr(struct ib_pd *ibpd, int max_pages)
 {
-  pr_warn("In rxe_alloc_fast_reg_mr\n");
 	struct rxe_dev *rxe = to_rdev(ibpd->device);
 	struct rxe_pd *pd = to_rpd(ibpd);
 	struct rxe_mem *mr;

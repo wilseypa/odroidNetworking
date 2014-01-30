@@ -28,6 +28,9 @@
 #include <asm/dma.h>	/* isa_dma_bridge_buggy */
 #include "pci.h"
 
+#define PCIBIOS_MIN_IO 0
+#define PCIBIOS_MIN_MEM 0
+
 /*
  * This quirk function disables memory decoding and releases memory resources
  * of the device specified by kernel's boot parameter 'pci=resource_alignment='.

@@ -1,30 +1,46 @@
-/* linux/arch/arm/mach-exynos4/include/mach/uncompress.h
+/*
+ *  arch/arm/mach-versatile/include/mach/uncompress.h
  *
- * Copyright (c) 2010-2011 Samsung Electronics Co., Ltd.
- *		http://www.samsung.com
- *
- * EXYNOS4 - uncompress code
+ *  Copyright (C) 2003 ARM Limited
  *
  * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
-*/
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ */
+#define AMBA_UART_DR	(*(volatile unsigned char *)0x101F1000)
+#define AMBA_UART_LCRH	(*(volatile unsigned char *)0x101F102C)
+#define AMBA_UART_CR	(*(volatile unsigned char *)0x101F1030)
+#define AMBA_UART_FR	(*(volatile unsigned char *)0x101F1018)
 
-#ifndef __ASM_ARCH_UNCOMPRESS_H
-#define __ASM_ARCH_UNCOMPRESS_H __FILE__
-
-#include <mach/map.h>
-#include <plat/uncompress.h>
-
-static void arch_detect_cpu(void)
+/*
+ * This does not append a newline
+ */
+static inline void putc(int c)
 {
-	/* we do not need to do any cpu detection here at the moment. */
+	while (AMBA_UART_FR & (1 << 5))
+		barrier();
 
-	/*
-	 * For preventing FIFO overrun or infinite loop of UART console,
-	 * fifo_max should be the minimum fifo size of all of the UART channels
-	 */
-	fifo_mask = S5PV210_UFSTAT_TXMASK;
-	fifo_max = 15 << S5PV210_UFSTAT_TXSHIFT;
+	AMBA_UART_DR = c;
 }
-#endif /* __ASM_ARCH_UNCOMPRESS_H */
+
+static inline void flush(void)
+{
+	while (AMBA_UART_FR & (1 << 3))
+		barrier();
+}
+
+/*
+ * nothing to do
+ */
+#define arch_decomp_setup()
+#define arch_decomp_wdog()
