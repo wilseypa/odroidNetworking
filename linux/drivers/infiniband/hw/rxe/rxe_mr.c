@@ -280,7 +280,7 @@ int rxe_mem_init_user(struct rxe_dev *rxe, struct rxe_pd *pd, u64 start,
 
 		list_for_each_entry(chunk, &umem->chunk_list, list) {
 			for (i = 0; i < chunk->nents; i++) {
-			  vaddr = kmap(sg_page(&chunk->page_list[i]));
+			  vaddr = page_address(sg_page(&chunk->page_list[i]));
 				if (!vaddr) {
 					pr_warn("null vaddr\n");
 					/* dump_stack(); */
@@ -298,7 +298,6 @@ int rxe_mem_init_user(struct rxe_dev *rxe, struct rxe_pd *pd, u64 start,
 					buf = map[0]->buf;
 					num_buf = 0;
 				}
-				kunmap(sg_page(&chunk->page_list[i]));
 			}
 		}
 	}
