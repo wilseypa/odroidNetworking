@@ -938,21 +938,7 @@ err2:
 
 static int rxe_dereg_mr(struct ib_mr *ibmr)
 {
-        int i;
 	struct rxe_mem *mr = to_rmr(ibmr);
-
-	/* Need to unmap high memory pages */
-	struct ib_umem* umem = mr->umem;
-	struct ib_umem_chunk* chunk;
-	list_for_each_entry(chunk, &umem->chunk_list, list) {
-	  for (i = 0; i < chunk->nents; i++) {
-	    struct page *current_page = sg_page(&chunk->page_list[i]);
-	    if (current_page) {
-	      kunmap(current_page);
-	    }
-	  }
-	}
-	    
 
 	mr->state = RXE_MEM_STATE_ZOMBIE;
 	rxe_drop_ref(mr->pd);
