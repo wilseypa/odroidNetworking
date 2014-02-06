@@ -298,6 +298,7 @@ int rxe_mem_init_user(struct rxe_dev *rxe, struct rxe_pd *pd, u64 start,
 					buf = map[0]->buf;
 					num_buf = 0;
 				}
+				kunmap(sg_page(&chunk->page_list[i]));
 			}
 		}
 	}
