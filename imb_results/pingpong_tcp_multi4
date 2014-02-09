@@ -1,0 +1,114 @@
+ benchmarks to run pingpong 
+#---------------------------------------------------
+#    Intel (R) MPI Benchmark Suite V3.2.4, MPI-1 part    
+#---------------------------------------------------
+# Date                  : Sun Feb  9 09:55:28 2014
+# Machine               : armv7l
+# System                : Linux
+# Release               : 3.0.90
+# Version               : #19 SMP Fri Feb 7 06:22:09 CET 2014
+# MPI Version           : 2.1
+# MPI Thread Environment: 
+
+# New default behavior from Version 3.2 on:
+
+# the number of iterations per message size is cut down 
+# dynamically when a certain run time (per message size sample) 
+# is expected to be exceeded. Time limit is defined by variable 
+# "SECS_PER_SAMPLE" (=> IMB_settings.h) 
+# or through the flag => -time 
+  
+
+
+# Calling sequence was: 
+
+# IMB-MPI1 -multi 1 pingpong
+
+# Minimum message length in bytes:   0
+# Maximum message length in bytes:   4194304
+#
+# MPI_Datatype                   :   MPI_BYTE 
+# MPI_Datatype for reductions    :   MPI_FLOAT
+# MPI_Op                         :   MPI_SUM  
+#
+#
+
+# List of Benchmarks to run:
+
+# (Multi-)PingPong
+
+#----------------------------------------------------------------
+# Benchmarking Multi-PingPong 
+# ( 2 groups of 2 processes each running simultaneous ) 
+# Group  0:     0    1
+# 
+# Group  1:     2    3
+# 
+#----------------------------------------------------------------
+        Group       #bytes #repetitions      t[usec]   Mbytes/sec
+
+            0            0         1000       457.07         0.00
+            1            0         1000       457.06         0.00
+
+            0            1         1000       456.74         0.00
+            1            1         1000       456.79         0.00
+
+            0            2         1000       458.04         0.00
+            1            2         1000       458.99         0.00
+
+            0            4         1000       458.67         0.01
+            1            4         1000       457.36         0.01
+
+            0            8         1000       461.67         0.02
+            1            8         1000       461.30         0.02
+
+            0           16         1000       478.67         0.03
+            1           16         1000       478.87         0.03
+
+            0           32         1000       497.17         0.06
+            1           32         1000       495.86         0.06
+
+            0           64         1000       513.48         0.12
+            1           64         1000       513.05         0.12
+
+            0          128         1000       547.68         0.22
+            1          128         1000       547.42         0.22
+
+            0          256         1000       564.61         0.43
+            1          256         1000       564.55         0.43
+
+            0          512         1000       679.80         0.72
+            1          512         1000       684.48         0.71
+
+            0         1024         1000       810.61         1.20
+            1         1024         1000       812.32         1.20
+
+            0         2048         1000      1057.84         1.85
+            1         2048         1000      1061.97         1.84
+
+            0         4096         1000      1080.75         3.61
+            1         4096         1000      1080.24         3.62
+
+            0         8192         1000      2129.86         3.67
+            1         8192         1000      2154.78         3.63
+
+            0        16384         1000      2243.17         6.97
+            1        16384         1000      2250.80         6.94
+
+            0        32768         1000      3724.60         8.39
+            1        32768         1000      3726.36         8.39
+
+            0        65536          618     11986.34         5.21
+            1        65536          618     11928.35         5.24
+
+            0       131072          216     13677.40         9.14
+            1       131072          216     13634.29         9.17
+
+            0       262144          109     46262.23         5.40
+            1       262144          109     46262.19         5.40
+
+            0       524288           56     89442.64         5.59
+            1       524288           56     91019.17         5.49
+
+            0      1048576           28    179114.16         5.58
+            1      1048576           28    176097.74         5.68
