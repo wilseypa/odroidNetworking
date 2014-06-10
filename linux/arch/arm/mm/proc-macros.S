@@ -91,8 +91,9 @@
 #if L_PTE_SHARED != PTE_EXT_SHARED
 #error PTE shared bit mismatch
 #endif
-#if (L_PTE_XN+L_PTE_USER+L_PTE_RDONLY+L_PTE_DIRTY+L_PTE_YOUNG+\
-     L_PTE_FILE+L_PTE_PRESENT) > L_PTE_SHARED
+#if !defined (CONFIG_ARM_LPAE) && \
+	(L_PTE_XN+L_PTE_USER+L_PTE_RDONLY+L_PTE_DIRTY+L_PTE_YOUNG+\
+	 L_PTE_FILE+L_PTE_PRESENT) > L_PTE_SHARED
 #error Invalid Linux PTE bit settings
 #endif
 #endif	/* CONFIG_MMU */
@@ -276,8 +277,13 @@ ENTRY(\name\()_processor_functions)
 
 	.if \suspend
 	.word	cpu_\name\()_suspend_size
+#ifdef CONFIG_PM_SLEEP
 	.word	cpu_\name\()_do_suspend
 	.word	cpu_\name\()_do_resume
+#else
+	.word	0
+	.word	0
+#endif
 	.else
 	.word	0
 	.word	0
@@ -287,12 +293,17 @@ ENTRY(\name\()_processor_functions)
 	.size	\name\()_processor_functions, . - \name\()_processor_functions
 .endm
 
-.macro define_cache_functions name:req
+.macro define_cache_functions name:req, cachelevel=0
 	.align 2
 	.type	\name\()_cache_fns, #object
 ENTRY(\name\()_cache_fns)
 	.long	\name\()_flush_icache_all
 	.long	\name\()_flush_kern_cache_all
+	.if \cachelevel
+	.long	\name\()_flush_kern_dcache_level
+	.else
+	.long	\name\()_flush_kern_cache_all
+	.endif
 	.long	\name\()_flush_user_cache_all
 	.long	\name\()_flush_user_cache_range
 	.long	\name\()_coherent_kern_range

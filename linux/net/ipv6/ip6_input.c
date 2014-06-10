@@ -111,6 +111,35 @@ int ipv6_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt
 	    ipv6_addr_loopback(&hdr->daddr))
 		goto err;
 
+	/* RFC4291 Errata ID: 3480
+	 * Interface-Local scope spans only a single interface on a
+	 * node and is useful only for loopback transmission of
+	 * multicast.  Packets with interface-local scope received
+	 * from another node must be discarded.
+	 */
+	if (!(skb->pkt_type == PACKET_LOOPBACK ||
+	      dev->flags & IFF_LOOPBACK) &&
+	    ipv6_addr_is_multicast(&hdr->daddr) &&
+	    IPV6_ADDR_MC_SCOPE(&hdr->daddr) == 1)
+		goto err;
+
+	/* RFC4291 2.7
+	 * Nodes must not originate a packet to a multicast address whose scope
+	 * field contains the reserved value 0; if such a packet is received, it
+	 * must be silently dropped.
+	 */
+	if (ipv6_addr_is_multicast(&hdr->daddr) &&
+	    IPV6_ADDR_MC_SCOPE(&hdr->daddr) == 0)
+		goto err;
+
+	/*
+	 * RFC4291 2.7
+	 * Multicast addresses must not be used as source addresses in IPv6
+	 * packets or appear in any Routing header.
+	 */
+	if (ipv6_addr_is_multicast(&hdr->saddr))
+		goto err;
+
 	skb->transport_header = skb->network_header + sizeof(*hdr);
 	IP6CB(skb)->nhoff = offsetof(struct ipv6hdr, nexthdr);
 
@@ -273,6 +302,7 @@ int ip6_mc_input(struct sk_buff *skb)
 			u8 *ptr = skb_network_header(skb) + opt->ra;
 			struct icmp6hdr *icmp6;
 			u8 nexthdr = hdr->nexthdr;
+			__be16 frag_off;
 			int offset;
 
 			/* Check if the value of Router Alert
@@ -286,7 +316,7 @@ int ip6_mc_input(struct sk_buff *skb)
 					goto out;
 				}
 				offset = ipv6_skip_exthdr(skb, sizeof(*hdr),
-							  &nexthdr);
+							  &nexthdr, &frag_off);
 				if (offset < 0)
 					goto out;
 

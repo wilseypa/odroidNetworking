@@ -17,7 +17,6 @@
 #include <linux/module.h>
 #include <linux/notifier.h>
 #include <linux/smp.h>
-#include <linux/sysdev.h>
 
 #include "tick-internal.h"
 
@@ -31,6 +30,54 @@ static RAW_NOTIFIER_HEAD(clockevents_chain);
 /* Protection for the above */
 static DEFINE_RAW_SPINLOCK(clockevents_lock);
 
+static u64 cev_delta2ns(unsigned long latch, struct clock_event_device *evt,
+			bool ismax)
+{
+	u64 clc = (u64) latch << evt->shift;
+	u64 rnd;
+
+	if (unlikely(!evt->mult)) {
+		evt->mult = 1;
+		WARN_ON(1);
+	}
+	rnd = (u64) evt->mult - 1;
+
+	/*
+	 * Upper bound sanity check. If the backwards conversion is
+	 * not equal latch, we know that the above shift overflowed.
+	 */
+	if ((clc >> evt->shift) != (u64)latch)
+		clc = ~0ULL;
+
+	/*
+	 * Scaled math oddities:
+	 *
+	 * For mult <= (1 << shift) we can safely add mult - 1 to
+	 * prevent integer rounding loss. So the backwards conversion
+	 * from nsec to device ticks will be correct.
+	 *
+	 * For mult > (1 << shift), i.e. device frequency is > 1GHz we
+	 * need to be careful. Adding mult - 1 will result in a value
+	 * which when converted back to device ticks can be larger
+	 * than latch by up to (mult - 1) >> shift. For the min_delta
+	 * calculation we still want to apply this in order to stay
+	 * above the minimum device ticks limit. For the upper limit
+	 * we would end up with a latch value larger than the upper
+	 * limit of the device, so we omit the add to stay below the
+	 * device upper boundary.
+	 *
+	 * Also omit the add if it would overflow the u64 boundary.
+	 */
+	if ((~0ULL - clc > rnd) &&
+	    (!ismax || evt->mult <= (1U << evt->shift)))
+		clc += rnd;
+
+	do_div(clc, evt->mult);
+
+	/* Deltas less than 1usec are pointless noise */
+	return clc > 1000 ? clc : 1000;
+}
+
 /**
  * clockevents_delta2ns - Convert a latch value (device ticks) to nanoseconds
  * @latch:	value to convert
@@ -40,20 +87,7 @@ static DEFINE_RAW_SPINLOCK(clockevents_lock);
  */
 u64 clockevent_delta2ns(unsigned long latch, struct clock_event_device *evt)
 {
-	u64 clc = (u64) latch << evt->shift;
-
-	if (unlikely(!evt->mult)) {
-		evt->mult = 1;
-		WARN_ON(1);
-	}
-
-	do_div(clc, evt->mult);
-	if (clc < 1000)
-		clc = 1000;
-	if (clc > KTIME_MAX)
-		clc = KTIME_MAX;
-
-	return clc;
+	return cev_delta2ns(latch, evt, false);
 }
 EXPORT_SYMBOL_GPL(clockevent_delta2ns);
 
@@ -94,42 +128,143 @@ void clockevents_shutdown(struct clock_event_device *dev)
 	dev->next_event.tv64 = KTIME_MAX;
 }
 
+#ifdef CONFIG_GENERIC_CLOCKEVENTS_MIN_ADJUST
+
+/* Limit min_delta to a jiffie */
+#define MIN_DELTA_LIMIT		(NSEC_PER_SEC / HZ)
+
+/**
+ * clockevents_increase_min_delta - raise minimum delta of a clock event device
+ * @dev:       device to increase the minimum delta
+ *
+ * Returns 0 on success, -ETIME when the minimum delta reached the limit.
+ */
+static int clockevents_increase_min_delta(struct clock_event_device *dev)
+{
+	/* Nothing to do if we already reached the limit */
+	if (dev->min_delta_ns >= MIN_DELTA_LIMIT) {
+		printk(KERN_WARNING "CE: Reprogramming failure. Giving up\n");
+		dev->next_event.tv64 = KTIME_MAX;
+		return -ETIME;
+	}
+
+	if (dev->min_delta_ns < 5000)
+		dev->min_delta_ns = 5000;
+	else
+		dev->min_delta_ns += dev->min_delta_ns >> 1;
+
+	if (dev->min_delta_ns > MIN_DELTA_LIMIT)
+		dev->min_delta_ns = MIN_DELTA_LIMIT;
+
+	printk(KERN_WARNING "CE: %s increased min_delta_ns to %llu nsec\n",
+	       dev->name ? dev->name : "?",
+	       (unsigned long long) dev->min_delta_ns);
+	return 0;
+}
+
+/**
+ * clockevents_program_min_delta - Set clock event device to the minimum delay.
+ * @dev:	device to program
+ *
+ * Returns 0 on success, -ETIME when the retry loop failed.
+ */
+static int clockevents_program_min_delta(struct clock_event_device *dev)
+{
+	unsigned long long clc;
+	int64_t delta;
+	int i;
+
+	for (i = 0;;) {
+		delta = dev->min_delta_ns;
+		dev->next_event = ktime_add_ns(ktime_get(), delta);
+
+		if (dev->mode == CLOCK_EVT_MODE_SHUTDOWN)
+			return 0;
+
+		dev->retries++;
+		clc = ((unsigned long long) delta * dev->mult) >> dev->shift;
+		if (dev->set_next_event((unsigned long) clc, dev) == 0)
+			return 0;
+
+		if (++i > 2) {
+			/*
+			 * We tried 3 times to program the device with the
+			 * given min_delta_ns. Try to increase the minimum
+			 * delta, if that fails as well get out of here.
+			 */
+			if (clockevents_increase_min_delta(dev))
+				return -ETIME;
+			i = 0;
+		}
+	}
+}
+
+#else  /* CONFIG_GENERIC_CLOCKEVENTS_MIN_ADJUST */
+
+/**
+ * clockevents_program_min_delta - Set clock event device to the minimum delay.
+ * @dev:	device to program
+ *
+ * Returns 0 on success, -ETIME when the retry loop failed.
+ */
+static int clockevents_program_min_delta(struct clock_event_device *dev)
+{
+	unsigned long long clc;
+	int64_t delta;
+
+	delta = dev->min_delta_ns;
+	dev->next_event = ktime_add_ns(ktime_get(), delta);
+
+	if (dev->mode == CLOCK_EVT_MODE_SHUTDOWN)
+		return 0;
+
+	dev->retries++;
+	clc = ((unsigned long long) delta * dev->mult) >> dev->shift;
+	return dev->set_next_event((unsigned long) clc, dev);
+}
+
+#endif /* CONFIG_GENERIC_CLOCKEVENTS_MIN_ADJUST */
+
 /**
  * clockevents_program_event - Reprogram the clock event device.
+ * @dev:	device to program
  * @expires:	absolute expiry time (monotonic clock)
+ * @force:	program minimum delay if expires can not be set
  *
  * Returns 0 on success, -ETIME when the event is in the past.
  */
 int clockevents_program_event(struct clock_event_device *dev, ktime_t expires,
-			      ktime_t now)
+			      bool force)
 {
 	unsigned long long clc;
 	int64_t delta;
+	int rc;
 
 	if (unlikely(expires.tv64 < 0)) {
 		WARN_ON_ONCE(1);
 		return -ETIME;
 	}
 
-	delta = ktime_to_ns(ktime_sub(expires, now));
-
-	if (delta <= 0)
-		return -ETIME;
-
 	dev->next_event = expires;
 
 	if (dev->mode == CLOCK_EVT_MODE_SHUTDOWN)
 		return 0;
 
-	if (delta > dev->max_delta_ns)
-		delta = dev->max_delta_ns;
-	if (delta < dev->min_delta_ns)
-		delta = dev->min_delta_ns;
+	/* Shortcut for clockevent devices that can deal with ktime. */
+	if (dev->features & CLOCK_EVT_FEAT_KTIME)
+		return dev->set_next_ktime(expires, dev);
 
-	clc = delta * dev->mult;
-	clc >>= dev->shift;
+	delta = ktime_to_ns(ktime_sub(expires, ktime_get()));
+	if (delta <= 0)
+		return force ? clockevents_program_min_delta(dev) : -ETIME;
 
-	return dev->set_next_event((unsigned long) clc, dev);
+	delta = min(delta, (int64_t) dev->max_delta_ns);
+	delta = max(delta, (int64_t) dev->min_delta_ns);
+
+	clc = ((unsigned long long) delta * dev->mult) >> dev->shift;
+	rc = dev->set_next_event((unsigned long) clc, dev);
+
+	return (rc && force) ? clockevents_program_min_delta(dev) : rc;
 }
 
 /**
@@ -218,8 +353,8 @@ static void clockevents_config(struct clock_event_device *dev,
 		sec = 600;
 
 	clockevents_calc_mult_shift(dev, freq, sec);
-	dev->min_delta_ns = clockevent_delta2ns(dev->min_delta_ticks, dev);
-	dev->max_delta_ns = clockevent_delta2ns(dev->max_delta_ticks, dev);
+	dev->min_delta_ns = cev_delta2ns(dev->min_delta_ticks, dev, false);
+	dev->max_delta_ns = cev_delta2ns(dev->max_delta_ticks, dev, true);
 }
 
 /**
@@ -258,7 +393,7 @@ int clockevents_update_freq(struct clock_event_device *dev, u32 freq)
 	if (dev->mode != CLOCK_EVT_MODE_ONESHOT)
 		return 0;
 
-	return clockevents_program_event(dev, dev->next_event, ktime_get());
+	return clockevents_program_event(dev, dev->next_event, false);
 }
 
 /*

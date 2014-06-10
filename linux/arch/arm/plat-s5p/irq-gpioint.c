@@ -22,10 +22,8 @@
 #include <mach/map.h>
 #include <plat/gpio-core.h>
 #include <plat/gpio-cfg.h>
-#include <plat/cpu.h>
 
 #include <asm/mach/irq.h>
-#include <mach/regs-gpio.h>
 
 #define GPIO_BASE(chip)		(((unsigned long)(chip)->base) & 0xFFFFF000u)
 
@@ -39,35 +37,34 @@ struct s5p_gpioint_bank {
 	int			start;
 	int			nr_groups;
 	int			irq;
-	struct s3c_gpio_chip	**chips;
+	struct samsung_gpio_chip	**chips;
 	void			(*handler)(unsigned int, struct irq_desc *);
 };
 
-LIST_HEAD(banks);
+static LIST_HEAD(banks);
 
 static int s5p_gpioint_set_type(struct irq_data *d, unsigned int type)
 {
 	struct irq_chip_generic *gc = irq_data_get_irq_chip_data(d);
 	struct irq_chip_type *ct = gc->chip_types;
+	unsigned int type_s5p = 0;
 	unsigned int shift = (d->irq - gc->irq_base) << 2;
-	struct irq_desc *desc = irq_to_desc(d->irq);
-	struct s3c_gpio_chip *chip = gc->private;
 
 	switch (type) {
 	case IRQ_TYPE_EDGE_RISING:
-		type = S5P_IRQ_TYPE_EDGE_RISING;
+		type_s5p = S5P_IRQ_TYPE_EDGE_RISING;
 		break;
 	case IRQ_TYPE_EDGE_FALLING:
-		type = S5P_IRQ_TYPE_EDGE_FALLING;
+		type_s5p = S5P_IRQ_TYPE_EDGE_FALLING;
 		break;
 	case IRQ_TYPE_EDGE_BOTH:
-		type = S5P_IRQ_TYPE_EDGE_BOTH;
+		type_s5p = S5P_IRQ_TYPE_EDGE_BOTH;
 		break;
 	case IRQ_TYPE_LEVEL_HIGH:
-		type = S5P_IRQ_TYPE_LEVEL_HIGH;
+		type_s5p = S5P_IRQ_TYPE_LEVEL_HIGH;
 		break;
 	case IRQ_TYPE_LEVEL_LOW:
-		type = S5P_IRQ_TYPE_LEVEL_LOW;
+		type_s5p = S5P_IRQ_TYPE_LEVEL_LOW;
 		break;
 	case IRQ_TYPE_NONE:
 	default:
@@ -76,18 +73,13 @@ static int s5p_gpioint_set_type(struct irq_data *d, unsigned int type)
 	}
 
 	gc->type_cache &= ~(0x7 << shift);
-	gc->type_cache |= type << shift;
+	gc->type_cache |= type_s5p << shift;
 	writel(gc->type_cache, gc->reg_base + ct->regs.type);
 
-	pr_info("%s irq:%d is at %s(%d)\n", __func__, d->irq, chip->chip.label,
-		(d->irq - chip->irq_base));
-
-	s3c_gpio_cfgpin(chip->chip.base + (d->irq - chip->irq_base), EINT_MODE);
-
 	if (type & IRQ_TYPE_EDGE_BOTH)
-		desc->handle_irq = handle_edge_irq;
+		__irq_set_handler_locked(d->irq, handle_edge_irq);
 	else
-		desc->handle_irq = handle_level_irq;
+		__irq_set_handler_locked(d->irq, handle_level_irq);
 
 	return 0;
 }
@@ -95,25 +87,24 @@ static int s5p_gpioint_set_type(struct irq_data *d, unsigned int type)
 static void s5p_gpioint_handler(unsigned int irq, struct irq_desc *desc)
 {
 	struct s5p_gpioint_bank *bank = irq_get_handler_data(irq);
-	int group, eint_offset;
+	int group, pend_offset, mask_offset;
 	unsigned int pend, mask;
 
 	struct irq_chip *chip = irq_get_chip(irq);
 	chained_irq_enter(chip, desc);
 
 	for (group = 0; group < bank->nr_groups; group++) {
-		struct s3c_gpio_chip *chip = bank->chips[group];
+		struct samsung_gpio_chip *chip = bank->chips[group];
 		if (!chip)
 			continue;
-		if (soc_is_exynos4210() || soc_is_exynos4212() || soc_is_exynos4412()
-			|| soc_is_exynos5250())
-			eint_offset =  chip->eint_offset;
-		else
-			eint_offset = REG_OFFSET(group);
-		pend = __raw_readl(GPIO_BASE(chip) + PEND_OFFSET + eint_offset);
+
+		pend_offset = REG_OFFSET(group);
+		pend = __raw_readl(GPIO_BASE(chip) + PEND_OFFSET + pend_offset);
 		if (!pend)
 			continue;
-		mask = __raw_readl(GPIO_BASE(chip) + MASK_OFFSET + eint_offset);
+
+		mask_offset = REG_OFFSET(group);
+		mask = __raw_readl(GPIO_BASE(chip) + MASK_OFFSET + mask_offset);
 		pend &= ~mask;
 
 		while (pend) {
@@ -126,7 +117,15 @@ static void s5p_gpioint_handler(unsigned int irq, struct irq_desc *desc)
 	chained_irq_exit(chip, desc);
 }
 
-static __init int s5p_gpioint_add(struct s3c_gpio_chip *chip)
+static void s5p_gpioint_resume(struct irq_data *d)
+{
+	struct irq_chip_generic *gc = irq_data_get_irq_chip_data(d);
+	struct irq_chip_type *ct = gc->chip_types;
+
+	writel(gc->type_cache, gc->reg_base + ct->regs.type);
+}
+
+static __init int s5p_gpioint_add(struct samsung_gpio_chip *chip)
 {
 	static int used_gpioint_groups = 0;
 	int group = chip->group;
@@ -147,7 +146,7 @@ static __init int s5p_gpioint_add(struct s3c_gpio_chip *chip)
 		return -EINVAL;
 
 	if (!bank->handler) {
-		bank->chips = kzalloc(sizeof(struct s3c_gpio_chip *) *
+		bank->chips = kzalloc(sizeof(struct samsung_gpio_chip *) *
 				      bank->nr_groups, GFP_KERNEL);
 		if (!bank->chips)
 			return -ENOMEM;
@@ -174,24 +173,15 @@ static __init int s5p_gpioint_add(struct s3c_gpio_chip *chip)
 				    handle_level_irq);
 	if (!gc)
 		return -ENOMEM;
-
-	gc->private = chip;
-
 	ct = gc->chip_types;
 	ct->chip.irq_ack = irq_gc_ack_set_bit;
 	ct->chip.irq_mask = irq_gc_mask_set_bit;
 	ct->chip.irq_unmask = irq_gc_mask_clr_bit;
 	ct->chip.irq_set_type = s5p_gpioint_set_type;
-	if (soc_is_exynos4210() || soc_is_exynos4212() || soc_is_exynos4412()
-		|| soc_is_exynos5250()) {
-		ct->regs.ack = PEND_OFFSET + chip->eint_offset;
-		ct->regs.mask = MASK_OFFSET + chip->eint_offset;
-		ct->regs.type = CON_OFFSET + chip->eint_offset;
-	} else {
-		ct->regs.ack = PEND_OFFSET + REG_OFFSET(chip->group);
-		ct->regs.mask = MASK_OFFSET + REG_OFFSET(chip->group);
-		ct->regs.type = CON_OFFSET + REG_OFFSET(chip->group);
-	}
+	ct->chip.irq_resume = s5p_gpioint_resume;
+	ct->regs.ack = PEND_OFFSET + REG_OFFSET(group - bank->start);
+	ct->regs.mask = MASK_OFFSET + REG_OFFSET(group - bank->start);
+	ct->regs.type = CON_OFFSET + REG_OFFSET(group - bank->start);
 	irq_setup_generic_chip(gc, IRQ_MSK(chip->chip.ngpio),
 			       IRQ_GC_INIT_MASK_CACHE,
 			       IRQ_NOREQUEST | IRQ_NOPROBE, 0);
@@ -200,7 +190,7 @@ static __init int s5p_gpioint_add(struct s3c_gpio_chip *chip)
 
 int __init s5p_register_gpio_interrupt(int pin)
 {
-	struct s3c_gpio_chip *my_chip = s3c_gpiolib_getchip(pin);
+	struct samsung_gpio_chip *my_chip = samsung_gpiolib_getchip(pin);
 	int offset, group;
 	int ret;
 
@@ -212,7 +202,7 @@ int __init s5p_register_gpio_interrupt(int pin)
 
 	/* check if the group has been already registered */
 	if (my_chip->irq_base)
-		return my_chip->irq_base + offset;
+		goto success;
 
 	/* register gpio group */
 	ret = s5p_gpioint_add(my_chip);
@@ -220,9 +210,13 @@ int __init s5p_register_gpio_interrupt(int pin)
 		my_chip->chip.to_irq = samsung_gpiolib_to_irq;
 		printk(KERN_INFO "Registered interrupt support for gpio group %d.\n",
 		       group);
-		return my_chip->irq_base + offset;
+		goto success;
 	}
 	return ret;
+success:
+	my_chip->bitmap_gpio_int |= BIT(offset);
+
+	return my_chip->irq_base + offset;
 }
 
 int __init s5p_register_gpioint_bank(int chain_irq, int start, int nr_groups)

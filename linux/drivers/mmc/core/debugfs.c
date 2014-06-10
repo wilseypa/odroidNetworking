@@ -7,17 +7,28 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
+#include <linux/moduleparam.h>
+#include <linux/export.h>
 #include <linux/debugfs.h>
 #include <linux/fs.h>
 #include <linux/seq_file.h>
 #include <linux/slab.h>
 #include <linux/stat.h>
+#include <linux/fault-inject.h>
 
 #include <linux/mmc/card.h>
 #include <linux/mmc/host.h>
 
 #include "core.h"
 #include "mmc_ops.h"
+
+#ifdef CONFIG_FAIL_MMC_REQUEST
+
+static DECLARE_FAULT_ATTR(fail_default_attr);
+static char *fail_request;
+module_param(fail_request, charp, 0);
+
+#endif /* CONFIG_FAIL_MMC_REQUEST */
 
 /* The debugfs functions are optimized away when CONFIG_DEBUG_FS isn't set. */
 static int mmc_ios_show(struct seq_file *s, void *data)
@@ -46,6 +57,8 @@ static int mmc_ios_show(struct seq_file *s, void *data)
 	const char *str;
 
 	seq_printf(s, "clock:\t\t%u Hz\n", ios->clock);
+	if (host->actual_clock)
+		seq_printf(s, "actual clock:\t%u Hz\n", host->actual_clock);
 	seq_printf(s, "vdd:\t\t%u ", ios->vdd);
 	if ((1 << ios->vdd) & MMC_VDD_165_195)
 		seq_printf(s, "(1.65 - 1.95 V)\n");
@@ -200,6 +213,15 @@ void mmc_add_host_debugfs(struct mmc_host *host)
 				root, &host->clk_delay))
 		goto err_node;
 #endif
+#ifdef CONFIG_FAIL_MMC_REQUEST
+	if (fail_request)
+		setup_fault_attr(&fail_default_attr, fail_request);
+	host->fail_mmc_request = fail_default_attr;
+	if (IS_ERR(fault_create_debugfs_attr("fail_mmc_request",
+					     root,
+					     &host->fail_mmc_request)))
+		goto err_node;
+#endif
 	return;
 
 err_node:
@@ -222,7 +244,7 @@ static int mmc_dbg_card_status_get(void *data, u64 *val)
 
 	mmc_claim_host(card->host);
 
-	ret = mmc_send_status(data, &status);
+	ret = mmc_send_status(data, &status, 0);
 	if (!ret)
 		*val = status;
 

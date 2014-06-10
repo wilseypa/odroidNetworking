@@ -7,6 +7,7 @@
 #include <linux/backing-dev.h>
 #include <linux/completion.h>
 #include <linux/exportfs.h>
+#include <linux/bug.h>
 #include <linux/fs.h>
 #include <linux/mempool.h>
 #include <linux/pagemap.h>
@@ -35,7 +36,7 @@
 #define CEPH_OPT_MYIP             (1<<2) /* specified my ip */
 #define CEPH_OPT_NOCRC            (1<<3) /* no data crc on writes */
 
-#define CEPH_OPT_DEFAULT   (0);
+#define CEPH_OPT_DEFAULT   (0)
 
 #define ceph_set_opt(client, opt) \
 	(client)->options->flags |= CEPH_OPT_##opt;
@@ -48,7 +49,6 @@ struct ceph_options {
 	struct ceph_entity_addr my_addr;
 	int mount_timeout;
 	int osd_idle_ttl;
-	int osd_timeout;
 	int osd_keepalive_timeout;
 
 	/*
@@ -68,7 +68,6 @@ struct ceph_options {
  * defaults
  */
 #define CEPH_MOUNT_TIMEOUT_DEFAULT  60
-#define CEPH_OSD_TIMEOUT_DEFAULT    60  /* seconds */
 #define CEPH_OSD_KEEPALIVE_DEFAULT  5
 #define CEPH_OSD_IDLE_TTL_DEFAULT    60
 
@@ -131,7 +130,7 @@ struct ceph_client {
 	u32 supported_features;
 	u32 required_features;
 
-	struct ceph_messenger *msgr;   /* messenger instance */
+	struct ceph_messenger msgr;   /* messenger instance */
 	struct ceph_mon_client monc;
 	struct ceph_osd_client osdc;
 
@@ -207,7 +206,7 @@ extern struct kmem_cache *ceph_cap_cachep;
 extern struct kmem_cache *ceph_dentry_cachep;
 extern struct kmem_cache *ceph_file_cachep;
 
-extern int ceph_parse_options(struct ceph_options **popt, char *options,
+extern struct ceph_options *ceph_parse_options(char *options,
 			      const char *dev_name, const char *dev_name_end,
 			      int (*parse_extra_token)(char *c, void *private),
 			      void *private);
@@ -215,7 +214,9 @@ extern void ceph_destroy_options(struct ceph_options *opt);
 extern int ceph_compare_options(struct ceph_options *new_opt,
 				struct ceph_client *client);
 extern struct ceph_client *ceph_create_client(struct ceph_options *opt,
-					      void *private);
+					      void *private,
+					      unsigned supported_features,
+					      unsigned required_features);
 extern u64 ceph_client_id(struct ceph_client *client);
 extern void ceph_destroy_client(struct ceph_client *client);
 extern int __ceph_open_session(struct ceph_client *client,

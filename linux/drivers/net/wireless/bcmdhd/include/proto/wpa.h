@@ -1,9 +1,9 @@
 /*
  * Fundamental types and constants relating to WPA
  *
- * Copyright (C) 1999-2011, Broadcom Corporation
+ * Copyright (C) 1999-2012, Broadcom Corporation
  * 
- *         Unless you and Broadcom execute a separate written software license
+ *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
  * under the terms of the GNU General Public License version 2 (the "GPL"),
  * available at http://www.broadcom.com/licenses/GPLv2.php, with the
@@ -21,9 +21,8 @@
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
  *
- * $Id: wpa.h 285437 2011-09-21 22:16:56Z $
+ * $Id: wpa.h 261155 2011-05-23 23:51:32Z $
  */
-
 
 #ifndef _proto_wpa_h_
 #define _proto_wpa_h_
@@ -145,6 +144,10 @@ typedef BWL_PRE_PACKED_STRUCT struct
 #define RSN_CAP_2_REPLAY_CNTRS		1
 #define RSN_CAP_4_REPLAY_CNTRS		2
 #define RSN_CAP_16_REPLAY_CNTRS		3
+#ifdef MFP
+#define RSN_CAP_MFPR			0x0040
+#define RSN_CAP_MFPC			0x0080
+#endif
 
 
 #define WPA_CAP_4_REPLAY_CNTRS		RSN_CAP_4_REPLAY_CNTRS
@@ -157,9 +160,11 @@ typedef BWL_PRE_PACKED_STRUCT struct
 
 
 #define WPA_CAP_LEN	RSN_CAP_LEN	
-#define WPA_PMKID_CNT_LEN	2	
+#define WPA_PMKID_CNT_LEN	2 	
 
 #define	WPA_CAP_WPA2_PREAUTH		RSN_CAP_PREAUTH
+
+#define WPA2_PMKID_COUNT_LEN	2
 
 
 

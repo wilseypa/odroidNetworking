@@ -15,62 +15,35 @@
 #include <linux/clk.h>
 #include <linux/err.h>
 #include <plat/clock.h>
+#include <plat/devs.h>
 #include <mach/regs-clock.h>
 #include <mach/map.h>
 #include <media/exynos_gscaler.h>
 
-int __init exynos5_gsc_set_parent_clock(const char *child, const char *parent)
+void __init exynos5_gsc_set_pdev_name(int id, char *name)
 {
-	struct clk *clk_parent;
-	struct clk *clk_child;
-
-	clk_child = clk_get(NULL, child);
-	if (IS_ERR(clk_child)) {
-		pr_err("failed to get %s clock.\n", child);
-		return PTR_ERR(clk_child);
+	switch (id) {
+	case 0:
+		exynos5_device_gsc0.name = name;
+		break;
+	case 1:
+		exynos5_device_gsc1.name = name;
+		break;
+	case 2:
+		exynos5_device_gsc2.name = name;
+		break;
+	case 3:
+		exynos5_device_gsc3.name = name;
+		break;
 	}
-
-	clk_parent = clk_get(NULL, parent);
-	if (IS_ERR(clk_parent)) {
-		clk_put(clk_child);
-		pr_err("failed to get %s clock.\n", parent);
-		return PTR_ERR(clk_parent);
-	}
-
-	if (clk_set_parent(clk_child, clk_parent)) {
-		pr_err("Unable to set parent %s of clock %s.\n",
-				clk_parent->name, clk_child->name);
-		clk_put(clk_child);
-		clk_put(clk_parent);
-		return PTR_ERR(clk_child);
-	}
-
-	clk_put(clk_child);
-	clk_put(clk_parent);
-
-	return 0;
 }
 
-int __init exynos5_gsc_set_clock_rate(const char *clk, unsigned long clk_rate)
+void __init exynos5_gsc_set_ip_ver(enum gsc_ip_version ver)
 {
-	struct clk *gsc_clk;
-
-	gsc_clk = clk_get(NULL, clk);
-	if (IS_ERR(gsc_clk)) {
-		pr_err("failed to get %s clock.\n", clk);
-		return PTR_ERR(gsc_clk);
+	exynos_gsc0_default_data.ip_ver = ver;
+	exynos_gsc1_default_data.ip_ver = ver;
+	if (soc_is_exynos5250() || soc_is_exynos5410()) {
+		exynos_gsc2_default_data.ip_ver = ver;
+		exynos_gsc3_default_data.ip_ver = ver;
 	}
-
-	if (!clk_rate)
-		clk_rate = 310000000UL;
-
-	if (clk_set_rate(gsc_clk, clk_rate)) {
-		pr_err("%s rate change failed: %lu\n", gsc_clk->name, clk_rate);
-		clk_put(gsc_clk);
-		return PTR_ERR(gsc_clk);
-	}
-
-	clk_put(gsc_clk);
-
-	return 0;
 }

@@ -12,6 +12,7 @@
 
 #include <linux/gpio.h>
 #include <linux/platform_device.h>
+#include <linux/slab.h>
 #include <linux/io.h>
 #include <linux/pwm_backlight.h>
 
@@ -19,13 +20,9 @@
 #include <plat/gpio-cfg.h>
 #include <plat/backlight.h>
 
-static int samsung_bl_init(struct device *dev)
+static int __init samsung_bl_init(struct samsung_bl_gpio_info *bl_gpio_info)
 {
 	int ret = 0;
-	struct platform_device *timer_dev =
-			container_of(dev->parent, struct platform_device, dev);
-	struct samsung_bl_gpio_info *bl_gpio_info =
-			timer_dev->dev.platform_data;
 
 	ret = gpio_request(bl_gpio_info->no, "Backlight");
 	if (ret) {
@@ -39,17 +36,6 @@ static int samsung_bl_init(struct device *dev)
 	return 0;
 }
 
-static void samsung_bl_exit(struct device *dev)
-{
-	struct platform_device *timer_dev =
-			container_of(dev->parent, struct platform_device, dev);
-	struct samsung_bl_gpio_info *bl_gpio_info =
-			timer_dev->dev.platform_data;
-
-	s3c_gpio_cfgpin(bl_gpio_info->no, S3C_GPIO_OUTPUT);
-	gpio_free(bl_gpio_info->no);
-}
-
 /* Initialize few important fields of platform_pwm_backlight_data
  * structure with default values. These fields can be overridden by
  * board-specific values sent from machine file.
@@ -59,19 +45,13 @@ static void samsung_bl_exit(struct device *dev)
  * for their specific boards
  */
 
-static struct platform_pwm_backlight_data samsung_dfl_bl_data = {
+static struct platform_pwm_backlight_data samsung_dfl_bl_data __initdata = {
 	.max_brightness = 255,
-#if defined(CONFIG_BOARD_ODROID_X)||defined(CONFIG_BOARD_ODROID_X2)||defined(CONFIG_BOARD_ODROID_U)||defined(CONFIG_BOARD_ODROID_U2)
 	.dft_brightness = 255,
-#else	
-	.dft_brightness = 128,
-#endif	
-	.pwm_period_ns  = 20972,
-	.init           = samsung_bl_init,
-	.exit           = samsung_bl_exit,
+	.pwm_period_ns  = 78770,
 };
 
-static struct platform_device samsung_dfl_bl_device = {
+static struct platform_device samsung_dfl_bl_device __initdata = {
 	.name		= "pwm-backlight",
 };
 
@@ -80,12 +60,16 @@ static struct platform_device samsung_dfl_bl_device = {
  * @gpio_info:	structure containing GPIO info for PWM timer
  * @bl_data:	structure containing Backlight control data
  */
-void samsung_bl_set(struct samsung_bl_gpio_info *gpio_info,
+void __init samsung_bl_set(struct samsung_bl_gpio_info *gpio_info,
 	struct platform_pwm_backlight_data *bl_data)
 {
 	int ret = 0;
 	struct platform_device *samsung_bl_device;
 	struct platform_pwm_backlight_data *samsung_bl_data;
+
+	ret = samsung_bl_init(gpio_info);
+	if (ret)
+		return;
 
 	samsung_bl_device = kmemdup(&samsung_dfl_bl_device,
 			sizeof(struct platform_device), GFP_KERNEL);
@@ -118,13 +102,12 @@ void samsung_bl_set(struct samsung_bl_gpio_info *gpio_info,
 		samsung_bl_data->init = bl_data->init;
 	if (bl_data->notify)
 		samsung_bl_data->notify = bl_data->notify;
+	if (bl_data->notify_after)
+		samsung_bl_data->notify_after = bl_data->notify_after;
 	if (bl_data->exit)
 		samsung_bl_data->exit = bl_data->exit;
 	if (bl_data->check_fb)
 		samsung_bl_data->check_fb = bl_data->check_fb;
-
-	/* Keep the GPIO info for future use */
-	s3c_device_timer[samsung_bl_data->pwm_id].dev.platform_data = gpio_info;
 
 	/* Register the specific PWM timer dev for Backlight control */
 	ret = platform_device_register(

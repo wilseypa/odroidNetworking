@@ -232,7 +232,7 @@ static void l2tp_ip_close(struct sock *sk, long timeout)
 {
 	write_lock_bh(&l2tp_ip_lock);
 	hlist_del_init(&sk->sk_bind_node);
-	hlist_del_init(&sk->sk_node);
+	sk_del_node_init(sk);
 	write_unlock_bh(&l2tp_ip_lock);
 	sk_common_release(sk);
 }
@@ -278,7 +278,8 @@ static int l2tp_ip_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 	    chk_addr_ret != RTN_MULTICAST && chk_addr_ret != RTN_BROADCAST)
 		goto out;
 
-	inet->inet_rcv_saddr = inet->inet_saddr = addr->l2tp_addr.s_addr;
+	if (addr->l2tp_addr.s_addr)
+		inet->inet_rcv_saddr = inet->inet_saddr = addr->l2tp_addr.s_addr;
 	if (chk_addr_ret == RTN_MULTICAST || chk_addr_ret == RTN_BROADCAST)
 		inet->inet_saddr = 0;  /* Use device */
 	sk_dst_reset(sk);
@@ -494,17 +495,15 @@ static int l2tp_ip_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *m
 	if (connected)
 		rt = (struct rtable *) __sk_dst_check(sk, 0);
 
+	rcu_read_lock();
 	if (rt == NULL) {
-		struct ip_options_rcu *inet_opt;
+		const struct ip_options_rcu *inet_opt;
 
-		rcu_read_lock();
 		inet_opt = rcu_dereference(inet->inet_opt);
 
 		/* Use correct destination address if we have options. */
 		if (inet_opt && inet_opt->opt.srr)
 			daddr = inet_opt->opt.faddr;
-
-		rcu_read_unlock();
 
 		/* If this fails, retransmit mechanism of transport layer will
 		 * keep trying until route appears or the connection times
@@ -517,12 +516,23 @@ static int l2tp_ip_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *m
 					   sk->sk_bound_dev_if);
 		if (IS_ERR(rt))
 			goto no_route;
-		sk_setup_caps(sk, &rt->dst);
+		if (connected) {
+			sk_setup_caps(sk, &rt->dst);
+		} else {
+			skb_dst_set(skb, &rt->dst);
+			goto xmit;
+		}
 	}
-	skb_dst_set(skb, dst_clone(&rt->dst));
 
+	/* We dont need to clone dst here, it is guaranteed to not disappear.
+	 *  __dev_xmit_skb() might force a refcount if needed.
+	 */
+	skb_dst_set_noref(skb, &rt->dst);
+
+xmit:
 	/* Queue the packet to IP for output */
 	rc = ip_queue_xmit(skb, &inet->cork.fl);
+	rcu_read_unlock();
 
 error:
 	/* Update stats */
@@ -539,6 +549,7 @@ out:
 	return rc;
 
 no_route:
+	rcu_read_unlock();
 	IP_INC_STATS(sock_net(sk), IPSTATS_MIB_OUTNOROUTES);
 	kfree_skb(skb);
 	rc = -EHOSTUNREACH;
@@ -557,9 +568,6 @@ static int l2tp_ip_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *m
 
 	if (flags & MSG_OOB)
 		goto out;
-
-	if (addr_len)
-		*addr_len = sizeof(*sin);
 
 	skb = skb_recv_datagram(sk, flags, noblock, &err);
 	if (!skb)
@@ -583,6 +591,7 @@ static int l2tp_ip_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *m
 		sin->sin_addr.s_addr = ip_hdr(skb)->saddr;
 		sin->sin_port = 0;
 		memset(&sin->sin_zero, 0, sizeof(sin->sin_zero));
+		*addr_len = sizeof(*sin);
 	}
 	if (inet->cmsg_flags)
 		ip_cmsg_recv(msg, skb);

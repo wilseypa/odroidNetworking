@@ -33,111 +33,71 @@
 #include <plat/dsim.h>
 #include <plat/mipi_dsi.h>
 
+static struct {
+    unsigned short  reg;    // Control register address
+    unsigned int    data;   // Register data value
+}   sInitCode[] = {
+    
+    // DSI Basic Parameters
+    {   0x013C, 0x00050006  },  // PPI_TX_RX_TA BTA Parameters
+    {   0x0114, 0x00000004  },  // PPI_LPTXTIMCNT
+    {   0x0164, 0x00000005  },  // PPI_D0S_CLRSIPOCOUNT
+    {   0x0168, 0x00000005  },  // PPI_D1S_CLRSIPOCOUNT
+    {   0x016C, 0x00000005  },  // PPI_D2S_CLRSIPOCOUNT
+    {   0x0170, 0x00000005  },  // PPI_D3S_CLRSIPOCOUNT
+    {   0x0134, 0x0000001F  },  // PPI_LANEENABLE
+    {   0x0210, 0x0000001F  },  // DSI_LANEENABLE
+    {   0x0104, 0x00000001  },  // PPI_SARTPPI
+    {   0x0204, 0x00000001  },  // DSI_SARTPPI
+    
+    // Timming and mode setting
+    {   0x0450, 0x03F00120  },  // VPCTRL
+    {   0x0454, 0x00400030  },  // HTIM1
+    {   0x0458, 0x00100500  },  // HTIM2
+    {   0x045C, 0x000C0001  },  // VTIM1
+    {   0x0460, 0x00010320  },  // VTIM2
+    {   0x0464, 0x00000001  },  // VFUEN
+    {   0x04A0, 0x00448406  },  // LVPHY0
+    {   0x04A0, 0x00048406  },  // LVPHY0
+    {   0x0504, 0x00000004  },  // SYSRST
+    
+    // LVDS Color mapping setting
+    {   0x0480, 0x03020100  },  // LVMX0003
+    {   0x0484, 0x08050704  },  // LVMX0407
+    {   0x0488, 0x0F0E0A09  },  // LVMX0811
+    {   0x048C, 0x100D0C0B  },  // LVMX1215
+    {   0x0490, 0x12111716  },  // LVMX1619
+    {   0x0494, 0x1B151413  },  // LVMX2023
+    {   0x0498, 0x061A1918  },  // LVMX2427
+    
+    // LVDS Enable
+    {   0x049C, 0x00000001  },  // LVCFG
+};
+
 static int init_lcd(struct mipi_dsim_device *dsim)
 {
-	unsigned char initcode_013c[6] = {0x3c, 0x01, 0x03, 0x00, 0x02, 0x00};
-	unsigned char initcode_0114[6] = {0x14, 0x01, 0x02, 0x00, 0x00, 0x00};
-	unsigned char initcode_0164[6] = {0x64, 0x01, 0x05, 0x00, 0x00, 0x00};
-	unsigned char initcode_0168[6] = {0x68, 0x01, 0x05, 0x00, 0x00, 0x00};
-	unsigned char initcode_016c[6] = {0x6c, 0x01, 0x05, 0x00, 0x00, 0x00};
-	unsigned char initcode_0170[6] = {0x70, 0x01, 0x05, 0x00, 0x00, 0x00};
-	unsigned char initcode_0134[6] = {0x34, 0x01, 0x1f, 0x00, 0x00, 0x00};
-	unsigned char initcode_0210[6] = {0x10, 0x02, 0x1f, 0x00, 0x00, 0x00};
-	unsigned char initcode_0104[6] = {0x04, 0x01, 0x01, 0x00, 0x00, 0x00};
-	unsigned char initcode_0204[6] = {0x04, 0x02, 0x01, 0x00, 0x00, 0x00};
-	unsigned char initcode_0450[6] = {0x50, 0x04, 0x20, 0x01, 0xfa, 0x00};
-	unsigned char initcode_0454[6] = {0x54, 0x04, 0x20, 0x00, 0x50, 0x00};
-	unsigned char initcode_0458[6] = {0x58, 0x04, 0x00, 0x05, 0x30, 0x00};
-	unsigned char initcode_045c[6] = {0x5c, 0x04, 0x05, 0x00, 0x0a, 0x00};
-	unsigned char initcode_0460[6] = {0x60, 0x04, 0x20, 0x03, 0x0a, 0x00};
-	unsigned char initcode_0464[6] = {0x64, 0x04, 0x01, 0x00, 0x00, 0x00};
-	unsigned char initcode_04a0_1[6] = {0xa0, 0x04, 0x06, 0x80, 0x44, 0x00};
-	unsigned char initcode_04a0_2[6] = {0xa0, 0x04, 0x06, 0x80, 0x04, 0x00};
-	unsigned char initcode_0504[6] = {0x04, 0x05, 0x04, 0x00, 0x00, 0x00};
-	unsigned char initcode_049c[6] = {0x9c, 0x04, 0x0d, 0x00, 0x00, 0x00};
+    unsigned char   cmd[6], i;
 
-	if (s5p_mipi_dsi_wr_data(dsim, MIPI_DSI_GENERIC_LONG_WRITE,
-		(unsigned int) initcode_013c, sizeof(initcode_013c)) == -1)
-		return 0;
-	mdelay(6);
-	if (s5p_mipi_dsi_wr_data(dsim, MIPI_DSI_GENERIC_LONG_WRITE,
-		(unsigned int) initcode_0114, sizeof(initcode_0114)) == -1)
-		return 0;
-	mdelay(6);
-	if (s5p_mipi_dsi_wr_data(dsim, MIPI_DSI_GENERIC_LONG_WRITE,
-		(unsigned int) initcode_0164, sizeof(initcode_0164)) == -1)
-		return 0;
-	mdelay(6);
-	if (s5p_mipi_dsi_wr_data(dsim, MIPI_DSI_GENERIC_LONG_WRITE,
-		(unsigned int) initcode_0168, sizeof(initcode_0168)) == -1)
-		return 0;
-	mdelay(6);
-	if (s5p_mipi_dsi_wr_data(dsim, MIPI_DSI_GENERIC_LONG_WRITE,
-		(unsigned int) initcode_016c, sizeof(initcode_016c)) == -1)
-		return 0;
-	mdelay(6);
-	if (s5p_mipi_dsi_wr_data(dsim, MIPI_DSI_GENERIC_LONG_WRITE,
-		(unsigned int) initcode_0170, sizeof(initcode_0170)) == -1)
-		return 0;
-	mdelay(6);
-	if (s5p_mipi_dsi_wr_data(dsim, MIPI_DSI_GENERIC_LONG_WRITE,
-		(unsigned int) initcode_0134, sizeof(initcode_0134)) == -1)
-		return 0;
-	mdelay(6);
-	if (s5p_mipi_dsi_wr_data(dsim, MIPI_DSI_GENERIC_LONG_WRITE,
-		(unsigned int) initcode_0210, sizeof(initcode_0210)) == -1)
-		return 0;
-	mdelay(6);
-	if (s5p_mipi_dsi_wr_data(dsim, MIPI_DSI_GENERIC_LONG_WRITE,
-		(unsigned int) initcode_0104, sizeof(initcode_0104)) == -1)
-		return 0;
-	mdelay(6);
-	if (s5p_mipi_dsi_wr_data(dsim, MIPI_DSI_GENERIC_LONG_WRITE,
-		(unsigned int) initcode_0204, sizeof(initcode_0204)) == -1)
-		return 0;
-	mdelay(6);
-	if (s5p_mipi_dsi_wr_data(dsim, MIPI_DSI_GENERIC_LONG_WRITE,
-		(unsigned int) initcode_0450, sizeof(initcode_0450)) == -1)
-		return 0;
-	mdelay(6);
-	if (s5p_mipi_dsi_wr_data(dsim, MIPI_DSI_GENERIC_LONG_WRITE,
-		(unsigned int) initcode_0454, sizeof(initcode_0454)) == -1)
-		return 0;
-	mdelay(6);
-	if (s5p_mipi_dsi_wr_data(dsim, MIPI_DSI_GENERIC_LONG_WRITE,
-		(unsigned int) initcode_0458, sizeof(initcode_0458)) == -1)
-		return 0;
-	mdelay(6);
-	if (s5p_mipi_dsi_wr_data(dsim, MIPI_DSI_GENERIC_LONG_WRITE,
-		(unsigned int) initcode_045c, sizeof(initcode_045c)) == -1)
-		return 0;
-	mdelay(6);
-	if (s5p_mipi_dsi_wr_data(dsim, MIPI_DSI_GENERIC_LONG_WRITE,
-		(unsigned int) initcode_0460, sizeof(initcode_0460)) == -1)
-		return 0;
-	mdelay(6);
-	if (s5p_mipi_dsi_wr_data(dsim, MIPI_DSI_GENERIC_LONG_WRITE,
-		(unsigned int) initcode_0464, sizeof(initcode_0464)) == -1)
-		return 0;
-	mdelay(6);
-	if (s5p_mipi_dsi_wr_data(dsim, MIPI_DSI_GENERIC_LONG_WRITE,
-		(unsigned int) initcode_04a0_1, sizeof(initcode_04a0_1)) == -1)
-		return 0;
-	mdelay(12);
-	if (s5p_mipi_dsi_wr_data(dsim, MIPI_DSI_GENERIC_LONG_WRITE,
-		(unsigned int) initcode_04a0_2, sizeof(initcode_04a0_2)) == -1)
-		return 0;
-	mdelay(6);
-	if (s5p_mipi_dsi_wr_data(dsim, MIPI_DSI_GENERIC_LONG_WRITE,
-		(unsigned int) initcode_0504, sizeof(initcode_0504)) == -1)
-		return 0;
-	mdelay(6);
-	if (s5p_mipi_dsi_wr_data(dsim, MIPI_DSI_GENERIC_LONG_WRITE,
-		(unsigned int) initcode_049c, sizeof(initcode_049c)) == -1)
-		return 0;
-	mdelay(800);
+	for (i = 0; i < ARRAY_SIZE(sInitCode); i++) {
+	    cmd[0] = sInitCode[i].reg;	        cmd[1] = sInitCode[i].reg  >> 8;
+	    cmd[2] = sInitCode[i].data;         cmd[3] = sInitCode[i].data >> 8;
+	    cmd[4] = sInitCode[i].data >> 16;   cmd[5] = sInitCode[i].data >> 24;
 
-	return 1;
+#if 0
+        printk("reg = 0x%04X, data = 0x%08X\n", sInitCode[i].reg, sInitCode[i].data);
+        printk("cmd = 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X\n", cmd[0]
+                                                                  , cmd[1]
+                                                                  , cmd[2]
+                                                                  , cmd[3]
+                                                                  , cmd[4]
+                                                                  , cmd[5]);
+#endif	    
+        if(s5p_mipi_dsi_wr_data(dsim, MIPI_DSI_GENERIC_LONG_WRITE, 
+                                (unsigned int)cmd, sizeof(cmd)) == -1)   return  0;
+    	
+    	mdelay(10);    
+	}
+    return  1;
 }
 
 void tc358764_mipi_lcd_off(struct mipi_dsim_device *dsim)

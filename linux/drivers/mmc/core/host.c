@@ -16,6 +16,7 @@
 #include <linux/err.h>
 #include <linux/idr.h>
 #include <linux/pagemap.h>
+#include <linux/export.h>
 #include <linux/leds.h>
 #include <linux/slab.h>
 #include <linux/suspend.h>
@@ -74,6 +75,7 @@ static ssize_t clkgate_delay_store(struct device *dev,
 	spin_unlock_irqrestore(&host->clk_lock, flags);
 	return count;
 }
+
 /*
  * Enabling clock gating will make the core call out to the host
  * once up and once down when it performs a request or card operation
@@ -107,11 +109,8 @@ static void mmc_host_clk_gate_delayed(struct mmc_host *host)
 	 */
 	if (!host->clk_requests) {
 		spin_unlock_irqrestore(&host->clk_lock, flags);
-		/* wait only when clk_gate_delay is 0 */
-		if (!host->clkgate_delay) {
-			tick_ns = DIV_ROUND_UP(1000000000, freq);
-			ndelay(host->clk_delay * tick_ns);
-		}
+		tick_ns = DIV_ROUND_UP(1000000000, freq);
+		ndelay(host->clk_delay * tick_ns);
 	} else {
 		/* New users appeared while waiting for this work */
 		spin_unlock_irqrestore(&host->clk_lock, flags);
@@ -206,7 +205,6 @@ void mmc_host_clk_release(struct mmc_host *host)
 	    !host->clk_requests)
 		queue_delayed_work(system_nrt_wq, &host->clk_gate_work,
 				msecs_to_jiffies(host->clkgate_delay));
-
 	spin_unlock_irqrestore(&host->clk_lock, flags);
 }
 
@@ -243,7 +241,7 @@ static inline void mmc_host_clk_init(struct mmc_host *host)
 	 * Default clock gating delay is 0ms to avoid wasting power.
 	 * This value can be tuned by writing into sysfs entry.
 	 */
-	host->clkgate_delay = 3;
+	host->clkgate_delay = 0;
 	host->clk_gated = false;
 	INIT_DELAYED_WORK(&host->clk_gate_work, mmc_host_clk_gate_work);
 	spin_lock_init(&host->clk_lock);
@@ -279,7 +277,6 @@ static inline void mmc_host_clk_sysfs_init(struct mmc_host *host)
 		pr_err("%s: Failed to create clkgate_delay sysfs entry\n",
 				mmc_hostname(host));
 }
-
 #else
 
 static inline void mmc_host_clk_init(struct mmc_host *host)
@@ -293,6 +290,7 @@ static inline void mmc_host_clk_exit(struct mmc_host *host)
 static inline void mmc_host_clk_sysfs_init(struct mmc_host *host)
 {
 }
+
 #endif
 
 /**
@@ -334,7 +332,6 @@ struct mmc_host *mmc_alloc_host(int extra, struct device *dev)
 	wake_lock_init(&host->detect_wake_lock, WAKE_LOCK_SUSPEND,
 		kasprintf(GFP_KERNEL, "%s_detect", mmc_hostname(host)));
 	INIT_DELAYED_WORK(&host->detect, mmc_rescan);
-	INIT_DELAYED_WORK_DEFERRABLE(&host->disable, mmc_host_deeper_disable);
 #ifdef CONFIG_PM
 	host->pm_notify.notifier_call = mmc_pm_notify;
 #endif
@@ -349,6 +346,8 @@ struct mmc_host *mmc_alloc_host(int extra, struct device *dev)
 	host->max_req_size = PAGE_CACHE_SIZE;
 	host->max_blk_size = 512;
 	host->max_blk_count = PAGE_CACHE_SIZE / 512;
+
+	host->align_size = 4;
 
 	return host;
 
@@ -383,7 +382,6 @@ int mmc_add_host(struct mmc_host *host)
 #ifdef CONFIG_DEBUG_FS
 	mmc_add_host_debugfs(host);
 #endif
-
 	mmc_host_clk_sysfs_init(host);
 
 	mmc_start_host(host);

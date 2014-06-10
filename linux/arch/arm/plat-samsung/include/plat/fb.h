@@ -15,26 +15,7 @@
 #ifndef __PLAT_S3C_FB_H
 #define __PLAT_S3C_FB_H __FILE__
 
-#include <plat/gpio-cfg.h>
-
-/* S3C_FB_MAX_WIN
- * Set to the maximum number of windows that any of the supported hardware
- * can use. Since the platform data uses this for an array size, having it
- * set to the maximum of any version of the hardware can do is safe.
- */
-#define S3C_FB_MAX_WIN	(5)
-
-/* IOCTL commands */
-#define S3CFB_WIN_POSITION		_IOW('F', 203, \
-						struct s3c_fb_user_window)
-#define S3CFB_WIN_SET_PLANE_ALPHA	_IOW('F', 204, \
-						struct s3c_fb_user_plane_alpha)
-#define S3CFB_WIN_SET_CHROMA		_IOW('F', 205, \
-						struct s3c_fb_user_chroma)
-#define S3CFB_SET_VSYNC_INT		_IOW('F', 206, u32)
-
-#define S3CFB_GET_ION_USER_HANDLE	_IOWR('F', 208, \
-						struct s3c_fb_user_ion_client)
+#include <linux/s3c-fb.h>
 
 /**
  * struct s3c_fb_pd_win - per window setup data
@@ -74,6 +55,8 @@ struct s3c_fb_pd_win {
  */
 struct s3c_fb_platdata {
 	void	(*setup_gpio)(void);
+	void	(*backlight_off)(void);
+	void	(*lcd_off)(void);
 
 	struct s3c_fb_pd_win	*win[S3C_FB_MAX_WIN];
 
@@ -81,6 +64,7 @@ struct s3c_fb_platdata {
 
 	u32			 vidcon0;
 	u32			 vidcon1;
+	int			 ip_version;
 };
 
 /**
@@ -136,22 +120,35 @@ extern void s5pv210_fb_gpio_setup_24bpp(void);
 extern void exynos4_fimd0_gpio_setup_24bpp(void);
 
 /**
- * exynos4_fimd_cfg_gpios() - Exynos4 setup function for 24bpp LCD
+ * exynos5_fimd1_gpio_setup_24bpp() - Exynos5 setup function for 24bpp LCD0
+ *
+ * Initialise the GPIO for an 24bpp LCD display on the RGB interface 1.
+ */
+extern void exynos5_fimd1_gpio_setup_24bpp(void);
+
+/**
+ * s5p64x0_fb_gpio_setup_24bpp() - S5P6440/S5P6450 setup function for 24bpp LCD
  *
  * Initialise the GPIO for an 24bpp LCD display on the RGB interface.
  */
-extern void exynos4_fimd_cfg_gpios(unsigned int base, unsigned int nr,
-		unsigned int cfg, s5p_gpio_drvstr_t drvstr);
+extern void s5p64x0_fb_gpio_setup_24bpp(void);
 
 /**
- * exynos4_fimd0_setup_clock() = Exynos4 setup function for parent clock.
+ * exynos5_fimd1_setup_clock() = Exynos5 setup function for parent clock.
  * @dev: device pointer
  * @parent: parent clock used for LCD pixel clock
  * @clk_rate: clock rate for parent clock
  */
-int __init exynos4_fimd0_setup_clock(struct device *dev, const char *parent,
-					unsigned long clk_rate);
-
-int __init exynos4_fimd_setup_clock(struct device *dev, const char *bus_clk,
+extern int __init exynos5_fimd1_setup_clock(struct device *dev, const char *bus_clk,
 					const char *parent, unsigned long clk_rate);
+
+/**
+ * exynos4_fimd_setup_clock() = Exynos4 setup function for parent clock.
+ * @dev: device pointer
+ * @parent: parent clock used for LCD pixel clock
+ * @clk_rate: clock rate for parent clock
+ */
+extern int __init exynos4_fimd_setup_clock(struct device *dev, const char *bus_clk,
+					const char *parent, unsigned long clk_rate);
+
 #endif /* __PLAT_S3C_FB_H */

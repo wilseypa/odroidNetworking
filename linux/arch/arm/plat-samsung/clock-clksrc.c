@@ -16,24 +16,12 @@
 #include <linux/errno.h>
 #include <linux/err.h>
 #include <linux/clk.h>
-#include <linux/sysdev.h>
+#include <linux/device.h>
 #include <linux/io.h>
 
 #include <plat/clock.h>
 #include <plat/clock-clksrc.h>
 #include <plat/cpu-freq.h>
-
-static inline struct clksrc_clk *to_clksrc(struct clk *clk)
-{
-	return container_of(clk, struct clksrc_clk, clk);
-}
-
-static inline u32 bit_mask(u32 shift, u32 nr_bits)
-{
-	u32 mask = 0xffffffff >> (32 - nr_bits);
-
-	return mask << shift;
-}
 
 static unsigned long s3c_getrate_clksrc(struct clk *clk)
 {
@@ -65,6 +53,7 @@ static int s3c_setrate_clksrc(struct clk *clk, unsigned long rate)
 
 	val = __raw_readl(reg);
 	val &= ~mask;
+	clk->orig_div = (div - 1) << sclk->reg_div.shift;
 	val |= (div - 1) << sclk->reg_div.shift;
 	__raw_writel(val, reg);
 
@@ -77,6 +66,7 @@ static int s3c_setparent_clksrc(struct clk *clk, struct clk *parent)
 	struct clksrc_sources *srcs = sclk->sources;
 	u32 clksrc = __raw_readl(sclk->reg_src.reg);
 	u32 mask = bit_mask(sclk->reg_src.shift, sclk->reg_src.size);
+	u32 tmp;
 	int src_nr = -1;
 	int ptr;
 
@@ -86,17 +76,29 @@ static int s3c_setparent_clksrc(struct clk *clk, struct clk *parent)
 			break;
 		}
 
-	if (src_nr >= 0) {
-		clk->parent = parent;
+	if (src_nr < 0)
+		return -EINVAL;
 
-		clksrc &= ~mask;
-		clksrc |= src_nr << sclk->reg_src.shift;
 
-		__raw_writel(clksrc, sclk->reg_src.reg);
-		return 0;
+	clk->parent = parent;
+
+	clksrc &= ~mask;
+	clk->orig_src = src_nr << sclk->reg_src.shift;
+	clksrc |= src_nr << sclk->reg_src.shift;
+
+	__raw_writel(clksrc, sclk->reg_src.reg);
+
+	if (sclk->reg_src_stat.reg) {
+		mask = bit_mask(sclk->reg_src_stat.shift,
+				sclk->reg_src_stat.size);
+		do {
+			cpu_relax();
+			tmp = __raw_readl(sclk->reg_src_stat.reg);
+			tmp &= mask;
+		} while (tmp != BIT(src_nr + sclk->reg_src.shift));
 	}
 
-	return -EINVAL;
+	return 0;
 }
 
 static unsigned long s3c_roundrate_clksrc(struct clk *clk,
@@ -142,6 +144,7 @@ void __init_or_cpufreq s3c_set_clksrc(struct clksrc_clk *clk, bool announce)
 
 	clksrc = __raw_readl(clk->reg_src.reg);
 	clksrc &= mask;
+	clk->clk.orig_src = clksrc;
 	clksrc >>= clk->reg_src.shift;
 
 	if (clksrc > srcs->nr_sources || !srcs->sources[clksrc]) {
@@ -151,11 +154,10 @@ void __init_or_cpufreq s3c_set_clksrc(struct clksrc_clk *clk, bool announce)
 	}
 
 	clk->clk.parent = srcs->sources[clksrc];
-
+#ifdef CONFIG_ODROIDXU_DEBUG_MESSAGES
 	if (announce)
-		printk(KERN_INFO "%s: source is %s (%d), rate is %ld\n",
-		       clk->clk.name, clk->clk.parent->name, clksrc,
-		       clk_get_rate(&clk->clk));
+		printk(KERN_INFO "%s: source is %s (%d), rate is %ld\n", clk->clk.name, clk->clk.parent->name, clksrc, clk_get_rate(&clk->clk));
+#endif
 }
 
 static struct clk_ops clksrc_ops = {

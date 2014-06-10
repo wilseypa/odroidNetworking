@@ -1,7 +1,5 @@
 /*
- * linux/arch/arm/mach-exynos/setup-i2c5.c
- *
- * Copyright (c) 2010 Samsung Electronics Co., Ltd.
+ * Copyright (c) 2010-2012 Samsung Electronics Co., Ltd.
  *
  * I2C5 GPIO configuration.
  *
@@ -21,11 +19,16 @@ void s3c_i2c5_cfg_gpio(struct platform_device *dev)
 {
 	if (soc_is_exynos4210())
 		s3c_gpio_cfgall_range(EXYNOS4_GPB(6), 2,
-			S3C_GPIO_SFN(3), S3C_GPIO_PULL_UP);
-	else if (soc_is_exynos4212())
+				      S3C_GPIO_SFN(3), S3C_GPIO_PULL_UP);
+
+	else if (soc_is_exynos4212() || soc_is_exynos4412())
 		s3c_gpio_cfgall_range(EXYNOS4_GPB(2), 2,
-			S3C_GPIO_SFN(3), S3C_GPIO_PULL_UP);
-	else
+				      S3C_GPIO_SFN(3), S3C_GPIO_PULL_UP);
+
+	else if (soc_is_exynos5250())
 		s3c_gpio_cfgall_range(EXYNOS5_GPA2(2), 2,
-			S3C_GPIO_SFN(3), S3C_GPIO_PULL_UP);
+				      S3C_GPIO_SFN(3), S3C_GPIO_PULL_UP);
+
+	else
+		pr_err("failed to configure gpio for i2c5\n");
 }

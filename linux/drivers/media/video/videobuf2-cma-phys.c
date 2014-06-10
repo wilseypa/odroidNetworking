@@ -219,10 +219,7 @@ EXPORT_SYMBOL_GPL(vb2_cma_phys_init);
 
 void vb2_cma_phys_cleanup(void *conf)
 {
-	if (conf)
-		kfree(conf);
-	else
-		printk(KERN_ERR "fail to cleanup\n");
+	kfree(conf);
 }
 EXPORT_SYMBOL_GPL(vb2_cma_phys_cleanup);
 
@@ -257,10 +254,7 @@ EXPORT_SYMBOL_GPL(vb2_cma_phys_init_multi);
 
 void vb2_cma_phys_cleanup_multi(void **alloc_ctxes)
 {
-	if (alloc_ctxes)
-		kfree(alloc_ctxes);
-	else
-		printk(KERN_ERR "fail to cleanup_multi\n");
+	kfree(alloc_ctxes);
 }
 EXPORT_SYMBOL_GPL(vb2_cma_phys_cleanup_multi);
 
@@ -287,7 +281,7 @@ static void _vb2_cma_phys_cache_flush_range(struct vb2_cma_phys_buf *buf,
 	phys_addr_t start = buf->paddr;
 	phys_addr_t end = start + size - 1;
 
-	if (size > SZ_64K ) {
+	if (size > SZ_64K) {
 		flush_cache_all();	/* L1 */
 		smp_call_function((smp_call_func_t)__cpuc_flush_kern_all, NULL, 1);
 	} else {

@@ -85,16 +85,6 @@ MODULE_DESCRIPTION("Keypad interface for ODROID-Dev board");
 enum	{
 	// KEY CONTROL
 	KEYPAD_POWER,
-#if !defined(CONFIG_BOARD_ODROID_X)&&!defined(CONFIG_BOARD_ODROID_X2)&&!defined(CONFIG_BOARD_ODROID_U)&&!defined(CONFIG_BOARD_ODROID_U2)
-#if defined(CONFIG_FB_S5P_S6E8AA1)
-	KEYPAD_MODE,
-	KEYPAD_PLAYPAUSE,
-#else	
-	KEYPAD_VOLUME_UP,
-	KEYPAD_VOLUME_DOWN,
-#endif	
-	KEYPAD_POWER_LED,
-#endif // #if !defined(CONFIG_BOARD_ODROID_X)&&!defined(CONFIG_BOARD_ODROID_X2)&&!defined(CONFIG_BOARD_ODROID_U)&&!defined(CONFIG_BOARD_ODROID_U2)
 	GPIO_INDEX_END
 };
 
@@ -106,140 +96,30 @@ static struct {
 	int 	value;			// Default Value(only for output)
 	int		pud;			// Pull up/down register setting : S3C_GPIO_PULL_DOWN, UP, NONE
 } sControlGpios[] = {
-	{	KEYPAD_POWER,			EXYNOS4_GPX1(3), "KEY POWER"		, 0, 0, S3C_GPIO_PULL_NONE},
-#if !defined(CONFIG_BOARD_ODROID_X)&&!defined(CONFIG_BOARD_ODROID_X2)&&!defined(CONFIG_BOARD_ODROID_U)&&!defined(CONFIG_BOARD_ODROID_U2)
-#if defined(CONFIG_FB_S5P_S6E8AA1)
-	{	KEYPAD_MODE,	    	EXYNOS4_GPX1(7), "KEY MODE"	        , 0, 0, S3C_GPIO_PULL_DOWN},
-	{	KEYPAD_PLAYPAUSE,		EXYNOS4_GPX2(0), "KEY PLAYPAUSE"	, 0, 0, S3C_GPIO_PULL_DOWN},
-#else
-	{	KEYPAD_VOLUME_UP,		EXYNOS4_GPX1(7), "KEY VOLUME UP"	, 0, 0, S3C_GPIO_PULL_DOWN},
-	{	KEYPAD_VOLUME_DOWN,		EXYNOS4_GPX2(0), "KEY VOLUME DOWN"	, 0, 0, S3C_GPIO_PULL_DOWN},
-#endif	
-	{	KEYPAD_POWER_LED,		EXYNOS4_GPA1(0), "POWER LED"		, 1, 1, S3C_GPIO_PULL_NONE},
-#endif  // #if !defined(CONFIG_BOARD_ODROID_X)&&!defined(CONFIG_BOARD_ODROID_X2)&&!defined(CONFIG_BOARD_ODROID_U)&&!defined(CONFIG_BOARD_ODROID_U2)
+	{	KEYPAD_POWER,   EXYNOS5410_GPX0(3), "KEY POWER"		, 0, 0, S3C_GPIO_PULL_NONE},
 };
 
 //[*]--------------------------------------------------------------------------------------------------[*]
-#define	MAX_KEYCODE_CNT		3
+#define	MAX_KEYCODE_CNT		1
 
 int Keycode[MAX_KEYCODE_CNT] = {
 		KEY_POWER,
-#if !defined(CONFIG_BOARD_ODROID_X)&&!defined(CONFIG_BOARD_ODROID_X2)&&!defined(CONFIG_BOARD_ODROID_U)&&!defined(CONFIG_BOARD_ODROID_U2)
-#if defined(CONFIG_FB_S5P_S6E8AA1)
-		KEY_0,
-		KEY_1,
-#else
-		KEY_VOLUMEUP,
-		KEY_VOLUMEDOWN,
-#endif
-#endif  // #if !defined(CONFIG_BOARD_ODROID_X)&&!defined(CONFIG_BOARD_ODROID_X2)&&!defined(CONFIG_BOARD_ODROID_U)&&!defined(CONFIG_BOARD_ODROID_U2)
 };
 
 #if	defined(DEBUG_MSG)
 	const char KeyMapStr[MAX_KEYCODE_CNT][20] = {
 			"KEY_POWER\n",
-#if !defined(CONFIG_BOARD_ODROID_X)&&!defined(CONFIG_BOARD_ODROID_X2)&&!defined(CONFIG_BOARD_ODROID_U)&&!defined(CONFIG_BOARD_ODROID_U2)
-#if defined(CONFIG_FB_S5P_S6E8AA1)
-			"KEY_MODE\n",
-			"KEY_PLAYPAUSE\n",
-#else
-			"KEY_VOLUME_UP\n",
-			"KEY_VOLUME_DOWN\n",
-#endif			
-#endif  // #if !defined(CONFIG_BOARD_ODROID_X)&&!defined(CONFIG_BOARD_ODROID_X2)&&!defined(CONFIG_BOARD_ODROID_U)&&!defined(CONFIG_BOARD_ODROID_U2)
 	};
 #endif	// DEBUG_MSG
 
 //[*]--------------------------------------------------------------------------------------------------[*]
 static enum hrtimer_restart odroid_poweroff_timer(struct hrtimer *timer)
 {
-#if defined(CONFIG_BOARD_ODROID_X)||defined(CONFIG_BOARD_ODROID_X2)||defined(CONFIG_BOARD_ODROID_U)||defined(CONFIG_BOARD_ODROID_U2)
-	odroid_keypad_t 	    *keypad = container_of(timer, odroid_keypad_t, poweroff_timer);
-#endif
-
-#if !defined(CONFIG_BOARD_ODROID_X)&&!defined(CONFIG_BOARD_ODROID_X2)&&!defined(CONFIG_BOARD_ODROID_U)&&!defined(CONFIG_BOARD_ODROID_U2)
-	gpio_direction_output	(sControlGpios[KEYPAD_POWER_LED].gpio, 0);	// POWER LED OFF
-#endif	
-
-#if defined(CONFIG_BOARD_ODROID_X)||defined(CONFIG_BOARD_ODROID_X2)||defined(CONFIG_BOARD_ODROID_U)||defined(CONFIG_BOARD_ODROID_U2)
-	hrtimer_cancel(&keypad->led_timer);
-	gpio_direction_output	(LED_STATUS_PORT, 1);
-#endif
 	printk(KERN_EMERG "%s : setting GPIO_PDA_PS_HOLD low.\n", __func__);
-	(*(unsigned long *)(S5P_PMUREG(0x330C))) = 0x5200;
+	(*(unsigned long *)(EXYNOS_PMUREG(0x330C))) = 0x5200;
 	return HRTIMER_NORESTART;
 }
 
-//[*]--------------------------------------------------------------------------------------------------[*]
-#if defined(CONFIG_FB_S5P_S6E8AA1)
-static enum hrtimer_restart odroid_long_timer(struct hrtimer *timer)
-{
-	odroid_keypad_t 	    *keypad = container_of(timer, odroid_keypad_t, long_timer);
-
-    static  unsigned char status = false;
-
-    status = !status;
-    
-    if(status)	input_report_switch(keypad->input, SW_LID, 1);
-    else    	input_report_switch(keypad->input, SW_LID, 0);
-	input_sync(keypad->input);
-
-    keypad->long_status = false;
-
-    #if defined(DEBUG_MSG)
-        printk("%s : slide notifiy send (%d)\n", __func__, status);
-    #endif        
-
-	return HRTIMER_NORESTART;
-}
-#endif
-//[*]--------------------------------------------------------------------------------------------------[*]
-#if defined(CONFIG_BOARD_ODROID_X)||defined(CONFIG_BOARD_ODROID_X2)||defined(CONFIG_BOARD_ODROID_U)||defined(CONFIG_BOARD_ODROID_U2)||defined(CONFIG_BOARD_ODROID_Q)||defined(CONFIG_BOARD_ODROID_Q2)
-
-static  unsigned int    poweroff_press_time = 0;
-
-void    odroid_keypad_trigger(unsigned int  press_time_sec)
-{
-    poweroff_press_time = press_time_sec;
-}
-
-EXPORT_SYMBOL(odroid_keypad_trigger);
-
-static enum hrtimer_restart odroid_led_timer(struct hrtimer *timer)
-{
-	odroid_keypad_t 	    *keypad = container_of(timer, odroid_keypad_t, led_timer);
-
-    static  unsigned char   status = false;
-    static  unsigned int    trigger_off = 0;
-
-    status = !status;
-
-#if defined(CONFIG_BOARD_ODROID_X) || defined(CONFIG_BOARD_ODROID_X2) || defined(CONFIG_BOARD_ODROID_U)||defined(CONFIG_BOARD_ODROID_U2)
-	gpio_direction_output	(LED_STATUS_PORT, !status);
-#endif
-
-    if(poweroff_press_time)    {
-        if(!trigger_off)    {
-		    input_report_key(keypad->input, KEY_POWER, KEY_PRESS);
-        	input_sync(keypad->input);
-        }
-        trigger_off         = poweroff_press_time;
-        poweroff_press_time = 0;
-    }
-
-    if(trigger_off)    {
-        trigger_off--;
-        if(!trigger_off)    {
-		    input_report_key(keypad->input, KEY_POWER, KEY_RELEASE);
-        	input_sync(keypad->input);
-        }
-    }
-
-	hrtimer_start(&keypad->led_timer, ktime_set(LED_STATUS_PERIOD, 0), HRTIMER_MODE_REL);
-
-	return HRTIMER_NORESTART;
-}
-#endif
 //[*]--------------------------------------------------------------------------------------------------[*]
 static void	generate_keycode(odroid_keypad_t *keypad, unsigned short prev_key, unsigned short cur_key, int *key_table)
 {
@@ -251,22 +131,7 @@ static void	generate_keycode(odroid_keypad_t *keypad, unsigned short prev_key, u
 	i = 0;
 	while(press_key)	{
 		if(press_key & 0x01)	{
-#if defined(CONFIG_FB_S5P_S6E8AA1)
-			if(key_table[i] == KEY_0)   {
-			    keypad->long_status = true;
-			    hrtimer_start(&keypad->long_timer, ktime_set(LONGKEY_CHECK_PERIOD, 0), HRTIMER_MODE_REL);
-			}
-			else if(key_table[i] == KEY_1)   {
-			    keypad->pause = keypad->pause ? 0 : 1;
-
-			    if(keypad->pause) 
-        			input_report_key(keypad->input, key_table[i], KEY_PRESS);
-			    else
-        			input_report_key(keypad->input, KEY_2, KEY_PRESS);
-    		}
-    		else
-#endif			    
-    			input_report_key(keypad->input, key_table[i], KEY_PRESS);
+   			input_report_key(keypad->input, key_table[i], KEY_PRESS);
 			
 			// POWER OFF PRESS
 			if(key_table[i] == KEY_POWER)	
@@ -278,25 +143,7 @@ static void	generate_keycode(odroid_keypad_t *keypad, unsigned short prev_key, u
 	i = 0;
 	while(release_key)	{
 		if(release_key & 0x01)	{
-
-#if defined(CONFIG_FB_S5P_S6E8AA1)
-			if(key_table[i] == KEY_0)   {
-			    if(keypad->long_status) {
-    			    keypad->long_status = true;
-					hrtimer_cancel(&keypad->long_timer);
-        			input_report_key(keypad->input, key_table[i], KEY_PRESS);
-        			input_report_key(keypad->input, key_table[i], KEY_RELEASE);
-			    }
-			}
-			else if(key_table[i] == KEY_1)   {
-			    if(keypad->pause) 
-        			input_report_key(keypad->input, key_table[i], KEY_RELEASE);
-			    else
-        			input_report_key(keypad->input, KEY_2, KEY_RELEASE);
-			}
-			else
-#endif			    
-    			input_report_key(keypad->input, key_table[i], KEY_RELEASE);
+   			input_report_key(keypad->input, key_table[i], KEY_RELEASE);
 
 			// POWER OFF (RELEASE)		
 			if(key_table[i] == KEY_POWER)	
@@ -329,20 +176,23 @@ static void	generate_keycode(odroid_keypad_t *keypad, unsigned short prev_key, u
 #endif
 
 //[*]--------------------------------------------------------------------------------------------------[*]
+static  int ExternalKeyPadData = 0;
+
+void    odroid_keypad_set_data(int ext_keypad_data)
+{
+    ExternalKeyPadData = ext_keypad_data;
+}
+
+EXPORT_SYMBOL(odroid_keypad_set_data);
+       
+//[*]--------------------------------------------------------------------------------------------------[*]
 static int	odroid_keypad_get_data(void)
 {
 	int		key_data = 0;
 
 	key_data |= (gpio_get_value(sControlGpios[KEYPAD_POWER].gpio) 		? 0 : 0x01);
-#if !defined(CONFIG_BOARD_ODROID_X)&&!defined(CONFIG_BOARD_ODROID_X2)&&!defined(CONFIG_BOARD_ODROID_U)&&!defined(CONFIG_BOARD_ODROID_U2)
-#if defined(CONFIG_FB_S5P_S6E8AA1)
-	key_data |= (gpio_get_value(sControlGpios[KEYPAD_MODE].gpio) 	    ? 0x02 : 0);
-	key_data |= (gpio_get_value(sControlGpios[KEYPAD_PLAYPAUSE].gpio)   ? 0x04 : 0);
-#else
-	key_data |= (gpio_get_value(sControlGpios[KEYPAD_VOLUME_UP].gpio) 	? 0x02 : 0);
-	key_data |= (gpio_get_value(sControlGpios[KEYPAD_VOLUME_DOWN].gpio) ? 0x04 : 0);
-#endif
-#endif  // #if !defined(CONFIG_BOARD_ODROID_X)&&!defined(CONFIG_BOARD_ODROID_X2)&&!defined(CONFIG_BOARD_ODROID_U)&&!defined(CONFIG_BOARD_ODROID_U2)
+    key_data |= ExternalKeyPadData;
+    
 	return	key_data;
 }
 
@@ -482,19 +332,11 @@ static int __devinit    odroid_keypad_probe(struct platform_device *pdev)
 
 	set_bit(EV_KEY, keypad->input->evbit);
 
-#if defined(CONFIG_FB_S5P_S6E8AA1)
-	set_bit(EV_SW , keypad->input->evbit);
-	set_bit(SW_LID & SW_MAX, keypad->input->swbit);
-#endif
-
 	for(key = 0; key < MAX_KEYCODE_CNT; key++){
 		code = Keycode[key];
 		if(code <= 0)	continue;
 		set_bit(code & KEY_MAX, keypad->input->keybit);
 	}
-#if defined(CONFIG_FB_S5P_S6E8AA1)
-		set_bit(KEY_2 & KEY_MAX, keypad->input->keybit);
-#endif
 	if(input_register_device(keypad->input))	{
 		printk("--------------------------------------------------------\n");
 		printk("%s input register device fail!!\n", DEVICE_NAME);
@@ -508,26 +350,7 @@ static int __devinit    odroid_keypad_probe(struct platform_device *pdev)
 	hrtimer_init(&keypad->poweroff_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	keypad->poweroff_timer.function = odroid_poweroff_timer;
 
-#if defined(CONFIG_FB_S5P_S6E8AA1)
-	hrtimer_init(&keypad->long_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-	keypad->long_timer.function = odroid_long_timer;
-#endif	
-
 	odroid_keypad_config(keypad);
-
-#if defined(CONFIG_BOARD_ODROID_X)||defined(CONFIG_BOARD_ODROID_X2)||defined(CONFIG_BOARD_ODROID_U)||defined(CONFIG_BOARD_ODROID_U2)||defined(CONFIG_BOARD_ODROID_Q)||defined(CONFIG_BOARD_ODROID_Q2)
-	if(gpio_request(LED_STATUS_PORT, LED_STATUS_PORT_NAME))	{
-		printk("%s : %s gpio reqest err!\n", __FUNCTION__, LED_STATUS_PORT_NAME);
-	}
-	else	{
-		gpio_direction_output	(LED_STATUS_PORT, 1);
-		s3c_gpio_setpull		(LED_STATUS_PORT, S3C_GPIO_PULL_NONE);
-	}
-
-	hrtimer_init(&keypad->led_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-	keypad->led_timer.function = odroid_led_timer;
-	hrtimer_start(&keypad->led_timer, ktime_set(LED_STATUS_PERIOD, 0), HRTIMER_MODE_REL);
-#endif
 
 	printk("--------------------------------------------------------\n");
 	printk("%s driver initialized!! Ver 1.0\n", DEVICE_NAME);
@@ -556,11 +379,6 @@ static int __devexit    odroid_keypad_remove(struct platform_device *pdev)
 
 	for (i = 0; i < ARRAY_SIZE(sControlGpios); i++) 	gpio_free(sControlGpios[i].gpio);
 
-    #if defined(CONFIG_BOARD_ODROID_X)||defined(CONFIG_BOARD_ODROID_X2)||defined(CONFIG_BOARD_ODROID_U)||defined(CONFIG_BOARD_ODROID_U2)
-        gpio_free(LED_STATUS_PORT);
-    	hrtimer_cancel(&keypad->led_timer);
-    #endif    
-	
 	#if	defined(DEBUG_MSG)
 		printk("%s\n", __FUNCTION__);
 	#endif

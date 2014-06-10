@@ -25,6 +25,7 @@
 #include <linux/slab.h>
 #include <linux/ioport.h>
 #include <linux/init.h>
+#include <linux/interrupt.h>
 #include <linux/if.h>
 #include <linux/hdlc.h>
 #include <asm/io.h>
@@ -1664,10 +1665,9 @@ check_started_ok(struct fst_card_info *card)
 	 * existing firmware etc so we just report it for the moment.
 	 */
 	if (FST_RDL(card, numberOfPorts) != card->nports) {
-		pr_warning("Port count mismatch on card %d. "
-			   "Firmware thinks %d we say %d\n",
-			   card->card_no,
-			   FST_RDL(card, numberOfPorts), card->nports);
+		pr_warn("Port count mismatch on card %d.  Firmware thinks %d we say %d\n",
+			card->card_no,
+			FST_RDL(card, numberOfPorts), card->nports);
 	}
 }
 
@@ -1972,6 +1972,7 @@ fst_get_iface(struct fst_card_info *card, struct fst_port_info *port,
 	}
 
 	i = port->index;
+	memset(&sync, 0, sizeof(sync));
 	sync.clock_rate = FST_RDL(card, portConfig[i].lineSpeed);
 	/* Lucky card and linux use same encoding here */
 	sync.clock_type = FST_RDB(card, portConfig[i].internalClock) ==
@@ -2483,6 +2484,7 @@ fst_add_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 		pr_err("Control memory remap failed\n");
 		pci_release_regions(pdev);
 		pci_disable_device(pdev);
+		iounmap(card->mem);
 		kfree(card);
 		return -ENODEV;
 	}

@@ -67,6 +67,6 @@ SINTData, *PSINTData;
 /*---------------------  Export Functions  --------------------------*/
 
 void INTvWorkItem(void *Context);
-int INTnsProcessData(PSDevice pDevice);
+void INTnsProcessData(PSDevice pDevice);
 
 #endif /* __INT_H__ */

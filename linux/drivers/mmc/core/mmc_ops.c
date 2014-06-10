@@ -10,14 +10,13 @@
  */
 
 #include <linux/slab.h>
+#include <linux/export.h>
 #include <linux/types.h>
 #include <linux/scatterlist.h>
 
 #include <linux/mmc/host.h>
 #include <linux/mmc/card.h>
 #include <linux/mmc/mmc.h>
-
-#include <plat/cpu.h>
 
 #include "core.h"
 #include "mmc_ops.h"
@@ -235,7 +234,7 @@ static int
 mmc_send_cxd_data(struct mmc_card *card, struct mmc_host *host,
 		u32 opcode, void *buf, unsigned len)
 {
-	struct mmc_request mrq = {0};
+	struct mmc_request mrq = {NULL};
 	struct mmc_command cmd = {0};
 	struct mmc_data data = {0};
 	struct scatterlist sg;
@@ -384,6 +383,7 @@ int mmc_switch(struct mmc_card *card, u8 set, u8 index, u8 value,
 {
 	int err;
 	struct mmc_command cmd = {0};
+	unsigned int ignore;
 	u32 status;
 
 	BUG_ON(!card);
@@ -402,26 +402,24 @@ int mmc_switch(struct mmc_card *card, u8 set, u8 index, u8 value,
 		return err;
 
 	/* Must check status to be sure of no errors */
+	ignore = (index == EXT_CSD_HS_TIMING) ? MMC_RSP_CRC : 0;
+
 	do {
-#if defined(CONFIG_MACH_SMDKC210) || defined(CONFIG_MACH_SMDKV310)
-		/* HACK: in case of smdkc210, smdkv310 has problem at inand */
-		mmc_delay(3);
-#endif
-		err = mmc_send_status(card, &status);
+		err = mmc_send_status(card, &status, ignore);
 		if (err)
 			return err;
 		if (card->host->caps & MMC_CAP_WAIT_WHILE_BUSY)
 			break;
 		if (mmc_host_is_spi(card->host))
 			break;
-	} while (R1_CURRENT_STATE(status) == 7);
+	} while (R1_CURRENT_STATE(status) == R1_STATE_PRG);
 
 	if (mmc_host_is_spi(card->host)) {
 		if (status & R1_SPI_ILLEGAL_COMMAND)
 			return -EBADMSG;
 	} else {
 		if (status & 0xFDFFA000)
-			printk(KERN_WARNING "%s: unexpected status %#x after "
+			pr_warning("%s: unexpected status %#x after "
 			       "switch", mmc_hostname(card->host), status);
 		if (status & R1_SWITCH_ERROR)
 			return -EBADMSG;
@@ -431,7 +429,7 @@ int mmc_switch(struct mmc_card *card, u8 set, u8 index, u8 value,
 }
 EXPORT_SYMBOL_GPL(mmc_switch);
 
-int mmc_send_status(struct mmc_card *card, u32 *status)
+int mmc_send_status(struct mmc_card *card, u32 *status, unsigned int ignore)
 {
 	int err;
 	struct mmc_command cmd = {0};
@@ -443,6 +441,7 @@ int mmc_send_status(struct mmc_card *card, u32 *status)
 	if (!mmc_host_is_spi(card->host))
 		cmd.arg = card->rca << 16;
 	cmd.flags = MMC_RSP_SPI_R2 | MMC_RSP_R1 | MMC_CMD_AC;
+	cmd.flags &= ~ignore;
 
 	err = mmc_wait_for_cmd(card->host, &cmd, MMC_CMD_RETRIES);
 	if (err)
@@ -461,7 +460,7 @@ static int
 mmc_send_bus_test(struct mmc_card *card, struct mmc_host *host, u8 opcode,
 		  u8 len)
 {
-	struct mmc_request mrq = {0};
+	struct mmc_request mrq = {NULL};
 	struct mmc_command cmd = {0};
 	struct mmc_data data = {0};
 	struct scatterlist sg;
@@ -483,7 +482,7 @@ mmc_send_bus_test(struct mmc_card *card, struct mmc_host *host, u8 opcode,
 	else if (len == 4)
 		test_buf = testdata_4bit;
 	else {
-		printk(KERN_ERR "%s: Invalid bus_width %d\n",
+		pr_err("%s: Invalid bus_width %d\n",
 		       mmc_hostname(host), len);
 		kfree(data_buf);
 		return -EINVAL;
@@ -555,207 +554,6 @@ int mmc_bus_test(struct mmc_card *card, u8 bus_width)
 	return err;
 }
 
-static int mmc_send_cmd(struct mmc_host *host,
-			u32 opcode, u32 arg, unsigned int flags, u32 *resp)
-{
-	int err;
-	struct mmc_command cmd;
-
-	memset(&cmd, 0, sizeof(struct mmc_command));
-
-	cmd.opcode = opcode;
-	cmd.arg = arg;
-	cmd.flags = flags;
-	*resp = 0;
-
-	err = mmc_wait_for_cmd(host, &cmd, 0);
-	if (!err)
-		*resp = cmd.resp[0];
-	else
-		printk(KERN_ERR "[CMD%d] FAILED!!\n", cmd.opcode);
-
-	return err;
-}
-
-static int mmc_movi_cmd(struct mmc_host *host, u32 arg)
-{
-	int err;
-	u32 resp;
-
-	err = mmc_send_cmd(host, 62, arg,
-			MMC_RSP_R1B | MMC_CMD_AC, &resp);
-	mdelay(10);
-
-	if (!err)
-		do {
-			err = mmc_send_cmd(host, MMC_SEND_STATUS,
-				host->card->rca << 16,
-				MMC_RSP_SPI_R2 | MMC_RSP_R1 | MMC_CMD_AC,
-				&resp);
-			if (err) {
-				printk(KERN_ERR "CMD13(VC) failed\n");
-				break;
-				}
-			/*wait until READY_FOR_DATA*/
-			} while (!(resp & 1<<8));
-
-	return err;
-}
-
-static int mmc_movi_erase_cmd(struct mmc_host *host, u32 arg1, u32 arg2)
-{
-	int err;
-	u32 resp;
-
-	err = mmc_send_cmd(host, MMC_ERASE_GROUP_START, arg1,
-					MMC_RSP_R1 | MMC_CMD_AC, &resp);
-	if (err)
-		return err;
-
-	err = mmc_send_cmd(host, MMC_ERASE_GROUP_END, arg2,
-					MMC_RSP_R1 | MMC_CMD_AC, &resp);
-	if (err)
-		return err;
-
-	err = mmc_send_cmd(host, MMC_ERASE, 0,
-					MMC_RSP_R1B | MMC_CMD_AC, &resp);
-	if (!err)
-		do {
-			err = mmc_send_cmd(host, MMC_SEND_STATUS,
-				host->card->rca << 16,
-				MMC_RSP_SPI_R2 | MMC_RSP_R1 | MMC_CMD_AC,
-				&resp);
-			if (err) {
-				printk(KERN_ERR "CMD13(VC) failed\n");
-				break;
-				}
-			/*wait until READY_FOR_DATA*/
-			} while (!(resp & 1<<8));
-
-	return err;
-}
-
-
-static int mmc_movi_read_req(struct mmc_card *card,
-					void *data_buf, u32 arg, u32 blocks)
-{
-	struct mmc_request mrq = {0};
-	struct mmc_command cmd = {0};
-	struct mmc_data data = {0};
-	struct scatterlist sg;
-
-	/*send request*/
-	mrq.cmd = &cmd;
-	mrq.data = &data;
-
-	if (blocks > 1)
-		cmd.opcode = MMC_READ_MULTIPLE_BLOCK;
-	else
-		cmd.opcode = MMC_READ_SINGLE_BLOCK;
-	cmd.arg = arg;
-
-	cmd.flags = MMC_RSP_SPI_R1 | MMC_RSP_R1 | MMC_CMD_ADTC;
-
-	data.blksz = 512;
-	data.blocks = blocks;
-	data.flags = MMC_DATA_READ;
-	data.sg = &sg;
-	data.sg_len = 1;
-
-	sg_init_one(&sg, data_buf, data.blksz * data.blocks);
-
-	mmc_set_data_timeout(&data, card);
-
-	mmc_wait_for_req(card->host, &mrq);
-
-	if (cmd.error)
-		return cmd.error;
-
-	if (data.error)
-		return data.error;
-
-	return 0;
-}
-
-int mmc_start_movi_smart(struct mmc_card *card)
-{
-	int err;
-	u8 data_buf[512];
-	u32 date = 0;
-
-	err = mmc_movi_cmd(card->host, 0xEFAC62EC);
-	if (err)
-		return err;
-
-	err = mmc_movi_cmd(card->host, 0x0000CCEE);
-	if (err)
-		return err;
-
-	err = mmc_movi_read_req(card, (void *)data_buf, 0x1000, 1);
-	if (err)
-		return err;
-
-	err = mmc_movi_cmd(card->host, 0xEFAC62EC);
-	if (err)
-		return err;
-
-	err = mmc_movi_cmd(card->host, 0x00DECCEE);
-	if (err)
-		return err;
-
-	date = ((data_buf[327] << 24) | (data_buf[326] << 16) |
-				(data_buf[325] << 8) | data_buf[324]);
-
-	if (date !=  0x20120413) {
-		err = -1;
-		return err;
-		}
-
-	return 0x2;
-}
-EXPORT_SYMBOL_GPL(mmc_start_movi_smart);
-
-int mmc_start_movi_operation(struct mmc_card *card)
-{
-	int err = 0;
-
-	err = mmc_movi_cmd(card->host, 0xEFAC62EC);
-	if (err)
-		return err;
-	err = mmc_movi_cmd(card->host, 0x10210000);
-	if (err)
-		return err;
-
-	err = mmc_movi_erase_cmd(card->host, 0x00040300, 0x4A03B510);
-	if (err)
-		return err;
-	err = mmc_movi_erase_cmd(card->host, 0x00040304, 0x28004790);
-	if (err)
-		return err;
-	err = mmc_movi_erase_cmd(card->host, 0x00040308, 0xE7FED100);
-	if (err)
-		return err;
-	err = mmc_movi_erase_cmd(card->host, 0x0004030C, 0x0000BD10);
-	if (err)
-		return err;
-	err = mmc_movi_erase_cmd(card->host, 0x00040310, 0x00059D73);
-	if (err)
-		return err;
-	err = mmc_movi_erase_cmd(card->host, 0x0005C7EA, 0xFD89F7E3);
-	if (err)
-		return err;
-
-	err = mmc_movi_cmd(card->host, 0xEFAC62EC);
-	if (err)
-		return err;
-	err = mmc_movi_cmd(card->host, 0x00DECCEE);
-	if (err)
-		return err;
-
-	return err;
-}
-EXPORT_SYMBOL_GPL(mmc_start_movi_operation);
-
 int mmc_send_hpi_cmd(struct mmc_card *card, u32 *status)
 {
 	struct mmc_command cmd = {0};
@@ -764,7 +562,7 @@ int mmc_send_hpi_cmd(struct mmc_card *card, u32 *status)
 
 	if (!card->ext_csd.hpi) {
 		pr_warning("%s: Card didn't support HPI command\n",
-				mmc_hostname(card->host));
+			   mmc_hostname(card->host));
 		return -EINVAL;
 	}
 

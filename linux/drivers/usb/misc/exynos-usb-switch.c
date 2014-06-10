@@ -14,11 +14,12 @@
 #include <linux/err.h>
 #include <linux/slab.h>
 #include <linux/platform_device.h>
+#include <linux/dma-mapping.h>
 #include <linux/pm_runtime.h>
 
 #include <plat/devs.h>
 #include <plat/ehci.h>
-#include <plat/usbgadget.h>
+#include <mach/usb-switch.h>
 
 #include <mach/regs-clock.h>
 
@@ -30,6 +31,7 @@
 #define WAIT_TIMES		10
 
 static const char switch_name[] = "exynos_usb_switch";
+static struct exynos_usb_switch *our_switch;
 
 #if defined(CONFIG_BATTERY_SAMSUNG)
 void exynos_usb_cable_connect(void)
@@ -43,25 +45,17 @@ void exynos_usb_cable_disconnect(void)
 }
 #endif
 
-static void exynos_host_port_power_off(void)
-{
-	s5p_ehci_port_power_off(&s5p_device_ehci);
-	s5p_ohci_port_power_off(&s5p_device_ohci);
-}
-
-static void __maybe_unused exynos_host_port_power_on(void)
-{
-	s5p_ehci_port_power_on(&s5p_device_ehci);
-	s5p_ohci_port_power_on(&s5p_device_ohci);
-}
-
 static int is_host_detect(struct exynos_usb_switch *usb_switch)
 {
+	if (!usb_switch->gpio_host_detect)
+		return 0;
 	return !gpio_get_value(usb_switch->gpio_host_detect);
 }
 
 static int is_device_detect(struct exynos_usb_switch *usb_switch)
 {
+	if (!usb_switch->gpio_device_detect)
+		return 0;
 	return gpio_get_value(usb_switch->gpio_device_detect);
 }
 
@@ -73,78 +67,90 @@ static void set_host_vbus(struct exynos_usb_switch *usb_switch, int value)
 static int exynos_change_usb_mode(struct exynos_usb_switch *usb_switch,
 				enum usb_cable_status mode)
 {
-	struct s3c_udc *udc = the_controller;
-	enum usb_cable_status cur_mode = atomic_read(&usb_switch->connect);
+	struct s3c_udc *udc;
+	unsigned long cur_mode = usb_switch->connect;
 	int ret = 0;
 
-	if (cur_mode) {
-		if (mode == USB_DEVICE_ATTACHED || mode == USB_HOST_ATTACHED) {
-			printk(KERN_DEBUG "Skip requested mode (%d), current mode=%d\n",
-				mode, cur_mode);
-			return -EPERM;
-		}
-	} else {
-		if (mode == USB_DEVICE_DETACHED || mode == USB_HOST_DETACHED) {
-			printk(KERN_DEBUG "Skip requested mode (%d), current mode=%d\n",
+	if (test_bit(USB_DEVICE_ATTACHED, &cur_mode) ||
+	    test_bit(USB_HOST_ATTACHED, &cur_mode)) {
+		if (mode == USB_DEVICE_ATTACHED ||
+			mode == USB_HOST_ATTACHED) {
+			printk(KERN_DEBUG "Skip request %d, current %lu\n",
 				mode, cur_mode);
 			return -EPERM;
 		}
 	}
 
+	if (!test_bit(USB_DEVICE_ATTACHED, &cur_mode) &&
+			mode == USB_DEVICE_DETACHED) {
+		printk(KERN_DEBUG "Skip request %d, current %lu\n",
+			mode, cur_mode);
+		return -EPERM;
+	} else if (!test_bit(USB_HOST_ATTACHED, &cur_mode) &&
+			mode == USB_HOST_DETACHED) {
+		printk(KERN_DEBUG "Skip request %d, current %lu\n",
+			mode, cur_mode);
+		return -EPERM;
+	}
+
 	switch (mode) {
 	case USB_DEVICE_DETACHED:
-		if (cur_mode == USB_HOST_ATTACHED) {
-			printk(KERN_ERR "Abnormal request mode (%d), current mode=%d\n",
+		if (test_bit(USB_HOST_ATTACHED, &cur_mode)) {
+			printk(KERN_ERR "Abnormal request %d, current %lu\n",
 				mode, cur_mode);
 			return -EPERM;
 		}
-
-		udc->gadget.ops->vbus_session(&udc->gadget, 0);
-		atomic_set(&usb_switch->connect, 0);
+		udc = dev_get_drvdata(usb_switch->s3c_udc_dev);
+		if (udc && udc->gadget.ops && udc->gadget.ops->vbus_session)
+			udc->gadget.ops->vbus_session(&udc->gadget, 0);
+		clear_bit(USB_DEVICE_ATTACHED, &usb_switch->connect);
 		break;
 	case USB_DEVICE_ATTACHED:
-		udc->gadget.ops->vbus_session(&udc->gadget, 1);
-		atomic_set(&usb_switch->connect, USB_DEVICE_ATTACHED);
+		udc = dev_get_drvdata(usb_switch->s3c_udc_dev);
+		if (udc && udc->gadget.ops && udc->gadget.ops->vbus_session)
+			udc->gadget.ops->vbus_session(&udc->gadget, 1);
+		set_bit(USB_DEVICE_ATTACHED, &usb_switch->connect);
 		break;
 	case USB_HOST_DETACHED:
-		if (cur_mode == USB_DEVICE_ATTACHED) {
-			printk(KERN_ERR "Abnormal request mode (%d), current mode=%d\n",
+		if (test_bit(USB_DEVICE_ATTACHED, &cur_mode)) {
+			printk(KERN_ERR "Abnormal request %d, current %lu\n",
 				mode, cur_mode);
 			return -EPERM;
 		}
-
-		pm_runtime_put(&s5p_device_ohci.dev);
-		pm_runtime_put(&s5p_device_ehci.dev);
+		if (usb_switch->ohci_dev)
+			pm_runtime_put(usb_switch->ohci_dev);
+		if (usb_switch->ehci_dev)
+			pm_runtime_put(usb_switch->ehci_dev);
 		if (usb_switch->gpio_host_vbus)
 			set_host_vbus(usb_switch, 0);
 
-		enable_irq(usb_switch->device_detect_irq);
 #if defined(CONFIG_BATTERY_SAMSUNG)
 		exynos_usb_cable_disconnect();
 #endif
-		atomic_set(&usb_switch->connect, 0);
+		clear_bit(USB_HOST_ATTACHED, &usb_switch->connect);
 		break;
 	case USB_HOST_ATTACHED:
 #if defined(CONFIG_BATTERY_SAMSUNG)
 		exynos_usb_cable_connect();
 #endif
-		disable_irq(usb_switch->device_detect_irq);
 		if (usb_switch->gpio_host_vbus)
 			set_host_vbus(usb_switch, 1);
 
-		pm_runtime_get_sync(&s5p_device_ehci.dev);
-		pm_runtime_get_sync(&s5p_device_ohci.dev);
-		atomic_set(&usb_switch->connect, USB_HOST_ATTACHED);
+		if (usb_switch->ehci_dev)
+			pm_runtime_get_sync(usb_switch->ehci_dev);
+		if (usb_switch->ohci_dev)
+			pm_runtime_get_sync(usb_switch->ohci_dev);
+		set_bit(USB_HOST_ATTACHED, &usb_switch->connect);
 		break;
 	default:
 		printk(KERN_ERR "Does not changed\n");
 	}
-	printk(KERN_INFO "usb cable = %d\n", mode);
+	printk(KERN_ERR "usb cable = %d\n", mode);
 
 	return ret;
 }
 
-static void exnos_usb_switch_worker(struct work_struct *work)
+static void exynos_usb_switch_worker(struct work_struct *work)
 {
 	struct exynos_usb_switch *usb_switch =
 		container_of(work, struct exynos_usb_switch, switch_work);
@@ -154,9 +160,11 @@ static void exnos_usb_switch_worker(struct work_struct *work)
 	/* If already device detached or host_detected, */
 	if (!is_device_detect(usb_switch) || is_host_detect(usb_switch))
 		goto done;
+	if (!usb_switch->ehci_dev || !usb_switch->ohci_dev)
+		goto detect;
 
-	while (!pm_runtime_suspended(&s5p_device_ehci.dev) ||
-		!pm_runtime_suspended(&s5p_device_ohci.dev)) {
+	while (!pm_runtime_suspended(usb_switch->ehci_dev) ||
+		!pm_runtime_suspended(usb_switch->ohci_dev)) {
 
 		mutex_unlock(&usb_switch->mutex);
 		msleep(SWITCH_WAIT_TIME);
@@ -176,7 +184,7 @@ static void exnos_usb_switch_worker(struct work_struct *work)
 
 	if (cnt > 1)
 		printk(KERN_INFO "Device wait host power during %d\n", (cnt-1));
-
+detect:
 	/* Check Device, VBUS PIN high active */
 	exynos_change_usb_mode(usb_switch, USB_DEVICE_ATTACHED);
 done:
@@ -205,9 +213,12 @@ static irqreturn_t exynos_device_detect_thread(int irq, void *data)
 
 	mutex_lock(&usb_switch->mutex);
 
-	if (is_host_detect(usb_switch)) {
-		printk(KERN_ERR "Not expected situation\n");
-	} else if (is_device_detect(usb_switch)) {
+	/* Debounce connect delay */
+	msleep(20);
+
+	if (is_host_detect(usb_switch))
+		printk(KERN_DEBUG "Not expected situation\n");
+	else if (is_device_detect(usb_switch)) {
 		if (usb_switch->gpio_host_vbus)
 			exynos_change_usb_mode(usb_switch, USB_DEVICE_ATTACHED);
 		else
@@ -224,17 +235,21 @@ static irqreturn_t exynos_device_detect_thread(int irq, void *data)
 
 static int exynos_usb_status_init(struct exynos_usb_switch *usb_switch)
 {
-	if (atomic_read(&usb_switch->connect))
-		printk(KERN_ERR "Already setting\n");
-	else if (is_host_detect(usb_switch))
+	mutex_lock(&usb_switch->mutex);
+
+	/* 2.0 USB */
+	if (is_host_detect(usb_switch))
 		exynos_change_usb_mode(usb_switch, USB_HOST_ATTACHED);
 	else if (is_device_detect(usb_switch)) {
 		if (usb_switch->gpio_host_vbus)
-			exynos_change_usb_mode(usb_switch, USB_DEVICE_ATTACHED);
+			exynos_change_usb_mode(usb_switch,
+				USB_DEVICE_ATTACHED);
 		else
-			queue_work(usb_switch->workqueue, &usb_switch->switch_work);
-	} else
-		atomic_set(&usb_switch->connect, 0);
+			queue_work(usb_switch->workqueue,
+				&usb_switch->switch_work);
+	}
+
+	mutex_unlock(&usb_switch->mutex);
 
 	return 0;
 }
@@ -245,8 +260,13 @@ static int exynos_usbswitch_suspend(struct device *dev)
 	struct platform_device *pdev = to_platform_device(dev);
 	struct exynos_usb_switch *usb_switch = platform_get_drvdata(pdev);
 
-	printk(KERN_INFO "%s\n", __func__);
-	atomic_set(&usb_switch->connect, 0);
+	dev_dbg(dev, "%s\n", __func__);
+	mutex_lock(&usb_switch->mutex);
+	if (test_bit(USB_DEVICE_ATTACHED, &usb_switch->connect))
+		exynos_change_usb_mode(usb_switch, USB_DEVICE_DETACHED);
+
+	usb_switch->connect = 0;
+	mutex_unlock(&usb_switch->mutex);
 
 	return 0;
 }
@@ -256,11 +276,8 @@ static int exynos_usbswitch_resume(struct device *dev)
 	struct platform_device *pdev = to_platform_device(dev);
 	struct exynos_usb_switch *usb_switch = platform_get_drvdata(pdev);
 
-	printk(KERN_INFO "%s\n", __func__);
+	dev_dbg(dev, "%s\n", __func__);
 	exynos_usb_status_init(usb_switch);
-
-	if (!atomic_read(&usb_switch->connect) && !usb_switch->gpio_host_vbus)
-		exynos_host_port_power_off();
 
 	return 0;
 }
@@ -275,76 +292,83 @@ static int __devinit exynos_usbswitch_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct exynos_usb_switch *usb_switch;
 	int irq;
-	int ret;
+	int ret = 0;
 
 	usb_switch = kzalloc(sizeof(struct exynos_usb_switch), GFP_KERNEL);
 	if (!usb_switch) {
 		ret = -ENOMEM;
-		goto fail;
+		return ret;
 	}
 
+	our_switch = usb_switch;
 	mutex_init(&usb_switch->mutex);
 	usb_switch->workqueue = create_singlethread_workqueue("usb_switch");
-	INIT_WORK(&usb_switch->switch_work, exnos_usb_switch_worker);
-
+	INIT_WORK(&usb_switch->switch_work, exynos_usb_switch_worker);
 	usb_switch->gpio_host_detect = pdata->gpio_host_detect;
 	usb_switch->gpio_device_detect = pdata->gpio_device_detect;
 	usb_switch->gpio_host_vbus = pdata->gpio_host_vbus;
 
+	usb_switch->ehci_dev = pdata->ehci_dev;
+	usb_switch->ohci_dev = pdata->ohci_dev;
+
+	usb_switch->s3c_udc_dev = pdata->s3c_udc_dev;
+
 	/* USB Device detect IRQ */
 	irq = platform_get_irq(pdev, 1);
-	if (!irq) {
-		dev_err(&pdev->dev, "Failed to get IRQ\n");
-		ret = -ENODEV;
-		goto fail;
-	}
-
-	ret = request_threaded_irq(irq, NULL, exynos_device_detect_thread,
-			IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING,
-			"DEVICE_DETECT", usb_switch);
-	if (ret) {
-		dev_err(dev, "Failed to allocate an DEVICE interrupt(%d)\n",
-			irq);
-		goto fail;
-	}
-	usb_switch->device_detect_irq = irq;
+	if (irq > 0 && usb_switch->s3c_udc_dev) {
+		ret = request_threaded_irq(irq, NULL,
+				exynos_device_detect_thread,
+				IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING,
+				"DEVICE_DETECT", usb_switch);
+		if (ret) {
+			dev_err(dev, "Failed to request device irq %d\n", irq);
+			goto fail;
+		}
+		usb_switch->device_detect_irq = irq;
+	} else if (usb_switch->s3c_udc_dev)
+		exynos_change_usb_mode(usb_switch, USB_DEVICE_ATTACHED);
+	else
+		dev_info(dev, "Disable device detect IRQ\n");
 
 	/* USB Host detect IRQ */
 	irq = platform_get_irq(pdev, 0);
-	if (!irq) {
-		dev_err(&pdev->dev, "Failed to get IRQ\n");
-		ret = -ENODEV;
-		goto fail;
-	}
-
-	ret = request_threaded_irq(irq, NULL, exynos_host_detect_thread,
-			IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING,
-			"HOST_DETECT", usb_switch);
-	if (ret) {
-		dev_err(dev, "Failed to allocate an HOST interrupt(%d)\n", irq);
-		goto fail;
-	}
-	usb_switch->host_detect_irq = irq;
+	if (irq > 0 && (usb_switch->ehci_dev || usb_switch->ohci_dev)) {
+		ret = request_threaded_irq(irq, NULL,
+				exynos_host_detect_thread,
+				IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING,
+				"HOST_DETECT", usb_switch);
+		if (ret) {
+			dev_err(dev, "Failed to request host irq %d\n", irq);
+			goto fail_gpio_device_detect;
+		}
+		usb_switch->host_detect_irq = irq;
+	} else if (usb_switch->ehci_dev || usb_switch->ohci_dev)
+		exynos_change_usb_mode(usb_switch, USB_HOST_ATTACHED);
+	else
+		dev_info(dev, "Disable host detect IRQ\n");
 
 	exynos_usb_status_init(usb_switch);
 
 	platform_set_drvdata(pdev, usb_switch);
 
 	return ret;
+
+fail_gpio_device_detect:
+	free_irq(usb_switch->device_detect_irq, usb_switch);
 fail:
 	cancel_work_sync(&usb_switch->switch_work);
 	destroy_workqueue(usb_switch->workqueue);
 	mutex_destroy(&usb_switch->mutex);
+	kfree(usb_switch);
 	return ret;
 }
 
 static int __devexit exynos_usbswitch_remove(struct platform_device *pdev)
 {
 	struct exynos_usb_switch *usb_switch = platform_get_drvdata(pdev);
-	struct device *dev = &pdev->dev;
 
-	free_irq(usb_switch->device_detect_irq, dev);
-	free_irq(usb_switch->device_detect_irq, dev);
+	free_irq(usb_switch->host_detect_irq, usb_switch);
+	free_irq(usb_switch->device_detect_irq, usb_switch);
 	platform_set_drvdata(pdev, 0);
 
 	cancel_work_sync(&usb_switch->switch_work);

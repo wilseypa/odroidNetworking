@@ -14,7 +14,7 @@
 #include <linux/interrupt.h>
 #include <linux/irq.h>
 #include <linux/io.h>
-#include <linux/sysdev.h>
+#include <linux/device.h>
 #include <linux/gpio.h>
 
 #include <asm/hardware/vic.h>
@@ -65,7 +65,6 @@ static int s5p_irq_eint_set_type(struct irq_data *data, unsigned int type)
 	int shift;
 	u32 ctrl, mask;
 	u32 newvalue = 0;
-	struct irq_desc *desc = irq_to_desc(data->irq);
 
 	switch (type) {
 	case IRQ_TYPE_EDGE_RISING:
@@ -117,9 +116,9 @@ static int s5p_irq_eint_set_type(struct irq_data *data, unsigned int type)
 		printk(KERN_ERR "No such irq number %d", offs);
 
 	if (type & IRQ_TYPE_EDGE_BOTH)
-		desc->handle_irq = handle_edge_irq;
+		__irq_set_handler_locked(data->irq, handle_edge_irq);
 	else
-		desc->handle_irq = handle_level_irq;
+		__irq_set_handler_locked(data->irq, handle_level_irq);
 
 	return 0;
 }
@@ -206,7 +205,7 @@ static struct irq_chip s5p_irq_vic_eint = {
 #endif
 };
 
-int __init s5p_init_irq_eint(void)
+static int __init s5p_init_irq_eint(void)
 {
 	int irq;
 

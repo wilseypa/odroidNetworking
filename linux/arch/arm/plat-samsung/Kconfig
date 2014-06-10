@@ -65,11 +65,6 @@ config SAMSUNG_IRQ_VIC_TIMER
        help
          Internal configuration to build the VIC timer interrupt code.
 
-config SAMSUNG_IRQ_UART
-       bool
-       help
-         Internal configuration to build the IRQ UART demux code.
-
 # options for gpio configuration support
 
 config SAMSUNG_GPIOLIB_4BIT
@@ -79,38 +74,11 @@ config SAMSUNG_GPIOLIB_4BIT
 	  configuration. GPIOlib shall be compiled only for S3C64XX and S5P
 	  series of processors.
 
-config S3C_GPIO_CFG_S3C24XX
-	bool
-	help
-	  Internal configuration to enable S3C24XX style GPIO configuration
-	  functions.
-
 config S3C_GPIO_CFG_S3C64XX
 	bool
 	help
 	  Internal configuration to enable S3C64XX style GPIO configuration
 	  functions.
-
-config S3C_GPIO_PULL_UPDOWN
-	bool
-	help
-	  Internal configuration to enable the correct GPIO pull helper
-
-config S3C_GPIO_PULL_S3C2443
-	bool
-	select S3C_GPIO_PULL_UPDOWN
-	help
-	  Internal configuration to enable the correct GPIO pull helper for S3C2443-style GPIO
-
-config S3C_GPIO_PULL_DOWN
-	bool
-	help
-	  Internal configuration to enable the correct GPIO pull helper
-
-config S3C_GPIO_PULL_UP
-	bool
-	help
-	  Internal configuration to enable the correct GPIO pull helper
 
 config S5P_GPIO_DRVSTR
 	bool
@@ -120,11 +88,19 @@ config S5P_GPIO_DRVSTR
 
 config SAMSUNG_GPIO_EXTRA
 	int "Number of additional GPIO pins"
+	default 128 if SAMSUNG_GPIO_EXTRA128
+	default 64 if SAMSUNG_GPIO_EXTRA64
 	default 0
 	help
 	  Use additional GPIO space in addition to the GPIO's the SOC
 	  provides. This allows expanding the GPIO space for use with
 	  GPIO expanders.
+
+config SAMSUNG_GPIO_EXTRA64
+	bool
+
+config SAMSUNG_GPIO_EXTRA128
+	bool
 
 config S3C_GPIO_SPACE
 	int "Space between gpio banks"
@@ -149,23 +125,13 @@ config S3C_ADC
 	  Core support for the ADC block found in the Samsung SoC systems
 	  for drivers such as the touchscreen and hwmon to use to share
 	  this resource.
-choice
-	prompt "Select ADC Number"
-	depends on S3C_ADC
-	default S3C_DEV_ADC
 
-config S3C_DEV_ADC
-	bool "ADC 0 selection"
-	depends on S3C_ADC
-	help
-	  Say Y here if you want to use S3C SMDK ADC 0.
+# Busfreq driver
 
-config S3C_DEV_ADC1
-	bool "ADC 1 selection"
-	depends on S3C_ADC
-	help
-	  Say Y here if you want to use S3C SMDK ADC 1.
-endchoice
+config EXYNOS_BUSFREQ_OPP
+	bool "Support DVFS for BUS & Device"
+	depends on ARCH_EXYNOS4 && REGULATOR
+	default n
 
 # device definitions to compile in
 
@@ -188,11 +154,6 @@ config S3C_DEV_HSMMC3
 	bool
 	help
 	  Compile in platform device definitions for HSMMC channel 3
-
-config S5P_DEV_MSHC
-	bool
-	help
-	  Compile in platform device definitions for MSHC
 
 config S3C_DEV_HWMON
 	bool
@@ -249,15 +210,9 @@ config S3C_DEV_USB_HSOTG
 	help
 	  Compile in platform device definition for USB high-speed OtG
 
-config EXYNOS_DEV_SS_UDC
-	bool
-	help
-	  Compile in platform device definition for EXYNOS SuperSpeed USB 3.0
-	  Device controller
-
 config S3C_DEV_WDT
 	bool
-	default y if ARCH_S3C2410
+	default y if ARCH_S3C24XX
 	help
 	  Complie in platform device definition for Watchdog Timer
 
@@ -286,22 +241,34 @@ config SAMSUNG_DEV_IDE
 	help
 	  Compile in platform device definitions for IDE
 
-config S3C64XX_DEV_SPI
+config S3C64XX_DEV_SPI0
 	bool
-	default y if SPI_S3C64XX
 	help
 	  Compile in platform device definitions for S3C64XX's type
-	  SPI controllers.
+	  SPI controller 0
+
+config S3C64XX_DEV_SPI1
+	bool
+	help
+	  Compile in platform device definitions for S3C64XX's type
+	  SPI controller 1
+
+config S3C64XX_DEV_SPI2
+	bool
+	help
+	  Compile in platform device definitions for S3C64XX's type
+	  SPI controller 2
+
+config S3C64XX_DEV_SPI3
+	bool
+	help
+	  Compile in platform device definitions for S3C64XX's type
+	  SPI controller 3
 
 config SAMSUNG_DEV_TS
 	bool
 	help
-	  Common in platform device definitions for touchscreen device
-
-config SAMSUNG_DEV_TS1
-	bool
-	help
-	  Common in platform device definitions for touchscreen-1 device
+	    Common in platform device definitions for touchscreen device
 
 config SAMSUNG_DEV_KEYPAD
 	bool
@@ -310,7 +277,7 @@ config SAMSUNG_DEV_KEYPAD
 
 config SAMSUNG_DEV_PWM
 	bool
-	default y if ARCH_S3C2410
+	default y if ARCH_S3C24XX
 	help
 	  Compile in platform device definition for PWM Timer
 
@@ -327,6 +294,84 @@ config S3C24XX_PWM
 	  Support for exporting the PWM timer blocks via the pwm device
 	  system
 
+config S5P_DEV_MIPI_DSIM0
+	bool
+	depends on FB_MIPI_DSIM && S5P_DEV_FIMD0
+	default y
+	help
+	  Compile in platform device definitions for MIPI_DSIM0
+	  to support mainlile style fimd
+
+config S5P_DEV_MIPI_DSIM1
+	bool
+	depends on FB_MIPI_DSIM && S5P_DEV_FIMD1
+	default y
+	help
+	  Compile in platform device definitions for MIPI_DSIM1
+	  to support mainlile style fimd
+
+config S5P_DEV_DP
+	bool
+	depends on S5P_DP
+	default y
+	help
+	  Compile in platform device definitions for DP controller
+
+config S5P_DEV_FIMG2D
+	bool
+	help
+	  Compile in platform device definitions for FIMG2D controller
+
+config S5P_DEV_BTS
+	bool
+	default n
+	help
+	  Compile in platform device definitions for BTS devices
+
+config S5P_DEV_FIMC0
+	bool
+	help
+	  Compile in platform device definitions for FIMC controller 0
+
+config S5P_DEV_FIMC1
+	bool
+	help
+	  Compile in platform device definitions for FIMC controller 1
+
+config S5P_DEV_FIMC2
+	bool
+	help
+	  Compile in platform device definitions for FIMC controller 2
+
+config S5P_DEV_FIMC3
+	bool
+	help
+	  Compile in platform device definitions for FIMC controller 3
+
+config S5P_DEV_CSIS0
+	bool
+	help
+	  Compile in platform device definitions for MIPI-CSIS channel 0
+
+config S5P_DEV_CSIS1
+	bool
+	help
+	  Compile in platform device definitions for MIPI-CSIS channel 1
+
+config S5P_DEV_CSIS2
+	bool
+	help
+	  Compile in platform device definitions for MIPI-CSIS channel 2
+
+config S5P_DEV_FLITE0
+	bool
+	help
+	  Compile in platform device definitions for FIMC-LITE channel 0
+
+config S5P_DEV_FLITE1
+	bool
+	help
+	  Compile in platform device definitions for FIMC-LITE channel 1
 # DMA
 
 config S3C_DMA
@@ -334,23 +379,21 @@ config S3C_DMA
 	help
 	  Internal configuration for S3C DMA core
 
-config S3C_PL330_DMA
+config SAMSUNG_DMADEV
 	bool
-	select PL330
+	select DMADEVICES
+	select PL330_DMA if (ARCH_EXYNOS5 || ARCH_EXYNOS4 || CPU_S5PV210 || CPU_S5PC100 || \
+					CPU_S5P6450 || CPU_S5P6440)
+	select ARM_AMBA
 	help
-	  S3C DMA API Driver for PL330 DMAC.
-
-config DMA_M2M_TEST
-	tristate "S3C DMA API Test client"
-	help
-	  Samsung DMA API test client. Say N unless you're debugging a
-	  DMA Device driver.
+	  Use DMA device engine for PL330 DMAC.
 
 comment "Power management"
 
 config SAMSUNG_PM_DEBUG
 	bool "S3C2410 PM Suspend debug"
 	depends on PM
+	select DEBUG_LL
 	help
 	  Say Y here if you want verbose debugging from the PM Suspend and
 	  Resume code. See <file:Documentation/arm/Samsung-S3C24XX/Suspend.txt>
@@ -399,12 +442,21 @@ config SAMSUNG_WAKEMASK
 	  and above. This code allows a set of interrupt to wakeup-mask
 	  mappings. See <plat/wakeup-mask.h>
 
-comment "Power Domain"
+config DEBUG_S3C_UART
+	depends on PLAT_SAMSUNG
+	int
+	default "0" if DEBUG_S3C_UART0
+	default "1" if DEBUG_S3C_UART1
+	default "2" if DEBUG_S3C_UART2
 
-config SAMSUNG_PD
-	bool "Samsung Power Domain"
-	depends on PM_RUNTIME
+config SAMSUNG_CORE_TEST
+	tristate "core configuration debugging"
+	depends on SOC_EXYNOS5410
 	help
-	  Say Y here if you want to control Power Domain by Runtime PM.
+		Debug core configuration.
 
+config SAMSUNG_BW_MONITOR
+	bool
+	help
+	  Compile support for monitoring system traffic.
 endif

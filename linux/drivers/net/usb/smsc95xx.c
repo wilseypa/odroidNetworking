@@ -46,7 +46,6 @@
 #define SMSC95XX_INTERNAL_PHY_ID	(1)
 #define SMSC95XX_TX_OVERHEAD		(8)
 #define SMSC95XX_TX_OVERHEAD_CSUM	(12)
-#define MAC_ADDR_LEN	(6)
 
 struct smsc95xx_priv {
 	u32 mac_cr;
@@ -60,32 +59,23 @@ struct usb_context {
 	struct usbnet *dev;
 };
 
-static int turbo_mode = true;
+static bool turbo_mode = true;
 module_param(turbo_mode, bool, 0644);
 MODULE_PARM_DESC(turbo_mode, "Enable multiple frames per Rx transaction");
-
-static char *macaddr = ":";
-module_param(macaddr, charp, 0);
-MODULE_PARM_DESC(macaddr, " macaddr=macaddr; (Set MAC only if there is a device without MAC on EEPROM or /etc/smsc94xx_mac_addr)");
 
 //----------------------------------------------------------------------
 //
 // ADD Hardkernel
 // 
 //----------------------------------------------------------------------
-#if defined(CONFIG_MACH_ODROID_4X12)
+#if defined(CONFIG_MACH_ODROIDXU)
 
 #if defined(CONFIG_ANDROID_PARANOID_NETWORK)
-const   char *filepath = "/data/misc/smsc95xx_mac_addr";
+	const	char *filepath = "/data/misc/smsc95xx_mac_addr";
 #else
-const	char *filepath = "/etc/smsc95xx_mac_addr";
+	const	char *filepath = "/etc/smsc95xx_mac_addr";
 #endif
 
-/* FIXME:
- * This code is dangerous because scanf from userland to kernel well..
- * Can't work when loading SMSC95XX early in the boot
- * process, from uInitrd, as the file *filepath does not exists yet.
- */
 int smsc95xx_read_mac_addr(unsigned char *mac)
 {
     struct file *fp      = NULL;
@@ -148,53 +138,6 @@ int smsc95xx_read_mac_addr(unsigned char *mac)
 // END Hardkernel
 // 
 //----------------------------------------------------------------------
-
-/* Check the macaddr module parameter for a MAC address */ 
-static int smsc95xx_is_macaddr_param(struct usbnet *dev, u8 *dev_mac) 
-{ 
-	int i, j, got_num, num; 
-	u8 mtbl[MAC_ADDR_LEN]; 
-
-	if (macaddr[0] == ':') 
-		return 0; 
-
-	i = 0; 
-	j = 0; 
-    num = 0; 
-	got_num = 0; 
-	while (j < MAC_ADDR_LEN) { 
-		if (macaddr[i] && macaddr[i] != ':') { 
-			got_num++; 
-			if ('0' <= macaddr[i] && macaddr[i] <= '9') 
-				num = num * 16 + macaddr[i] - '0';
-			else if ('A' <= macaddr[i] && macaddr[i] <= 'F') 
-				num = num * 16 + 10 + macaddr[i] - 'A'; 
-			else if ('a' <= macaddr[i] && macaddr[i] <= 'f') 
-				num = num * 16 + 10 + macaddr[i] - 'a';
-			else
-				break;
-			i++;
-		} else if (got_num == 2) {
-			mtbl[j++] = (u8) num;
-			num = 0;
-			got_num = 0;
-			i++;
-		} else {
-			break;
-		} 
-	}
-
-	if (j == MAC_ADDR_LEN) {
-		netif_dbg(dev, ifup, dev->net, "Overriding MAC address with: "
-				"%02x:%02x:%02x:%02x:%02x:%02x\n", mtbl[0], mtbl[1], mtbl[2],
-				mtbl[3], mtbl[4], mtbl[5]);
-		for (i = 0; i < MAC_ADDR_LEN; i++)
-			dev_mac[i] = mtbl[i];
-		return 1;
-	} else {
-		return 0;
-	} 
-} 
 
 static int smsc95xx_read_reg(struct usbnet *dev, u32 index, u32 *data)
 {
@@ -649,7 +592,8 @@ static void smsc95xx_status(struct usbnet *dev, struct urb *urb)
 }
 
 /* Enable or disable Tx & Rx checksum offload engines */
-static int smsc95xx_set_features(struct net_device *netdev, u32 features)
+static int smsc95xx_set_features(struct net_device *netdev,
+	netdev_features_t features)
 {
 	struct usbnet *dev = netdev_priv(netdev);
 	u32 read_buf;
@@ -735,10 +679,6 @@ static int smsc95xx_ioctl(struct net_device *netdev, struct ifreq *rq, int cmd)
 
 static void smsc95xx_init_mac_address(struct usbnet *dev)
 {
-	/* Check module parameters */ 
-	if (smsc95xx_is_macaddr_param(dev, dev->net->dev_addr)) 
-		return;
-
 	/* try reading mac address from EEPROM */
 	if (smsc95xx_read_eeprom(dev, EEPROM_MAC_OFFSET, ETH_ALEN,
 			dev->net->dev_addr) == 0) {
@@ -750,9 +690,9 @@ static void smsc95xx_init_mac_address(struct usbnet *dev)
 	}
 
 	/* no eeprom, or eeprom values are invalid. generate random MAC */
-	random_ether_addr(dev->net->dev_addr);
+	eth_hw_addr_random(dev->net);
 
-#if defined(CONFIG_MACH_ODROID_4X12)
+#if defined(CONFIG_MACH_ODROIDXU)
     if(smsc95xx_read_mac_addr(dev->net->dev_addr) < 0)  {
 		netdev_warn(dev->net, "Failed to write smsc95xx_mac_addr file!\n");
     }
@@ -1116,7 +1056,7 @@ static const struct net_device_ops smsc95xx_netdev_ops = {
 	.ndo_set_mac_address 	= eth_mac_addr,
 	.ndo_validate_addr	= eth_validate_addr,
 	.ndo_do_ioctl 		= smsc95xx_ioctl,
-	.ndo_set_multicast_list = smsc95xx_set_multicast,
+	.ndo_set_rx_mode	= smsc95xx_set_multicast,
 	.ndo_set_features	= smsc95xx_set_features,
 };
 
@@ -1160,6 +1100,7 @@ static int smsc95xx_bind(struct usbnet *dev, struct usb_interface *intf)
 	dev->net->ethtool_ops = &smsc95xx_ethtool_ops;
 	dev->net->flags |= IFF_MULTICAST;
 	dev->net->hard_header_len += SMSC95XX_TX_OVERHEAD_CSUM;
+	dev->hard_mtu = dev->net->mtu + dev->net->hard_header_len;
 	return 0;
 }
 
@@ -1441,20 +1382,9 @@ static struct usb_driver smsc95xx_driver = {
 	.disconnect	= usbnet_disconnect,
 };
 
-static int __init smsc95xx_init(void)
-{
-	return usb_register(&smsc95xx_driver);
-}
-module_init(smsc95xx_init);
-
-static void __exit smsc95xx_exit(void)
-{
-	usb_deregister(&smsc95xx_driver);
-}
-module_exit(smsc95xx_exit);
+module_usb_driver(smsc95xx_driver);
 
 MODULE_AUTHOR("Nancy Lin");
 MODULE_AUTHOR("Steve Glendinning <steve.glendinning@smsc.com>");
 MODULE_DESCRIPTION("SMSC95XX USB 2.0 Ethernet Devices");
 MODULE_LICENSE("GPL");
-

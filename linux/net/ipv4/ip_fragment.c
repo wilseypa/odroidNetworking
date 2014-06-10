@@ -262,8 +262,9 @@ static void ip_expire(unsigned long arg)
 		 * Only an end host needs to send an ICMP
 		 * "Fragment Reassembly Timeout" message, per RFC792.
 		 */
-		if (qp->user == IP_DEFRAG_CONNTRACK_IN &&
-		    skb_rtable(head)->rt_type != RTN_LOCAL)
+		if (qp->user == IP_DEFRAG_AF_PACKET ||
+		    (qp->user == IP_DEFRAG_CONNTRACK_IN &&
+		     skb_rtable(head)->rt_type != RTN_LOCAL))
 			goto out_rcu_unlock;
 
 
@@ -297,7 +298,6 @@ static inline struct ipq *ip_find(struct net *net, struct iphdr *iph, u32 user)
 		inet_frag_maybe_warn_overflow(q, pr_fmt());
 		return NULL;
 	}
-
 	return container_of(q, struct ipq, q);
 }
 
@@ -390,7 +390,7 @@ static int ip_frag_queue(struct ipq *qp, struct sk_buff *skb)
 	/* Is this the final fragment? */
 	if ((flags & IP_MF) == 0) {
 		/* If we already have some bits beyond end
-		 * or have different end, the segment is corrrupted.
+		 * or have different end, the segment is corrupted.
 		 */
 		if (end < qp->q.len ||
 		    ((qp->q.last_in & INET_FRAG_LAST_IN) && end != qp->q.len))
@@ -605,8 +605,8 @@ static int ip_frag_reasm(struct ipq *qp, struct sk_buff *prev,
 		head->next = clone;
 		skb_shinfo(clone)->frag_list = skb_shinfo(head)->frag_list;
 		skb_frag_list_init(head);
-		for (i=0; i<skb_shinfo(head)->nr_frags; i++)
-			plen += skb_shinfo(head)->frags[i].size;
+		for (i = 0; i < skb_shinfo(head)->nr_frags; i++)
+			plen += skb_frag_size(&skb_shinfo(head)->frags[i]);
 		clone->len = clone->data_len = head->data_len - plen;
 		head->data_len -= clone->len;
 		head->len -= clone->len;
@@ -643,14 +643,13 @@ static int ip_frag_reasm(struct ipq *qp, struct sk_buff *prev,
 	return 0;
 
 out_nomem:
-	LIMIT_NETDEBUG(KERN_ERR "IP: queue_glue: no memory for gluing "
-			      "queue %p\n", qp);
+	LIMIT_NETDEBUG(KERN_ERR pr_fmt("queue_glue: no memory for gluing queue %p\n"),
+		       qp);
 	err = -ENOMEM;
 	goto out_fail;
 out_oversize:
 	if (net_ratelimit())
-		printk(KERN_INFO "Oversized IP packet from %pI4.\n",
-			&qp->saddr);
+		pr_info("Oversized IP packet from %pI4\n", &qp->saddr);
 out_fail:
 	IP_INC_STATS_BH(net, IPSTATS_MIB_REASMFAILS);
 	return err;
@@ -687,6 +686,41 @@ int ip_defrag(struct sk_buff *skb, u32 user)
 	return -ENOMEM;
 }
 EXPORT_SYMBOL(ip_defrag);
+
+struct sk_buff *ip_check_defrag(struct sk_buff *skb, u32 user)
+{
+	struct iphdr iph;
+	u32 len;
+
+	if (skb->protocol != htons(ETH_P_IP))
+		return skb;
+
+	if (!skb_copy_bits(skb, 0, &iph, sizeof(iph)))
+		return skb;
+
+	if (iph.ihl < 5 || iph.version != 4)
+		return skb;
+
+	len = ntohs(iph.tot_len);
+	if (skb->len < len || len < (iph.ihl * 4))
+		return skb;
+
+	if (ip_is_fragment(&iph)) {
+		skb = skb_share_check(skb, GFP_ATOMIC);
+		if (skb) {
+			if (!pskb_may_pull(skb, iph.ihl*4))
+				return skb;
+			if (pskb_trim_rcsum(skb, len))
+				return skb;
+			memset(IPCB(skb), 0, sizeof(struct inet_skb_parm));
+			if (ip_defrag(skb, user))
+				return NULL;
+			skb->rxhash = 0;
+		}
+	}
+	return skb;
+}
+EXPORT_SYMBOL(ip_check_defrag);
 
 #ifdef CONFIG_SYSCTL
 static int zero;

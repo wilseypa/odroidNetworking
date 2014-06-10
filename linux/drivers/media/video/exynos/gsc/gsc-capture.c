@@ -32,23 +32,25 @@
 
 #include "gsc-core.h"
 
-static int gsc_capture_queue_setup(struct vb2_queue *vq, unsigned int *num_buffers,
-		       unsigned int *num_planes, unsigned long sizes[],
-		       void *allocators[])
+static int gsc_capture_queue_setup(struct vb2_queue *vq,
+			const struct v4l2_format *fmt, unsigned int *num_buffers,
+			unsigned int *num_planes, unsigned int sizes[],
+			void *allocators[])
 {
 	struct gsc_ctx *ctx = vq->drv_priv;
-	struct gsc_fmt *fmt = ctx->d_frame.fmt;
+	struct gsc_fmt *ffmt = ctx->d_frame.fmt;
 	int i;
 
-	if (!fmt)
+	if (!ffmt)
 		return -EINVAL;
 
-	*num_planes = fmt->num_planes;
+	*num_planes = ffmt->num_planes;
 
-	for (i = 0; i < fmt->num_planes; i++) {
+	for (i = 0; i < ffmt->num_planes; i++) {
 		sizes[i] = get_plane_size(&ctx->d_frame, i);
 		allocators[i] = ctx->gsc_dev->alloc_ctx;
 	}
+	vb2_queue_init(vq);
 
 	return 0;
 }
@@ -56,7 +58,6 @@ static int gsc_capture_buf_prepare(struct vb2_buffer *vb)
 {
 	struct vb2_queue *vq = vb->vb2_queue;
 	struct gsc_ctx *ctx = vq->drv_priv;
-	struct gsc_dev *gsc = ctx->gsc_dev;
 	struct gsc_frame *frame = &ctx->d_frame;
 	int i;
 
@@ -75,8 +76,7 @@ static int gsc_capture_buf_prepare(struct vb2_buffer *vb)
 		vb2_set_plane_payload(vb, i, size);
 	}
 
-	if (frame->cacheable)
-		gsc->vb2->cache_flush(vb, frame->fmt->num_planes);
+	vb2_ion_buf_prepare(vb);
 
 	return 0;
 }
@@ -90,6 +90,7 @@ int gsc_cap_pipeline_s_stream(struct gsc_dev *gsc, int on)
 		return -ENODEV;
 
 	if (on) {
+		gsc_dbg("start stream");
 		ret = v4l2_subdev_call(p->sd_gsc, video, s_stream, 1);
 		if (ret < 0 && ret != -ENOIOCTLCMD)
 			return ret;
@@ -107,9 +108,7 @@ int gsc_cap_pipeline_s_stream(struct gsc_dev *gsc, int on)
 			ret = v4l2_subdev_call(p->sensor, video, s_stream, 1);
 		}
 	} else {
-		ret = v4l2_subdev_call(p->sd_gsc, video, s_stream, 0);
-		if (ret < 0 && ret != -ENOIOCTLCMD)
-			return ret;
+		gsc_dbg("stop stream");
 		if (p->disp) {
 			ret = v4l2_subdev_call(p->disp, video, s_stream, 0);
 			if (ret < 0 && ret != -ENOIOCTLCMD)
@@ -123,6 +122,8 @@ int gsc_cap_pipeline_s_stream(struct gsc_dev *gsc, int on)
 				return ret;
 			ret = v4l2_subdev_call(p->flite, video, s_stream, 0);
 		}
+
+		ret = v4l2_subdev_call(p->sd_gsc, video, s_stream, 0);
 	}
 
 	return ret == -ENOIOCTLCMD ? 0 : ret;
@@ -159,10 +160,7 @@ static void gsc_capture_buf_queue(struct vb2_buffer *vb)
 	if (ret)
 		gsc_err("Failed to prepare output addr");
 
-	if (!test_bit(ST_CAPT_SUSPENDED, &gsc->state)) {
-		gsc_dbg("buf_index : %d", vb->v4l2_buf.index);
-		gsc_hw_set_output_buf_masking(gsc, vb->v4l2_buf.index, 0);
-	}
+	gsc_hw_set_output_buf_masking(gsc, vb->v4l2_buf.index, 0);
 
 	min_bufs = cap->reqbufs_cnt > 1 ? 2 : 1;
 
@@ -180,7 +178,7 @@ static void gsc_capture_buf_queue(struct vb2_buffer *vb)
 		}
 
 		if (!test_bit(ST_CAPT_STREAM, &gsc->state)) {
-			gsc_info("G-Scaler h/w enable control");
+			gsc_dbg("G-Scaler h/w enable control");
 			gsc_hw_enable_control(gsc, true);
 			set_bit(ST_CAPT_STREAM, &gsc->state);
 		}
@@ -190,41 +188,28 @@ static void gsc_capture_buf_queue(struct vb2_buffer *vb)
 	return;
 }
 
-static int gsc_capture_get_scaler_factor(u32 src, u32 tar, u32 *ratio)
-{
-	u32 sh = 3;
-	tar *= 4;
-	if (tar >= src) {
-		*ratio = 1;
-		return 0;
-	}
-
-	while (--sh) {
-		u32 tmp = 1 << sh;
-		if (src >= tar * tmp)
-			*ratio = sh;
-	}
-	return 0;
-}
-
 static int gsc_capture_scaler_info(struct gsc_ctx *ctx)
 {
 	struct gsc_frame *s_frame = &ctx->s_frame;
 	struct gsc_frame *d_frame = &ctx->d_frame;
+	struct gsc_variant *variant = ctx->gsc_dev->variant;
 	struct gsc_scaler *sc = &ctx->scaler;
 
-	gsc_capture_get_scaler_factor(s_frame->crop.width, d_frame->crop.width,
-				      &sc->pre_hratio);
-	gsc_capture_get_scaler_factor(s_frame->crop.height, d_frame->crop.width,
-				      &sc->pre_vratio);
+	gsc_cal_prescaler_ratio(variant, s_frame->crop.width, d_frame->crop.width,
+				&sc->pre_hratio);
+	gsc_cal_prescaler_ratio(variant, s_frame->crop.height, d_frame->crop.height,
+				&sc->pre_vratio);
+
+	gsc_get_prescaler_shfactor(sc->pre_hratio, sc->pre_vratio,
+				   &sc->pre_shfactor);
 
 	sc->main_hratio = (s_frame->crop.width << 16) / d_frame->crop.width;
 	sc->main_vratio = (s_frame->crop.height << 16) / d_frame->crop.height;
 
-	gsc_info("src width : %d, src height : %d, dst width : %d,\
+	gsc_dbg("src width : %d, src height : %d, dst width : %d,\
 		dst height : %d", s_frame->crop.width, s_frame->crop.height,\
 		d_frame->crop.width, d_frame->crop.height);
-	gsc_info("pre_hratio : 0x%x, pre_vratio : 0x%x, main_hratio : 0x%lx,\
+	gsc_dbg("pre_hratio : 0x%x, pre_vratio : 0x%x, main_hratio : 0x%lx,\
 			main_vratio : 0x%lx", sc->pre_hratio,\
 			sc->pre_vratio, sc->main_hratio, sc->main_vratio);
 
@@ -237,39 +222,46 @@ static int gsc_capture_subdev_s_stream(struct v4l2_subdev *sd, int enable)
 	struct gsc_capture_device *cap = &gsc->cap;
 	struct gsc_ctx *ctx = cap->ctx;
 
-	gsc_info("");
+	if (enable) {
+		gsc_dbg("start");
+		gsc_hw_set_frm_done_irq_mask(gsc, false);
+		gsc_hw_set_overflow_irq_mask(gsc, false);
+		gsc_hw_set_one_frm_mode(gsc, false);
+		gsc_hw_set_gsc_irq_enable(gsc, true);
 
-	gsc_hw_set_frm_done_irq_mask(gsc, false);
-	gsc_hw_set_overflow_irq_mask(gsc, false);
-	gsc_hw_set_one_frm_mode(gsc, false);
-	gsc_hw_set_gsc_irq_enable(gsc, true);
+		if (gsc->pipeline.disp) {
+			gsc_hw_set_sysreg_writeback(gsc);
+			gsc_hw_set_pixelasync_reset_wb(gsc);
+		} else {
+			gsc_hw_set_pxlasync_camif_lo_mask(gsc, true);
+		}
 
-	if (gsc->pipeline.disp)
-		gsc_hw_set_sysreg_writeback(ctx);
-	else
-		gsc_hw_set_sysreg_camif(true);
+		gsc_hw_set_input_path(ctx);
+		gsc_hw_set_in_size(ctx);
+		gsc_hw_set_in_image_format(ctx);
+		gsc_hw_set_output_path(ctx);
+		gsc_hw_set_out_size(ctx);
+		gsc_hw_set_out_image_format(ctx);
+		gsc_hw_set_global_alpha(ctx);
 
-	gsc_hw_set_input_path(ctx);
-	gsc_hw_set_in_size(ctx);
-	gsc_hw_set_in_image_format(ctx);
-	gsc_hw_set_output_path(ctx);
-	gsc_hw_set_out_size(ctx);
-	gsc_hw_set_out_image_format(ctx);
-	gsc_hw_set_global_alpha(ctx);
+		gsc_capture_scaler_info(ctx);
+		gsc_hw_set_prescaler(ctx);
+		gsc_hw_set_mainscaler(ctx);
+		gsc_hw_set_h_coef(ctx);
+		gsc_hw_set_v_coef(ctx);
 
-	gsc_capture_scaler_info(ctx);
-	gsc_hw_set_prescaler(ctx);
-	gsc_hw_set_mainscaler(ctx);
+		set_bit(ST_CAPT_PEND, &gsc->state);
 
-	set_bit(ST_CAPT_PEND, &gsc->state);
-
-	gsc_hw_enable_control(gsc, true);
-	set_bit(ST_CAPT_STREAM, &gsc->state);
+		gsc_hw_enable_control(gsc, true);
+		set_bit(ST_CAPT_STREAM, &gsc->state);
+	} else {
+		gsc_dbg("stop");
+	}
 
 	return 0;
 }
 
-static int gsc_capture_start_streaming(struct vb2_queue *q)
+static int gsc_capture_start_streaming(struct vb2_queue *q, unsigned int count)
 {
 	struct gsc_ctx *ctx = q->drv_priv;
 	struct gsc_dev *gsc = ctx->gsc_dev;
@@ -277,15 +269,11 @@ static int gsc_capture_start_streaming(struct vb2_queue *q)
 	struct exynos_md *mdev = gsc->mdev[MDEV_CAPTURE];
 	int min_bufs;
 
-	gsc_hw_set_sw_reset(gsc);
-	gsc_wait_reset(gsc);
-	gsc_hw_set_output_buf_mask_all(gsc);
-
 	min_bufs = cap->reqbufs_cnt > 1 ? 2 : 1;
 	if ((gsc_hw_get_nr_unmask_bits(gsc) >= min_bufs) &&
 		!test_bit(ST_CAPT_STREAM, &gsc->state)) {
 		if (!test_and_set_bit(ST_CAPT_PIPE_STREAM, &gsc->state)) {
-			gsc_info("");
+			gsc_dbg("");
 			if (!mdev->is_flite_on)
 				gsc_cap_pipeline_s_stream(gsc, 1);
 			else
@@ -309,11 +297,10 @@ static int gsc_capture_state_cleanup(struct gsc_dev *gsc)
 	gsc->state &= ~(1 << ST_CAPT_RUN | 1 << ST_CAPT_STREAM |
 			1 << ST_CAPT_PIPE_STREAM | 1 << ST_CAPT_PEND);
 
-	set_bit(ST_CAPT_SUSPENDED, &gsc->state);
 	spin_unlock_irqrestore(&gsc->slock, flags);
 
 	if (streaming) {
-		if (mdev->is_flite_on)
+		if (!mdev->is_flite_on)
 			return gsc_cap_pipeline_s_stream(gsc, 0);
 		else
 			return v4l2_subdev_call(gsc->cap.sd_cap, video,
@@ -330,10 +317,10 @@ static int gsc_cap_stop_capture(struct gsc_dev *gsc)
 		gsc_warn("already stopped\n");
 		return 0;
 	}
-	gsc_info("G-Scaler h/w disable control");
+	gsc_dbg("G-Scaler h/w disable control");
 	gsc_hw_enable_control(gsc, false);
 	clear_bit(ST_CAPT_STREAM, &gsc->state);
-	ret = gsc_wait_operating(gsc);
+	ret = gsc_wait_stop(gsc);
 	if (ret) {
 		gsc_err("GSCALER_OP_STATUS is operating\n");
 		return ret;
@@ -356,6 +343,7 @@ static int gsc_capture_stop_streaming(struct vb2_queue *q)
 static struct vb2_ops gsc_capture_qops = {
 	.queue_setup		= gsc_capture_queue_setup,
 	.buf_prepare		= gsc_capture_buf_prepare,
+	.buf_finish		= vb2_ion_buf_finish,
 	.buf_queue		= gsc_capture_buf_queue,
 	.wait_prepare		= gsc_unlock,
 	.wait_finish		= gsc_lock,
@@ -427,7 +415,7 @@ static int gsc_capture_s_fmt_mplane(struct file *file, void *fh,
 
 	gsc_set_frame_size(frame, pix->width, pix->height);
 
-	gsc_info("f_w: %d, f_h: %d", frame->f_width, frame->f_height);
+	gsc_dbg("f_w: %d, f_h: %d", frame->f_width, frame->f_height);
 
 	return 0;
 }
@@ -540,7 +528,7 @@ static int gsc_capture_g_input(struct file *file, void *priv, unsigned int *i)
 	return 0;
 }
 
-int gsc_capture_ctrls_create(struct gsc_dev *gsc)
+static int gsc_capture_ctrls_create(struct gsc_dev *gsc)
 {
 	int ret;
 
@@ -563,7 +551,7 @@ void gsc_cap_pipeline_prepare(struct gsc_dev *gsc, struct media_entity *me)
 	media_entity_graph_walk_start(&graph, me);
 
 	while ((me = media_entity_graph_walk_next(&graph))) {
-		gsc_info("me->name : %s", me->name);
+		gsc_dbg("me->name : %s", me->name);
 		if (media_entity_type(me) != MEDIA_ENT_T_V4L2_SUBDEV)
 			continue;
 		sd = media_entity_to_v4l2_subdev(me);
@@ -590,11 +578,11 @@ void gsc_cap_pipeline_prepare(struct gsc_dev *gsc, struct media_entity *me)
 		}
 	}
 
-	gsc_info("gsc->pipeline.sd_gsc : 0x%p", gsc->pipeline.sd_gsc);
-	gsc_info("gsc->pipeline.flite : 0x%p", gsc->pipeline.flite);
-	gsc_info("gsc->pipeline.sensor : 0x%p", gsc->pipeline.sensor);
-	gsc_info("gsc->pipeline.csis : 0x%p", gsc->pipeline.csis);
-	gsc_info("gsc->pipeline.disp : 0x%p", gsc->pipeline.disp);
+	gsc_dbg("gsc->pipeline.sd_gsc : 0x%p", gsc->pipeline.sd_gsc);
+	gsc_dbg("gsc->pipeline.flite : 0x%p", gsc->pipeline.flite);
+	gsc_dbg("gsc->pipeline.sensor : 0x%p", gsc->pipeline.sensor);
+	gsc_dbg("gsc->pipeline.csis : 0x%p", gsc->pipeline.csis);
+	gsc_dbg("gsc->pipeline.disp : 0x%p", gsc->pipeline.disp);
 }
 
 static int __subdev_set_power(struct v4l2_subdev *sd, int on)
@@ -652,12 +640,12 @@ static void gsc_set_cam_clock(struct gsc_dev *gsc, bool on)
 		s_info = v4l2_get_subdev_hostdata(sd);
 	}
 	if (on) {
-		clk_enable(gsc->clock);
-		if (gsc->pipeline.sensor)
+		clk_enable(gsc->clock[CLK_GATE]);
+		if (soc_is_exynos5250() && gsc->pipeline.sensor)
 			clk_enable(s_info->camclk);
 	} else {
-		clk_disable(gsc->clock);
-		if (gsc->pipeline.sensor)
+		clk_disable(gsc->clock[CLK_GATE]);
+		if (soc_is_exynos5250() && gsc->pipeline.sensor)
 			clk_disable(s_info->camclk);
 	}
 }
@@ -708,6 +696,7 @@ static int gsc_capture_open(struct file *file)
 	}
 
 	set_bit(ST_CAPT_OPEN, &gsc->state);
+
 	pm_runtime_get_sync(&gsc->pdev->dev);
 
 	if (++gsc->cap.refcnt == 1) {
@@ -724,7 +713,7 @@ static int gsc_capture_open(struct file *file)
 		}
 	}
 
-	gsc_info("pid: %d, state: 0x%lx", task_pid_nr(current), gsc->state);
+	gsc_dbg("pid: %d, state: 0x%lx", task_pid_nr(current), gsc->state);
 
 	return 0;
 
@@ -746,6 +735,12 @@ int __gsc_cap_pipeline_shutdown(struct gsc_dev *gsc)
 	if (ret && ret != -ENXIO)
 		gsc_set_cam_clock(gsc, false);
 
+	gsc->pipeline.sd_gsc= NULL;
+	gsc->pipeline.disp= NULL;
+	gsc->pipeline.flite = NULL;
+	gsc->pipeline.csis = NULL;
+	gsc->pipeline.sensor = NULL;
+
 	return ret == -ENXIO ? 0 : ret;
 }
 
@@ -760,27 +755,27 @@ int gsc_cap_pipeline_shutdown(struct gsc_dev *gsc)
 
 	return ret;
 }
+
 static int gsc_capture_close(struct file *file)
 {
 	struct gsc_dev *gsc = video_drvdata(file);
 
-	gsc_info("pid: %d, state: 0x%lx", task_pid_nr(current), gsc->state);
+	gsc_dbg("pid: %d, state: 0x%lx", task_pid_nr(current), gsc->state);
 
 	if (--gsc->cap.refcnt == 0) {
 		clear_bit(ST_CAPT_OPEN, &gsc->state);
-		gsc_info("G-Scaler h/w disable control");
+		gsc_dbg("G-Scaler h/w disable control");
 		gsc_hw_enable_control(gsc, false);
 		clear_bit(ST_CAPT_STREAM, &gsc->state);
 		gsc_cap_pipeline_shutdown(gsc);
-		clear_bit(ST_CAPT_SUSPENDED, &gsc->state);
 	}
-
-	pm_runtime_put(&gsc->pdev->dev);
 
 	if (gsc->cap.refcnt == 0) {
 		vb2_queue_release(&gsc->cap.vbq);
 		gsc_ctrls_delete(gsc->cap.ctx);
 	}
+
+	pm_runtime_put_sync(&gsc->pdev->dev);
 
 	return v4l2_fh_release(file);
 }
@@ -834,7 +829,7 @@ static int gsc_cap_link_validate(struct gsc_dev *gsc)
 				return -EPIPE;
 			}
 		}
-		gsc_info("sink sd name : %s", sd->name);
+		gsc_dbg("sink sd name : %s", sd->name);
 		/* Get the source pad connected with remote sink pad */
 		pad = media_entity_remote_source(pad);
 		if (pad == NULL ||
@@ -843,7 +838,7 @@ static int gsc_cap_link_validate(struct gsc_dev *gsc)
 
 		/* Get the subdev of source pad */
 		sd = media_entity_to_v4l2_subdev(pad->entity);
-		gsc_info("source sd name : %s", sd->name);
+		gsc_dbg("source sd name : %s", sd->name);
 
 		src_fmt.pad = pad->index;
 		src_fmt.which = V4L2_SUBDEV_FORMAT_ACTIVE;
@@ -853,10 +848,10 @@ static int gsc_cap_link_validate(struct gsc_dev *gsc)
 			return -EPIPE;
 		}
 
-		gsc_info("src_width : %d, src_height : %d, src_code : %d",
+		gsc_dbg("src_width : %d, src_height : %d, src_code : %d",
 			src_fmt.format.width, src_fmt.format.height,
 			src_fmt.format.code);
-		gsc_info("sink_width : %d, sink_height : %d, sink_code : %d",
+		gsc_dbg("sink_width : %d, sink_height : %d, sink_code : %d",
 			sink_fmt.format.width, sink_fmt.format.height,
 			sink_fmt.format.code);
 
@@ -881,15 +876,27 @@ static int gsc_capture_streamon(struct file *file, void *priv,
 	if (gsc_cap_active(gsc))
 		return -EBUSY;
 
-	if (p->disp)
+	if (p->disp) {
+		gsc_pm_qos_ctrl(gsc, GSC_QOS_ON, 267000, 200000);
 		media_entity_pipeline_start(&p->disp->entity, p->pipe);
-	else if (p->sensor)
+	} else if (p->sensor) {
 		media_entity_pipeline_start(&p->sensor->entity, p->pipe);
+	} else {
+		gsc_err("Error pipeline");
+		return -EPIPE;
+	}
 
 	ret = gsc_cap_link_validate(gsc);
 	if (ret)
 		return ret;
 
+	gsc_hw_set_sw_reset(gsc);
+	ret= gsc_wait_reset(gsc);
+	if (ret < 0) {
+		gsc_err("gscaler s/w reset timeout");
+		return ret;
+	}
+	gsc_hw_set_output_buf_mask_all(gsc);
 	return vb2_streamon(&gsc->cap.vbq, type);
 }
 
@@ -902,6 +909,7 @@ static int gsc_capture_streamoff(struct file *file, void *priv,
 	int ret;
 
 	if (p->disp) {
+		gsc_pm_qos_ctrl(gsc, GSC_QOS_OFF, 0, 0);
 		sd = gsc->pipeline.disp;
 	} else if (p->sensor) {
 		sd = gsc->pipeline.sensor;
@@ -940,32 +948,27 @@ static struct v4l2_subdev *gsc_cap_remote_subdev(struct gsc_dev *gsc, u32 *pad)
 static int gsc_capture_g_crop(struct file *file, void *fh, struct v4l2_crop *crop)
 {
 	struct gsc_dev *gsc = video_drvdata(file);
-	struct v4l2_subdev_format format;
 	struct v4l2_subdev *subdev;
-	u32 pad;
+	struct v4l2_subdev_crop subdev_crop;
 	int ret;
 
-	subdev = gsc_cap_remote_subdev(gsc, &pad);
+	subdev = gsc_cap_remote_subdev(gsc, NULL);
 	if (subdev == NULL)
 		return -EINVAL;
 
 	/* Try the get crop operation first and fallback to get format if not
 	 * implemented.
 	 */
-	ret = v4l2_subdev_call(subdev, video, g_crop, crop);
-	if (ret != -ENOIOCTLCMD)
-		return ret;
-
-	format.pad = pad;
-	format.which = V4L2_SUBDEV_FORMAT_ACTIVE;
-	ret = v4l2_subdev_call(subdev, pad, get_fmt, NULL, &format);
+	subdev_crop.which = V4L2_SUBDEV_FORMAT_ACTIVE;
+	subdev_crop.pad = GSC_PAD_SOURCE;
+	ret = v4l2_subdev_call(subdev, pad, get_crop, NULL, &subdev_crop);
 	if (ret < 0)
 		return ret == -ENOIOCTLCMD ? -EINVAL : ret;
 
-	crop->c.left = 0;
-	crop->c.top = 0;
-	crop->c.width = format.format.width;
-	crop->c.height = format.format.height;
+	crop->c.left = subdev_crop.rect.left;
+	crop->c.top = subdev_crop.rect.top;
+	crop->c.width = subdev_crop.rect.width;
+	crop->c.height = subdev_crop.rect.height;
 
 	return 0;
 }
@@ -974,13 +977,21 @@ static int gsc_capture_s_crop(struct file *file, void *fh, struct v4l2_crop *cro
 {
 	struct gsc_dev *gsc = video_drvdata(file);
 	struct v4l2_subdev *subdev;
+	struct v4l2_subdev_crop subdev_crop;
 	int ret;
 
 	subdev = gsc_cap_remote_subdev(gsc, NULL);
 	if (subdev == NULL)
 		return -EINVAL;
 
-	ret = v4l2_subdev_call(subdev, video, s_crop, crop);
+	subdev_crop.which = V4L2_SUBDEV_FORMAT_ACTIVE;
+	subdev_crop.pad = GSC_PAD_SOURCE;
+	subdev_crop.rect.left = crop->c.left;
+	subdev_crop.rect.top = crop->c.top;
+	subdev_crop.rect.width = crop->c.width;
+	subdev_crop.rect.height = crop->c.height;
+
+	ret = v4l2_subdev_call(subdev, pad, set_crop, NULL, &subdev_crop);
 
 	return ret == -ENOIOCTLCMD ? -EINVAL : ret;
 }
@@ -1043,7 +1054,7 @@ static void gsc_cap_check_limit_size(struct gsc_dev *gsc, unsigned int pad,
 {
 	struct gsc_variant *variant = gsc->variant;
 	struct gsc_ctx *ctx = gsc->cap.ctx;
-	u32 min_w, min_h, max_w, max_h;
+	u32 min_w = 0, min_h = 0, max_w = 0, max_h = 0;
 
 	switch (pad) {
 	case GSC_PAD_SINK:
@@ -1068,6 +1079,10 @@ static void gsc_cap_check_limit_size(struct gsc_dev *gsc, unsigned int pad,
 		max_w = variant->pix_max->target_rot_dis_w;
 		max_h = variant->pix_max->target_rot_dis_h;
 		break;
+
+	default:
+		gsc_err("unsupported pad");
+		return;
 	}
 
 	fmt->width = clamp_t(u32, fmt->width, min_w, max_w);
@@ -1292,10 +1307,10 @@ static int gsc_capture_link_setup(struct media_entity *entity,
 	struct gsc_dev *gsc = v4l2_get_subdevdata(sd);
 	struct gsc_capture_device *cap = &gsc->cap;
 
-	gsc_info("");
 	switch (local->index | media_entity_type(remote->entity)) {
 	case GSC_PAD_SINK | MEDIA_ENT_T_V4L2_SUBDEV:
 		if (flags & MEDIA_LNK_FL_ENABLED) {
+			gsc_dbg("local to gsc-subdev link enable");
 			if (cap->input != 0)
 				return -EBUSY;
 			/* Write-Back link enabled */
@@ -1304,18 +1319,29 @@ static int gsc_capture_link_setup(struct media_entity *entity,
 					media_entity_to_v4l2_subdev(remote->entity);
 				gsc->cap.sd_disp->grp_id = FIMD_GRP_ID;
 				cap->ctx->in_path = GSC_WRITEBACK;
-				cap->input |= GSC_IN_FIMD_WRITEBACK;
+				cap->input = GSC_IN_FIMD_WRITEBACK;
 			} else if (remote->index == FLITE_PAD_SOURCE_PREV) {
-				cap->input |= GSC_IN_FLITE_PREVIEW;
+				cap->ctx->in_path = GSC_CAMERA;
+				cap->input = GSC_IN_FLITE_PREVIEW;
 			} else {
-				cap->input |= GSC_IN_FLITE_CAMCORDING;
+				cap->ctx->in_path = GSC_CAMERA;
+				cap->input = GSC_IN_FLITE_CAMCORDING;
 			}
 		} else {
+			if (cap->input == GSC_IN_FIMD_WRITEBACK)
+				gsc->pipeline.disp = NULL;
+			else if ((cap->input == GSC_IN_FLITE_PREVIEW) ||
+				(cap->input == GSC_IN_FLITE_CAMCORDING))
+				gsc->pipeline.flite = NULL;
+			gsc_dbg("local to gsc-subdev link disable");
 			cap->input = GSC_IN_NONE;
 		}
 		break;
 	case GSC_PAD_SOURCE | MEDIA_ENT_T_DEVNODE:
-		/* gsc-cap always write to memory */
+		if (flags & MEDIA_LNK_FL_ENABLED)
+			gsc_dbg("gsc-subdev to gsc-video link enable");
+		else
+			gsc_dbg("gsc-subdev to gsc-video link disable");
 		break;
 	}
 
@@ -1373,104 +1399,18 @@ err_ent:
 static int gsc_capture_create_link(struct gsc_dev *gsc)
 {
 	struct media_entity *source, *sink;
-	struct exynos_platform_gscaler *pdata = gsc->pdata;
-	struct exynos_isp_info *isp_info;
-	u32 num_clients = pdata->num_clients;
-	int ret, i;
-	enum cam_port id;
+	int ret;
 
 	/* GSC-SUBDEV ------> GSC-VIDEO (Always link enable) */
 	source = &gsc->cap.sd_cap->entity;
 	sink = &gsc->cap.vfd->entity;
 	if (source && sink) {
-		ret = media_entity_create_link(source, GSC_PAD_SOURCE, sink,
-				0, MEDIA_LNK_FL_IMMUTABLE |
-				MEDIA_LNK_FL_ENABLED);
+		ret = media_entity_create_link(source, GSC_PAD_SOURCE, sink, 0, 0);
 		if (ret) {
 			gsc_err("failed link flite to gsc\n");
 			return ret;
 		}
 	}
-	for (i = 0; i < num_clients; i++) {
-		isp_info = pdata->isp_info[i];
-		id = isp_info->cam_port;
-		/* FIMC-LITE ------> GSC-SUBDEV (ITU & MIPI common) */
-		source = &gsc->cap.sd_flite[id]->entity;
-		sink = &gsc->cap.sd_cap->entity;
-		if (source && sink) {
-			if (pdata->cam_preview)
-				ret = media_entity_create_link(source,
-						FLITE_PAD_SOURCE_PREV,
-						sink, GSC_PAD_SINK, 0);
-			if (!ret && pdata->cam_camcording)
-				ret = media_entity_create_link(source,
-						FLITE_PAD_SOURCE_CAMCORD,
-						sink, GSC_PAD_SINK, 0);
-			if (ret) {
-				gsc_err("failed link flite to gsc\n");
-				return ret;
-			}
-		}
-	}
-
-	return 0;
-}
-
-static struct v4l2_subdev *gsc_cap_register_sensor(struct gsc_dev *gsc, int i)
-{
-	struct exynos_md *mdev = gsc->mdev[MDEV_CAPTURE];
-	struct v4l2_subdev *sd = NULL;
-
-	sd = mdev->sensor_sd[i];
-	if (!sd)
-		return NULL;
-
-	v4l2_set_subdev_hostdata(sd, &gsc->cap.sensor[i]);
-
-	return sd;
-}
-
-static int gsc_cap_register_sensor_entities(struct gsc_dev *gsc)
-{
-	struct exynos_platform_gscaler *pdata = gsc->pdata;
-	u32 num_clients = pdata->num_clients;
-	int i;
-
-	for (i = 0; i < num_clients; i++) {
-		gsc->cap.sensor[i].pdata = pdata->isp_info[i];
-		gsc->cap.sensor[i].sd = gsc_cap_register_sensor(gsc, i);
-		if (IS_ERR_OR_NULL(gsc->cap.sensor[i].sd)) {
-			gsc_err("failed to get register sensor");
-			return -EINVAL;
-		}
-	}
-
-	return 0;
-}
-
-static int gsc_cap_config_camclk(struct gsc_dev *gsc,
-		struct exynos_isp_info *isp_info, int i)
-{
-	struct gsc_capture_device *gsc_cap = &gsc->cap;
-	struct clk *camclk;
-	struct clk *srclk;
-
-	camclk = clk_get(&gsc->pdev->dev, isp_info->cam_clk_name);
-	if (IS_ERR_OR_NULL(camclk)) {
-		gsc_err("failed to get cam clk");
-		return -ENXIO;
-	}
-	gsc_cap->sensor[i].camclk = camclk;
-
-	srclk = clk_get(&gsc->pdev->dev, isp_info->cam_srclk_name);
-	if (IS_ERR_OR_NULL(srclk)) {
-		clk_put(camclk);
-		gsc_err("failed to get cam source clk\n");
-		return -ENXIO;
-	}
-	clk_set_parent(camclk, srclk);
-	clk_set_rate(camclk, isp_info->clk_frequency);
-	clk_put(srclk);
 
 	return 0;
 }
@@ -1481,10 +1421,7 @@ int gsc_register_capture_device(struct gsc_dev *gsc)
 	struct gsc_capture_device *gsc_cap;
 	struct gsc_ctx *ctx;
 	struct vb2_queue *q;
-	struct exynos_platform_gscaler *pdata = gsc->pdata;
-	struct exynos_isp_info *isp_info;
 	int ret = -ENOMEM;
-	int i;
 
 	ctx = kzalloc(sizeof *ctx, GFP_KERNEL);
 	if (!ctx)
@@ -1524,40 +1461,18 @@ int gsc_register_capture_device(struct gsc_dev *gsc)
 	q = &gsc->cap.vbq;
 	memset(q, 0, sizeof(*q));
 	q->type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-	q->io_modes = VB2_MMAP | VB2_USERPTR;
+	q->io_modes = VB2_MMAP | VB2_USERPTR | VB2_DMABUF;
 	q->drv_priv = gsc->cap.ctx;
 	q->ops = &gsc_capture_qops;
 	q->mem_ops = gsc->vb2->ops;
 
 	vb2_queue_init(q);
 
-	/* Get mipi-csis and fimc-lite subdev ptr using mdev */
-	for (i = 0; i < FLITE_MAX_ENTITIES; i++)
-		gsc->cap.sd_flite[i] = gsc->mdev[MDEV_CAPTURE]->flite_sd[i];
-
-	for (i = 0; i < CSIS_MAX_ENTITIES; i++)
-		gsc->cap.sd_csis[i] = gsc->mdev[MDEV_CAPTURE]->csis_sd[i];
-
-	for (i = 0; i < pdata->num_clients; i++) {
-		isp_info = pdata->isp_info[i];
-		ret = gsc_cap_config_camclk(gsc, isp_info, i);
-		if (ret) {
-			gsc_err("failed setup cam clk");
-			goto err_ctx_alloc;
-		}
-	}
-
-	ret = gsc_cap_register_sensor_entities(gsc);
-	if (ret) {
-		gsc_err("failed register sensor entities");
-		goto err_clk;
-	}
-
 	ret = video_register_device(vfd, VFL_TYPE_GRABBER,
 				    EXYNOS_VIDEONODE_GSC_CAP(gsc->id));
 	if (ret) {
 		gsc_err("failed to register video device");
-		goto err_clk;
+		goto err_ctx_alloc;
 	}
 
 	gsc->cap.vd_pad.flags = MEDIA_PAD_FL_SOURCE;
@@ -1588,9 +1503,6 @@ err_sd_reg:
 	media_entity_cleanup(&vfd->entity);
 err_ent:
 	video_device_release(vfd);
-err_clk:
-	for (i = 0; i < pdata->num_clients; i++)
-		clk_put(gsc_cap->sensor[i].camclk);
 err_ctx_alloc:
 	kfree(ctx);
 

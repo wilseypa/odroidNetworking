@@ -68,6 +68,7 @@ config USB_KAWETH
 
 config USB_PEGASUS
 	tristate "USB Pegasus/Pegasus-II based ethernet device support"
+	select NET_CORE
 	select MII
 	---help---
 	  Say Y here if you know you have Pegasus or Pegasus-II based adapter.
@@ -84,6 +85,7 @@ config USB_PEGASUS
 config USB_RTL8150
 	tristate "USB RTL8150 based ethernet device support (EXPERIMENTAL)"
 	depends on EXPERIMENTAL
+	select NET_CORE
 	select MII
 	help
 	  Say Y here if you have RTL8150 based usb-ethernet adapter.
@@ -95,6 +97,7 @@ config USB_RTL8150
 
 config USB_USBNET
 	tristate "Multi-purpose USB Networking Framework"
+	select NET_CORE
 	select MII
 	---help---
 	  This driver supports several kinds of network links over USB,
@@ -150,6 +153,24 @@ config USB_NET_AX8817X
 	    * Intellinet USB 2.0 Ethernet
 	    * ST Lab USB 2.0 Ethernet
 	    * TrendNet TU2-ET100
+
+	  This driver creates an interface named "ethX", where X depends on
+	  what other networking devices you have in use.
+
+config USB_NET_AX88179_178A
+	tristate "ASIX AX88179/178A USB 3.0/2.0 to Gigabit Ethernet"
+	depends on USB_USBNET
+	select CRC32
+	select PHYLIB
+	default y
+	help
+	  This option adds support for ASIX AX88179 based USB 3.0/2.0
+	  to Gigabit Ethernet adapters.
+
+	  This driver should work with at least the following devices:
+	    * ASIX AX88179
+	    * ASIX AX88178A
+	    * Sitcomm LN-032
 
 	  This driver creates an interface named "ethX", where X depends on
 	  what other networking devices you have in use.
@@ -395,6 +416,28 @@ config USB_NET_KALMIA
 	  To compile this driver as a module, choose M here: the
 	  module will be called kalmia.
 
+config USB_NET_QMI_WWAN
+	tristate "QMI WWAN driver for Qualcomm MSM based 3G and LTE modems"
+	depends on USB_USBNET
+	select USB_WDM
+	help
+	  Support WWAN LTE/3G devices based on Qualcomm Mobile Data Modem
+	  (MDM) chipsets.  Examples of such devices are
+	    * Huawei E392/E398
+
+	  This driver will only drive the ethernet part of the chips.
+	  The devices require additional configuration to be usable.
+	  Multiple management interfaces with linux drivers are
+	  available:
+
+	    * option: AT commands on /dev/ttyUSBx
+	    * cdc-wdm: Qualcomm MSM Interface (QMI) protocol on /dev/cdc-wdmx
+
+	  A modem manager with support for QMI is recommended.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called qmi_wwan.
+
 config USB_HSO
 	tristate "Option USB High Speed Mobile Devices"
 	depends on USB && RFKILL
@@ -457,5 +500,6 @@ config USB_VL600
 	  4G modem from Verizon:
 
 	  http://ubuntuforums.org/showpost.php?p=10589647&postcount=17
+
 
 endmenu

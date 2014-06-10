@@ -18,16 +18,23 @@
 #include <linux/sched.h>
 #include <linux/platform_device.h>
 #include <linux/interrupt.h>
-#include <plat/tvout.h>
+#include <linux/export.h>
+#include <linux/module.h>
+#include <plat/devs.h>
+#include <plat/tv-core.h>
 
 #include "cec.h"
+
+MODULE_AUTHOR("SangPil Moon");
+MODULE_DESCRIPTION("S5P CEC driver");
+MODULE_LICENSE("GPL");
 
 #define CEC_IOC_MAGIC        'c'
 #define CEC_IOC_SETLADDR     _IOW(CEC_IOC_MAGIC, 0, unsigned int)
 
 #define VERSION   "1.0" /* Driver version number */
 #define CEC_MINOR 243	/* Major 10, Minor 242, /dev/cec */
-
+#define TVOUT_TIMEOUT             (3000)
 
 #define CEC_STATUS_TX_RUNNING       (1<<0)
 #define CEC_STATUS_TX_TRANSFERRING  (1<<1)
@@ -112,8 +119,10 @@ static ssize_t s5p_cec_read(struct file *file, char __user *buffer,
 	ssize_t retval;
 	unsigned long spin_flags;
 
-	if (wait_event_interruptible(cec_rx_struct.waitq,
-			atomic_read(&cec_rx_struct.state) == STATE_DONE)) {
+	if (wait_event_interruptible_timeout(cec_tx_struct.waitq,
+		atomic_read(&cec_rx_struct.state) == STATE_DONE,
+		msecs_to_jiffies(TVOUT_TIMEOUT)) == 0) {
+		printk(KERN_ERR "error : waiting for interrupt is timeout\n");
 		return -ERESTARTSYS;
 	}
 	spin_lock_irqsave(&cec_rx_struct.lock, spin_flags);
@@ -169,10 +178,10 @@ static ssize_t s5p_cec_write(struct file *file, const char __user *buffer,
 	kfree(data);
 
 	/* wait for interrupt */
-	if (wait_event_interruptible(cec_tx_struct.waitq,
-		atomic_read(&cec_tx_struct.state)
-		!= STATE_TX)) {
-
+	if (wait_event_interruptible_timeout(cec_tx_struct.waitq,
+		atomic_read(&cec_tx_struct.state) != STATE_TX,
+		msecs_to_jiffies(TVOUT_TIMEOUT)) == 0) {
+		printk(KERN_ERR "error : waiting for interrupt is timeout\n");
 		return -ERESTARTSYS;
 	}
 
@@ -264,7 +273,7 @@ static irqreturn_t s5p_cec_irq_handler(int irq, void *dev_id)
 		if (status & CEC_STATUS_RX_ERROR) {
 			tvout_dbg(" CEC_STATUS_RX_ERROR!\n");
 			s5p_cec_rx_reset();
-
+			s5p_cec_enable_rx();
 		} else {
 			u32 size;
 
@@ -360,7 +369,7 @@ static int __devinit s5p_cec_probe(struct platform_device *pdev)
 	cec_rx_struct.buffer = buffer;
 
 	cec_rx_struct.size   = 0;
-	TV_CLK_GET_WITH_ERR_CHECK(hdmi_cec_clk, pdev, "sclk_cec");
+	TV_CLK_GET_WITH_ERR_CHECK(hdmi_cec_clk, pdev, "hdmicec");
 
 	dev_info(&pdev->dev, "probe successful\n");
 
@@ -428,6 +437,3 @@ static void __exit s5p_cec_exit(void)
 module_init(s5p_cec_init);
 module_exit(s5p_cec_exit);
 
-MODULE_AUTHOR("SangPil Moon");
-MODULE_DESCRIPTION("S5P CEC driver");
-MODULE_LICENSE("GPL");

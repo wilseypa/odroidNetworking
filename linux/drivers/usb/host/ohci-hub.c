@@ -111,6 +111,7 @@ __acquires(ohci->lock)
 	if (!autostop) {
 		ohci->next_statechange = jiffies + msecs_to_jiffies (5);
 		ohci->autostop = 0;
+		ohci->rh_state = OHCI_RH_SUSPENDED;
 	}
 
 done:
@@ -140,7 +141,7 @@ __acquires(ohci->lock)
 
 	if (ohci->hc_control & (OHCI_CTRL_IR | OHCI_SCHED_ENABLES)) {
 		/* this can happen after resuming a swsusp snapshot */
-		if (hcd->state == HC_STATE_RESUMING) {
+		if (ohci->rh_state != OHCI_RH_RUNNING) {
 			ohci_dbg (ohci, "BIOS/SMM active, control %03x\n",
 					ohci->hc_control);
 			status = -EBUSY;
@@ -274,6 +275,7 @@ skip_resume:
 		(void) ohci_readl (ohci, &ohci->regs->control);
 	}
 
+	ohci->rh_state = OHCI_RH_RUNNING;
 	return 0;
 }
 
@@ -336,11 +338,8 @@ static void ohci_finish_controller_resume(struct usb_hcd *hcd)
 	/* If needed, reinitialize and suspend the root hub */
 	if (need_reinit) {
 		spin_lock_irq(&ohci->lock);
-		hcd->state = HC_STATE_RESUMING;
 		ohci_rh_resume(ohci);
-		hcd->state = HC_STATE_QUIESCING;
 		ohci_rh_suspend(ohci, 0);
-		hcd->state = HC_STATE_SUSPENDED;
 		spin_unlock_irq(&ohci->lock);
 	}
 
@@ -626,7 +625,7 @@ static int ohci_start_port_reset (struct usb_hcd *hcd, unsigned port)
  * The short timeout is safe for non-root hubs, and is backward-compatible
  * with earlier Linux hosts.
  */
-#ifdef	CONFIG_USB_SUSPEND
+#if (defined(CONFIG_USB_SUSPEND)&&!defined(CONFIG_MACH_ODROIDXU))
 #define	PORT_RESET_MSEC		50
 #else
 #define	PORT_RESET_MSEC		10

@@ -159,7 +159,6 @@ static void setup_packet_header(struct asus_oled_packet *packet, char flags,
 
 static void enable_oled(struct asus_oled_dev *odev, uint8_t enabl)
 {
-	int a;
 	int retval;
 	int act_len;
 	struct asus_oled_packet *packet;
@@ -178,17 +177,15 @@ static void enable_oled(struct asus_oled_dev *odev, uint8_t enabl)
 	else
 		packet->bitmap[0] = 0xae;
 
-	for (a = 0; a < 1; a++) {
-		retval = usb_bulk_msg(odev->udev,
-			usb_sndbulkpipe(odev->udev, 2),
-			packet,
-			sizeof(struct asus_oled_header) + 1,
-			&act_len,
-			-1);
+	retval = usb_bulk_msg(odev->udev,
+		usb_sndbulkpipe(odev->udev, 2),
+		packet,
+		sizeof(struct asus_oled_header) + 1,
+		&act_len,
+		-1);
 
-		if (retval)
-			dev_dbg(&odev->udev->dev, "retval = %d\n", retval);
-	}
+	if (retval)
+		dev_dbg(&odev->udev->dev, "retval = %d\n", retval);
 
 	odev->enabled = enabl;
 
@@ -201,7 +198,7 @@ static ssize_t set_enabled(struct device *dev, struct device_attribute *attr,
 	struct usb_interface *intf = to_usb_interface(dev);
 	struct asus_oled_dev *odev = usb_get_intfdata(intf);
 	unsigned long value;
-	if (strict_strtoul(buf, 10, &value))
+	if (kstrtoul(buf, 10, &value))
 		return -EINVAL;
 
 	enable_oled(odev, value);
@@ -217,7 +214,7 @@ static ssize_t class_set_enabled(struct device *device,
 		(struct asus_oled_dev *) dev_get_drvdata(device);
 	unsigned long value;
 
-	if (strict_strtoul(buf, 10, &value))
+	if (kstrtoul(buf, 10, &value))
 		return -EINVAL;
 
 	enable_oled(odev, value);

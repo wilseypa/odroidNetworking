@@ -58,7 +58,7 @@
 		add	\rb, \rb, #0x00010000	@ Ser1
 #endif
 		.endm
-#elif defined(CONFIG_ARCH_S3C2410)
+#elif defined(CONFIG_ARCH_S3C24XX)
 		.macro loadsp, rb, tmp
 		mov	\rb, #0x50000000
 		add	\rb, \rb, #0x4000 * CONFIG_S3C_LOWLEVEL_UART_PORT
@@ -216,6 +216,104 @@ restart:	adr	r0, LC0
 		mov	r10, r6
 #endif
 
+		mov	r5, #0			@ init dtb size to 0
+#ifdef CONFIG_ARM_APPENDED_DTB
+/*
+ *   r0  = delta
+ *   r2  = BSS start
+ *   r3  = BSS end
+ *   r4  = final kernel address
+ *   r5  = appended dtb size (still unknown)
+ *   r6  = _edata
+ *   r7  = architecture ID
+ *   r8  = atags/device tree pointer
+ *   r9  = size of decompressed image
+ *   r10 = end of this image, including  bss/stack/malloc space if non XIP
+ *   r11 = GOT start
+ *   r12 = GOT end
+ *   sp  = stack pointer
+ *
+ * if there are device trees (dtb) appended to zImage, advance r10 so that the
+ * dtb data will get relocated along with the kernel if necessary.
+ */
+
+		ldr	lr, [r6, #0]
+#ifndef __ARMEB__
+		ldr	r1, =0xedfe0dd0		@ sig is 0xd00dfeed big endian
+#else
+		ldr	r1, =0xd00dfeed
+#endif
+		cmp	lr, r1
+		bne	dtb_check_done		@ not found
+
+#ifdef CONFIG_ARM_ATAG_DTB_COMPAT
+		/*
+		 * OK... Let's do some funky business here.
+		 * If we do have a DTB appended to zImage, and we do have
+		 * an ATAG list around, we want the later to be translated
+		 * and folded into the former here.  To be on the safe side,
+		 * let's temporarily move  the stack away into the malloc
+		 * area.  No GOT fixup has occurred yet, but none of the
+		 * code we're about to call uses any global variable.
+		*/
+		add	sp, sp, #0x10000
+		stmfd	sp!, {r0-r3, ip, lr}
+		mov	r0, r8
+		mov	r1, r6
+		sub	r2, sp, r6
+		bl	atags_to_fdt
+
+		/*
+		 * If returned value is 1, there is no ATAG at the location
+		 * pointed by r8.  Try the typical 0x100 offset from start
+		 * of RAM and hope for the best.
+		 */
+		cmp	r0, #1
+		sub	r0, r4, #TEXT_OFFSET
+		add	r0, r0, #0x100
+		mov	r1, r6
+		sub	r2, sp, r6
+		bleq	atags_to_fdt
+
+		ldmfd	sp!, {r0-r3, ip, lr}
+		sub	sp, sp, #0x10000
+#endif
+
+		mov	r8, r6			@ use the appended device tree
+
+		/*
+		 * Make sure that the DTB doesn't end up in the final
+		 * kernel's .bss area. To do so, we adjust the decompressed
+		 * kernel size to compensate if that .bss size is larger
+		 * than the relocated code.
+		 */
+		ldr	r5, =_kernel_bss_size
+		adr	r1, wont_overwrite
+		sub	r1, r6, r1
+		subs	r1, r5, r1
+		addhi	r9, r9, r1
+
+		/* Get the dtb's size */
+		ldr	r5, [r6, #4]
+#ifndef __ARMEB__
+		/* convert r5 (dtb size) to little endian */
+		eor	r1, r5, r5, ror #16
+		bic	r1, r1, #0x00ff0000
+		mov	r5, r5, ror #8
+		eor	r5, r5, r1, lsr #8
+#endif
+
+		/* preserve 64-bit alignment */
+		add	r5, r5, #7
+		bic	r5, r5, #7
+
+		/* relocate some pointers past the appended dtb */
+		add	r6, r6, r5
+		add	r10, r10, r5
+		add	sp, sp, r5
+dtb_check_done:
+#endif
+
 /*
  * Check to see if we will overwrite ourselves.
  *   r4  = final kernel address
@@ -223,15 +321,14 @@ restart:	adr	r0, LC0
  *   r10 = end of this image, including  bss/stack/malloc space if non XIP
  * We basically want:
  *   r4 - 16k page directory >= r10 -> OK
- *   r4 + image length <= current position (pc) -> OK
+ *   r4 + image length <= address of wont_overwrite -> OK
  */
 		add	r10, r10, #16384
 		cmp	r4, r10
 		bhs	wont_overwrite
 		add	r10, r4, r9
-   ARM(		cmp	r10, pc		)
- THUMB(		mov	lr, pc		)
- THUMB(		cmp	r10, lr		)
+		adr	r9, wont_overwrite
+		cmp	r10, r9
 		bls	wont_overwrite
 
 /*
@@ -285,14 +382,16 @@ wont_overwrite:
  *   r2  = BSS start
  *   r3  = BSS end
  *   r4  = kernel execution address
+ *   r5  = appended dtb size (0 if not present)
  *   r7  = architecture ID
  *   r8  = atags pointer
  *   r11 = GOT start
  *   r12 = GOT end
  *   sp  = stack pointer
  */
-		teq	r0, #0
+		orrs	r1, r0, r5
 		beq	not_relocated
+
 		add	r11, r11, r0
 		add	r12, r12, r0
 
@@ -307,12 +406,21 @@ wont_overwrite:
 
 		/*
 		 * Relocate all entries in the GOT table.
+		 * Bump bss entries to _edata + dtb size
 		 */
 1:		ldr	r1, [r11, #0]		@ relocate entries in the GOT
-		add	r1, r1, r0		@ table.  This fixes up the
-		str	r1, [r11], #4		@ C references.
+		add	r1, r1, r0		@ This fixes up C references
+		cmp	r1, r2			@ if entry >= bss_start &&
+		cmphs	r3, r1			@       bss_end > entry
+		addhi	r1, r1, r5		@    entry += dtb size
+		str	r1, [r11], #4		@ next entry
 		cmp	r11, r12
 		blo	1b
+
+		/* bump our bss pointers too */
+		add	r2, r2, r5
+		add	r3, r3, r5
+
 #else
 
 		/*
@@ -353,7 +461,8 @@ not_relocated:	mov	r0, #0
 		mov	r0, #0			@ must be zero
 		mov	r1, r7			@ restore architecture number
 		mov	r2, r8			@ restore atags pointer
-		mov	pc, r4			@ call kernel
+ ARM(		mov	pc, r4	)		@ call kernel
+ THUMB(		bx	r4	)		@ entry point is always ARM
 
 		.align	2
 		.type	LC0, #object
@@ -401,6 +510,7 @@ cache_on:	mov	r3, #8			@ cache_on function
  * to cover all 32bit address and cacheable and bufferable.
  */
 __armv4_mpu_cache_on:
+		.arch armv4
 		mov	r0, #0x3f		@ 4G, the whole
 		mcr	p15, 0, r0, c6, c7, 0	@ PR7 Area Setting
 		mcr 	p15, 0, r0, c6, c7, 1
@@ -502,13 +612,25 @@ __setup_mmu:	sub	r3, r4, #16384		@ Page directory size
 		mov	pc, lr
 ENDPROC(__setup_mmu)
 
+@ Enable unaligned access on v6, to allow better code generation
+@ for the decompressor C code:
+__armv6_mmu_cache_on:
+		.arch armv6
+		mrc	p15, 0, r0, c1, c0, 0	@ read SCTLR
+		bic	r0, r0, #2		@ A (no unaligned access fault)
+		orr	r0, r0, #1 << 22	@ U (v6 unaligned access model)
+		mcr	p15, 0, r0, c1, c0, 0	@ write SCTLR
+		b	__armv4_mmu_cache_on
+
 __arm926ejs_mmu_cache_on:
 #ifdef CONFIG_CPU_DCACHE_WRITETHROUGH
+		.arch armv5
 		mov	r0, #4			@ put dcache in WT mode
 		mcr	p15, 7, r0, c15, c0, 0
 #endif
 
 __armv4_mmu_cache_on:
+		.arch armv4
 		mov	r12, lr
 #ifdef CONFIG_MMU
 		bl	__setup_mmu
@@ -528,6 +650,7 @@ __armv4_mmu_cache_on:
 		mov	pc, r12
 
 __armv7_mmu_cache_on:
+		.arch armv7-a
 		mov	r12, lr
 #ifdef CONFIG_MMU
 		mrc	p15, 0, r11, c0, c1, 4	@ read ID_MMFR0
@@ -542,6 +665,9 @@ __armv7_mmu_cache_on:
 		bic	r0, r0, #1 << 28	@ clear SCTLR.TRE
 		orr	r0, r0, #0x5000		@ I-cache enable, RR cache replacement
 		orr	r0, r0, #0x003c		@ write buffer
+		bic	r0, r0, #2		@ A (no unaligned access fault)
+		orr	r0, r0, #1 << 22	@ U (v6 unaligned access model)
+						@ (needed for ARM1176)
 #ifdef CONFIG_MMU
 #ifdef CONFIG_CPU_ENDIAN_BE8
 		orr	r0, r0, #1 << 25	@ big-endian page tables
@@ -551,6 +677,7 @@ __armv7_mmu_cache_on:
 		mcrne	p15, 0, r3, c2, c0, 0	@ load page table pointer
 		mcrne	p15, 0, r1, c3, c0, 0	@ load domain access control
 #endif
+		mcr	p15, 0, r0, c7, c5, 4	@ ISB
 		mcr	p15, 0, r0, c1, c0, 0	@ load control register
 		mrc	p15, 0, r0, c1, c0, 0	@ and read it back
 		mov	r0, #0
@@ -779,7 +906,7 @@ proc_types:
 
 		.word	0x0007b000		@ ARMv6
 		.word	0x000ff000
-		W(b)	__armv4_mmu_cache_on
+		W(b)	__armv6_mmu_cache_on
 		W(b)	__armv4_mmu_cache_off
 		W(b)	__armv6_mmu_cache_flush
 
@@ -899,6 +1026,7 @@ cache_clean_flush:
 		mov	r3, #16
 		b	call_cache_fn
 
+       .arch armv4
 __armv4_mpu_cache_flush:
 		mov	r2, #1
 		mov	r3, #0
@@ -917,6 +1045,7 @@ __armv4_mpu_cache_flush:
 		mov	pc, lr
 		
 __fa526_cache_flush:
+		.arch armv6
 		mov	r1, #0
 		mcr	p15, 0, r1, c7, c14, 0	@ clean and invalidate D cache
 		mcr	p15, 0, r1, c7, c5, 0	@ flush I cache
@@ -931,6 +1060,7 @@ __armv6_mmu_cache_flush:
 		mcr	p15, 0, r1, c7, c10, 4	@ drain WB
 		mov	pc, lr
 
+       .arch armv7-a
 __armv7_mmu_cache_flush:
 		mrc	p15, 0, r10, c0, c1, 5	@ read ID_MMFR1
 		tst	r10, #0xf << 16		@ hierarchical cache (ARMv7)
@@ -991,6 +1121,7 @@ iflush:
 		mcr	p15, 0, r10, c7, c5, 4	@ ISB
 		mov	pc, lr
 
+       .arch armv5
 __armv5tej_mmu_cache_flush:
 1:		mrc	p15, 0, r15, c7, c14, 3	@ test,clean,invalidate D cache
 		bne	1b
@@ -998,6 +1129,7 @@ __armv5tej_mmu_cache_flush:
 		mcr	p15, 0, r0, c7, c10, 4	@ drain WB
 		mov	pc, lr
 
+       .arch armv4
 __armv4_mmu_cache_flush:
 		mov	r2, #64*1024		@ default: 32K dcache size (*2)
 		mov	r11, #32		@ default: 32 byte line size
@@ -1035,6 +1167,8 @@ __armv3_mpu_cache_flush:
 		mov	r1, #0
 		mcr	p15, 0, r1, c7, c0, 0	@ invalidate whole cache v3
 		mov	pc, lr
+
+       .arch armv4
 
 /*
  * Various debugging routines for printing hex characters and

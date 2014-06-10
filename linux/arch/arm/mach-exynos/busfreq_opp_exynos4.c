@@ -30,6 +30,7 @@
 #include <linux/opp.h>
 #include <linux/clk.h>
 #include <linux/workqueue.h>
+#include <linux/pm_qos.h>
 
 #include <asm/mach-types.h>
 
@@ -39,15 +40,12 @@
 #include <mach/gpio.h>
 #include <mach/regs-mem.h>
 #include <mach/cpufreq.h>
-#include <mach/dev.h>
 #include <mach/busfreq_exynos4.h>
 #include <mach/smc.h>
 
 #include <plat/map-s5p.h>
 #include <plat/cpu.h>
 #include <plat/clock.h>
-
-#define BUSFREQ_DEBUG	1
 
 static DEFINE_MUTEX(busfreq_lock);
 
@@ -59,15 +57,6 @@ struct busfreq_control {
 };
 
 static struct busfreq_control bus_ctrl;
-
-void update_busfreq_stat(struct busfreq_data *data, unsigned int index)
-{
-#ifdef BUSFREQ_DEBUG
-	unsigned long long cur_time = get_jiffies_64();
-	data->time_in_state[index] = cputime64_add(data->time_in_state[index], cputime_sub(cur_time, data->last_time));
-	data->last_time = cur_time;
-#endif
-}
 
 static struct opp __maybe_unused *step_up(struct busfreq_data *data, int step)
 {
@@ -164,15 +153,11 @@ static void exynos_busfreq_timer(struct work_struct *work)
 
 	mutex_lock(&busfreq_lock);
 
-	if (data->force_opp)
-		opp = data->force_opp;
-
 	if (bus_ctrl.opp_lock)
 		opp = bus_ctrl.opp_lock;
 
 	index = _target(data, opp);
 
-	update_busfreq_stat(data, index);
 	mutex_unlock(&busfreq_lock);
 	queue_delayed_work(system_freezable_wq, &data->worker, data->sampling_rate);
 }
@@ -217,91 +202,7 @@ static int exynos_busfreq_reboot_event(struct notifier_block *this,
 	return NOTIFY_DONE;
 }
 
-int exynos_busfreq_lock(unsigned int nId,
-	enum busfreq_level_request busfreq_level)
-{
-	return 0;
-}
-
-void exynos_busfreq_lock_free(unsigned int nId)
-{
-}
-
-static ssize_t show_level_lock(struct device *device,
-		struct device_attribute *attr, char *buf)
-{
-	struct platform_device *pdev = to_platform_device(bus_ctrl.dev);
-	struct busfreq_data *data = (struct busfreq_data *)platform_get_drvdata(pdev);
-	int len = 0;
-	unsigned long freq;
-
-	freq = bus_ctrl.opp_lock == NULL ? 0 : opp_get_freq(bus_ctrl.opp_lock);
-
-	len = sprintf(buf, "Current Freq(MIF/INT) : %lu\n", opp_get_freq(data->curr_opp));
-	len += sprintf(buf + len, "Current Lock Freq(MIF/INT) : %lu\n", freq);
-
-	return len;
-}
-
-static ssize_t store_level_lock(struct device *device, struct device_attribute *attr,
-		const char *buf, size_t count)
-{
-	struct platform_device *pdev = to_platform_device(bus_ctrl.dev);
-	struct busfreq_data *data = (struct busfreq_data *)platform_get_drvdata(pdev);
-	struct opp *opp;
-	unsigned long freq;
-	unsigned long maxfreq = opp_get_freq(data->max_opp);
-	int ret;
-
-	ret = sscanf(buf, "%lu", &freq);
-	if ((freq == 0) || (ret == 0)) {
-		pr_info("Release bus level lock.\n");
-		bus_ctrl.opp_lock = NULL;
-		return count;
-	}
-
-	if (freq > maxfreq)
-		freq = maxfreq;
-
-	opp = opp_find_freq_ceil(bus_ctrl.dev, &freq);
-	bus_ctrl.opp_lock = opp;
-	pr_info("Lock Freq : %lu\n", opp_get_freq(opp));
-	return count;
-}
-
-static ssize_t show_locklist(struct device *device,
-		struct device_attribute *attr, char *buf)
-{
-	return dev_lock_list(bus_ctrl.dev, buf);
-}
-
-static ssize_t show_time_in_state(struct device *device,
-		struct device_attribute *attr, char *buf)
-{
-	struct platform_device *pdev = to_platform_device(bus_ctrl.dev);
-	struct busfreq_data *data = (struct busfreq_data *)platform_get_drvdata(pdev);
-	ssize_t len = 0;
-	int i;
-
-	for (i = 0; i < data->table_size; i++)
-		len += sprintf(buf + len, "%u %llu\n", data->table[i].mem_clk,
-				(unsigned long long)cputime64_to_clock_t(data->time_in_state[i]));
-
-	return len;
-}
-
-static DEVICE_ATTR(curr_freq, 0666, show_level_lock, store_level_lock);
-static DEVICE_ATTR(lock_list, 0666, show_locklist, NULL);
-static DEVICE_ATTR(time_in_state, 0666, show_time_in_state, NULL);
-
-static struct attribute *busfreq_attributes[] = {
-	&dev_attr_curr_freq.attr,
-	&dev_attr_lock_list.attr,
-	&dev_attr_time_in_state.attr,
-	NULL
-};
-
-void exynos_request_apply(unsigned long freq, bool fix, bool disable)
+void exynos_request_apply(unsigned long freq)
 {
 	struct opp *opp;
 	unsigned int index;
@@ -313,54 +214,38 @@ void exynos_request_apply(unsigned long freq, bool fix, bool disable)
 
 	opp = bus_ctrl.data->curr_opp;
 
-	if (bus_ctrl.data->force_opp && fix && !disable) {
-		pr_debug("Fix lock already exist.\n");
-		goto out;
-	}
-
-	if (!bus_ctrl.data->force_opp && fix && disable) {
-		pr_debug("Fix lock doesn't exist.\n");
-		goto out;
-	}
-
-	if (fix) {
-		if (disable) {
-			bus_ctrl.data->force_opp = NULL;
-			bus_ctrl.data->curr_opp = bus_ctrl.data->max_opp;
-			opp = bus_ctrl.data->curr_opp;
-		} else {
-			opp = opp_find_freq_exact(bus_ctrl.data->dev, freq, true);
-			bus_ctrl.data->force_opp = opp;
-		}
-	} else {
-		opp = opp_find_freq_ceil(bus_ctrl.data->dev, &freq);
-	}
-
-	if (bus_ctrl.data->force_opp)
-		opp = bus_ctrl.data->force_opp;
+	opp = opp_find_freq_ceil(bus_ctrl.data->dev, &freq);
 
 	if (bus_ctrl.opp_lock)
 		opp = bus_ctrl.opp_lock;
 
-	if (!fix && opp_get_freq(bus_ctrl.data->curr_opp) >= opp_get_freq(opp))
+	if (opp_get_freq(bus_ctrl.data->curr_opp) >= opp_get_freq(opp))
 		goto out;
 
 	index = _target(bus_ctrl.data, opp);
-
-	update_busfreq_stat(bus_ctrl.data, index);
-
 out:
 	mutex_unlock(&busfreq_lock);
 }
 
+static int exynos_qos_handler(struct notifier_block *b, unsigned long val, void *v)
+{
+	exynos_request_apply(val);
+
+	return NOTIFY_OK;
+}
+
+static struct notifier_block exynos_qos_notifier = {
+	.notifier_call = exynos_qos_handler,
+};
+
 static __devinit int exynos_busfreq_probe(struct platform_device *pdev)
 {
 	struct busfreq_data *data;
-	unsigned int val;
+	unsigned int val = 0;
 	bool pop = true;
 
 #ifdef CONFIG_ARM_TRUSTZONE
-	exynos_smc_readsfr(EXYNOS4_PA_DMC0_4212 + 0x4, &val);
+	exynos_smc_readsfr(EXYNOS4_PA_DMC0_4X12 + 0x4, &val);
 #else
 	val = __raw_readl(S5P_VA_DMC0 + 0x4);
 #endif
@@ -382,7 +267,6 @@ static __devinit int exynos_busfreq_probe(struct platform_device *pdev)
 		exynos_buspm_notifier_event;
 	data->exynos_reboot_notifier.notifier_call =
 		exynos_busfreq_reboot_event;
-	data->busfreq_attr_group.attrs = busfreq_attributes;
 
 	if (soc_is_exynos4212() || soc_is_exynos4412()) {
 		data->init = exynos4x12_init;
@@ -418,16 +302,7 @@ static __devinit int exynos_busfreq_probe(struct platform_device *pdev)
 		goto err_busfreq;
 	}
 
-
 	data->last_time = get_jiffies_64();
-
-	data->busfreq_kobject = kobject_create_and_add("busfreq",
-				&cpu_sysdev_class.kset.kobj);
-	if (!data->busfreq_kobject)
-		pr_err("Failed to create busfreq kobject.!\n");
-
-	if (sysfs_create_group(data->busfreq_kobject, &data->busfreq_attr_group))
-		pr_err("Failed to create attributes group.!\n");
 
 	if (register_pm_notifier(&data->exynos_buspm_notifier)) {
 		pr_err("Failed to setup buspm notifier\n");
@@ -441,6 +316,7 @@ static __devinit int exynos_busfreq_probe(struct platform_device *pdev)
 		pr_err("Failed to setup reboot notifier\n");
 
 	platform_set_drvdata(pdev, data);
+	pm_qos_add_notifier(PM_QOS_BUS_THROUGHPUT, &exynos_qos_notifier);
 
 	queue_delayed_work(system_freezable_wq, &data->worker, 10 * data->sampling_rate);
 	return 0;

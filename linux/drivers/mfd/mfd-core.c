@@ -17,6 +17,7 @@
 #include <linux/mfd/core.h>
 #include <linux/pm_runtime.h>
 #include <linux/slab.h>
+#include <linux/module.h>
 
 static struct device_type mfd_dev_type = {
 	.name	= "mfd_device",
@@ -166,7 +167,7 @@ int mfd_add_devices(struct device *parent, int id,
 	atomic_t *cnts;
 
 	/* initialize reference counting for all cells */
-	cnts = kcalloc(sizeof(*cnts), n_devs, GFP_KERNEL);
+	cnts = kcalloc(n_devs, sizeof(*cnts), GFP_KERNEL);
 	if (!cnts)
 		return -ENOMEM;
 

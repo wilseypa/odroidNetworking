@@ -233,6 +233,7 @@ static int blktrans_open(struct block_device *bdev, fmode_t mode)
 	ret = __get_mtd_device(dev->mtd);
 	if (ret)
 		goto error_release;
+	dev->file_mode = mode;
 
 unlock:
 	dev->open++;
@@ -426,6 +427,8 @@ int add_mtd_blktrans_dev(struct mtd_blktrans_dev *new)
 
 	new->rq->queuedata = new;
 	blk_queue_logical_block_size(new->rq, tr->blksize);
+
+	queue_flag_set_unlocked(QUEUE_FLAG_NONROT, new->rq);
 
 	if (tr->discard) {
 		queue_flag_set_unlocked(QUEUE_FLAG_DISCARD, new->rq);

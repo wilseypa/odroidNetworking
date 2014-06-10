@@ -359,6 +359,7 @@ static int samsung_cable_status_update(int status)
 {
 	int ret = 0;
 	charger_type_t source = CHARGER_BATTERY;
+	const char *msg = "";
 
 	dev_dbg(dev, "%s\n", __func__);
 
@@ -367,25 +368,28 @@ static int samsung_cable_status_update(int status)
 
 	switch (status) {
 	case CHARGER_BATTERY:
-		dev_dbg(dev, "%s : cable NOT PRESENT\n", __func__);
-		samsung_fake_bat_info.bat_info.charging_source = CHARGER_BATTERY;
+		msg = "cable NOT PRESENT";
 		break;
 	case CHARGER_USB:
-		dev_dbg(dev, "%s : cable USB\n", __func__);
-		samsung_fake_bat_info.bat_info.charging_source = CHARGER_USB;
+		msg = "cable USB";
 		break;
 	case CHARGER_AC:
-		dev_dbg(dev, "%s : cable AC\n", __func__);
-		samsung_fake_bat_info.bat_info.charging_source = CHARGER_AC;
+		msg = "cable AC";
 		break;
 	case CHARGER_DISCHARGE:
-		dev_dbg(dev, "%s : Discharge\n", __func__);
-		samsung_fake_bat_info.bat_info.charging_source = CHARGER_DISCHARGE;
+		msg = "Discharge";
 		break;
 	default:
-		dev_err(dev, "%s : Nat supported status\n", __func__);
+		dev_err(dev, "%s : cable status is not supported\n", __func__);
 		ret = -EINVAL;
+		break;
 	}
+
+	if (!ret) {
+		dev_dbg(dev, "%s : %s\n", __func__, msg);
+		samsung_fake_bat_info.bat_info.charging_source = status;
+	}
+
 	source = samsung_fake_bat_info.bat_info.charging_source;
 
 	if (source == CHARGER_USB || source == CHARGER_AC)

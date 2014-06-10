@@ -17,7 +17,7 @@
 #define	NEXIO_USB_TOUCH_VENDOR			0x1870
 #define	NEXIO_USB_TOUCH_PRODUCT			0x0100
 //#define NEXIO_USB_TOUCH_DEVICE_NAME 	"nexio-touch"
-#define NEXIO_USB_TOUCH_DEVICE_NAME 	"odroidx-ts"
+#define NEXIO_USB_TOUCH_DEVICE_NAME 	"odroidxu-ts"
 
 #define	NEXIO_USB_TOUCH_LANDSCAPE
 //[*]--------------------------------------------------------------------------------------------------[*]

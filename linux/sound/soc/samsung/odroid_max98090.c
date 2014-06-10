@@ -7,6 +7,7 @@
  *  option) any later version.
  */
 
+#include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/clk.h>
 #include <linux/io.h>
@@ -19,7 +20,7 @@
 #include <mach/regs-clock.h>
 
 #include "i2s.h"
-#include "s3c-i2s-v2.h"
+#include "i2s-regs.h"
 #include "../codecs/max98090.h"
 
 static struct platform_device *odroid_snd_device;
@@ -38,7 +39,7 @@ static int set_epll_rate(unsigned long rate)
 	if (rate == clk_get_rate(fout_epll))
 		goto out;
 
-	clk_set_rate(fout_epll, rate);
+		clk_set_rate(fout_epll, rate);
 out:
 	clk_put(fout_epll);
 
@@ -52,8 +53,8 @@ static int odroid_hw_params(struct snd_pcm_substream *substream,
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
 	struct snd_soc_dai *codec_dai = rtd->codec_dai;
 	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
-	int bfs, psr, rfs, ret;
-	unsigned long rclk;
+	int bfs, rfs, ret, psr;
+	unsigned long rclk, epll_clk = 180633600;
 
 	switch (params_format(params)) {
 	case SNDRV_PCM_FORMAT_U24:
@@ -80,7 +81,7 @@ static int odroid_hw_params(struct snd_pcm_substream *substream,
 		if (bfs == 48)
 			rfs = 384;
 		else
-			rfs = 256;
+			rfs = 512;
 		break;
 	case 64000:
 		rfs = 384;
@@ -99,63 +100,84 @@ static int odroid_hw_params(struct snd_pcm_substream *substream,
 
 	rclk = params_rate(params) * rfs;
 
-	switch (rclk) {
-	case 4096000:
-	case 5644800:
-	case 6144000:
-	case 8467200:
-	case 9216000:
-		psr = 8;
-		break;
-	case 8192000:
-	case 11289600:
-	case 12288000:
-	case 16934400:
-	case 18432000:
-		psr = 4;
-		break;
-	case 22579200:
-	case 24576000:
-	case 33868800:
-	case 36864000:
-		psr = 2;
-		break;
-	case 67737600:
-	case 73728000:
-		psr = 1;
-		break;
-	default:
-		printk("Not yet supported!\n");
+    switch (rclk) {
+        case 4096000:  
+        case 5644800:  
+        case 6144000:  
+        case 8467200:  
+        case 9216000:  
+                psr = 8;
+                break;  
+        case 8192000:   
+        case 11289600:  
+        case 12288000:  
+        case 16934400:  
+        case 18432000:  
+                psr = 4;
+                break;  
+        case 22579200:  
+        case 24576000:  
+        case 33868800:  
+        case 36864000:  
+                psr = 2;
+                break;  
+        case 67737600:  
+        case 73728000:  
+                psr = 1;
+                break;  
+        default:
+                printk(KERN_ERR "rclk = %lu is not yet supported!\n", rclk);
+                return -EINVAL;
+        }
+
+
+/*	if (epll_clk % rclk != 0) {
+		pr_err("Not yet supported!\n");
 		return -EINVAL;
+	}*/
+
+	ret = set_epll_rate(rclk * psr);
+	if(ret < 0) {
+		pr_emerg("max98090: error while setting the epll rate: %d\n", ret);
+		return ret;
 	}
 
-	set_epll_rate(rclk * psr);
-
 	ret = snd_soc_dai_set_fmt(codec_dai, SND_SOC_DAIFMT_I2S
-					| SND_SOC_DAIFMT_NB_NF
-					| SND_SOC_DAIFMT_CBS_CFS);
+			| SND_SOC_DAIFMT_NB_NF
+			| SND_SOC_DAIFMT_CBS_CFS);
 	if (ret < 0)
 		return ret;
 
 	ret = snd_soc_dai_set_fmt(cpu_dai, SND_SOC_DAIFMT_I2S
-					| SND_SOC_DAIFMT_NB_NF
-					| SND_SOC_DAIFMT_CBS_CFS);
+			| SND_SOC_DAIFMT_NB_NF
+			| SND_SOC_DAIFMT_CBS_CFS);
 	if (ret < 0)
 		return ret;
 
-	ret = snd_soc_dai_set_sysclk(codec_dai, 0,
-					rclk, SND_SOC_CLOCK_IN);
+
+	ret = snd_soc_dai_set_sysclk(cpu_dai, SAMSUNG_I2S_OPCLK,
+					0, MOD_OPCLK_PCLK);
+	if (ret < 0)
+		return ret;
+
+	ret = snd_soc_dai_set_sysclk(cpu_dai, SAMSUNG_I2S_RCLKSRC_1,
+					rclk, SND_SOC_CLOCK_OUT);
 	if (ret < 0)
 		return ret;
 
 	ret = snd_soc_dai_set_sysclk(cpu_dai, SAMSUNG_I2S_CDCLK,
-					0, SND_SOC_CLOCK_OUT);
+					rfs, SND_SOC_CLOCK_OUT);
 	if (ret < 0)
 		return ret;
 
 	ret = snd_soc_dai_set_clkdiv(cpu_dai, SAMSUNG_I2S_DIV_BCLK, bfs);
 	if (ret < 0)
 		return ret;
+
+	ret = snd_soc_dai_set_sysclk(codec_dai, 0, rclk, SND_SOC_CLOCK_IN);
+	if (ret < 0)
+		return ret;
+
 
 	return 0;
 }
@@ -183,11 +205,11 @@ static struct snd_soc_dai_link odroid_dai[] = {
 		.name = "MAX98090 AIF1",
 		.stream_name = "Playback",
 		.cpu_dai_name = "samsung-i2s.0",
-		.codec_dai_name = "max98090-aif1",
-#if defined(CONFIG_SND_SAMSUNG_NORMAL) || defined(CONFIG_SND_SAMSUNG_RP)
-		.platform_name = "samsung-audio",
+		.codec_dai_name = "HiFi",
+#ifdef CONFIG_SND_SAMSUNG_USE_IDMA
+		.platform_name = "samsung-idma",
 #else
-		.platform_name = "samsung-audio-idma",
+		.platform_name = "samsung-audio",
 #endif
 		.codec_name = "max98090.1-0010",
 		.init = max98090_init,
@@ -197,11 +219,11 @@ static struct snd_soc_dai_link odroid_dai[] = {
 		.name = "MAX98090 AIF2",
 		.stream_name = "Capture",
 		.cpu_dai_name = "samsung-i2s.0",
-		.codec_dai_name = "max98090-aif1",
-#if defined(CONFIG_SND_SAMSUNG_NORMAL) || defined(CONFIG_SND_SAMSUNG_RP)
-		.platform_name = "samsung-audio",
+		.codec_dai_name = "HiFi",
+#ifdef CONFIG_SND_SAMSUNG_USE_IDMA
+		.platform_name = "samsung-idma",
 #else
-		.platform_name = "samsung-audio-idma",
+		.platform_name = "samsung-audio",
 #endif
 		.codec_name = "max98090.1-0010",
 		.init = max98090_init,
@@ -210,7 +232,8 @@ static struct snd_soc_dai_link odroid_dai[] = {
 };
 
 static struct snd_soc_card odroid = {
-	.name = "Ooroid-max98090",
+	.name = "Odroid-max98090",
+	.owner = THIS_MODULE,
 	.dai_link = odroid_dai,
 
 	/* If you want to use sec_fifo device,
@@ -218,16 +241,18 @@ static struct snd_soc_card odroid = {
 	.num_links = ARRAY_SIZE(odroid_dai),
 };
 
+
 static int __init odroid_audio_init(void)
 {
 	int ret;
-	odroid_snd_device = platform_device_alloc("soc-audio", -1);
+	odroid_snd_device = platform_device_alloc("soc-audio", 0);
 	if (!odroid_snd_device)
 		return -ENOMEM;
 
 	platform_set_drvdata(odroid_snd_device, &odroid);
 
 	ret = platform_device_add(odroid_snd_device);
+
 	if (ret)
 		platform_device_put(odroid_snd_device);
 

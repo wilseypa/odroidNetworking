@@ -11,9 +11,12 @@
  */
 
 #include <linux/platform_device.h>
+#include <linux/export.h>
 
 #include <mach/map.h>
 #include <mach/irqs.h>
+
+#include <asm/sizes.h>
 
 static struct resource s5p_ace_resource[] = {
 	[0] = {

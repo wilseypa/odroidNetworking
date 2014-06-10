@@ -26,7 +26,6 @@
  */
 
 #include <linux/kernel.h>
-#include <linux/version.h>
 #include <linux/module.h>
 #include <linux/interrupt.h>
 #include <linux/delay.h>
@@ -34,7 +33,6 @@
 #include <linux/if_arp.h>
 #include <linux/if_ether.h>
 #include <linux/list.h>
-#include <linux/delay.h>
 #include <linux/io.h>
 
 #include <linux/can.h>
@@ -762,15 +760,15 @@ static int c_can_do_rx_poll(struct net_device *dev, int quota)
 			msg_ctrl_save = priv->read_reg(priv,
 					&priv->regs->ifregs[0].msg_cntrl);
 
-			if (msg_ctrl_save & IF_MCONT_EOB)
-				return num_rx_pkts;
-
 			if (msg_ctrl_save & IF_MCONT_MSGLST) {
 				c_can_handle_lost_msg_obj(dev, 0, msg_obj);
 				num_rx_pkts++;
 				quota--;
 				continue;
 			}
+
+			if (msg_ctrl_save & IF_MCONT_EOB)
+				return num_rx_pkts;
 
 			if (!(msg_ctrl_save & IF_MCONT_NEWDAT))
 				continue;

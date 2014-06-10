@@ -2105,7 +2105,7 @@ static void alloc_dummy_hdrq(struct qib_devdata *dd)
 	dd->cspec->dummy_hdrq = dma_alloc_coherent(&dd->pcidev->dev,
 					dd->rcd[0]->rcvhdrq_size,
 					&dd->cspec->dummy_hdrq_phys,
-					GFP_KERNEL | __GFP_COMP);
+					GFP_ATOMIC | __GFP_COMP);
 	if (!dd->cspec->dummy_hdrq) {
 		qib_devinfo(dd->pcidev, "Couldn't allocate dummy hdrq\n");
 		/* fallback to just 0'ing */
@@ -3275,6 +3275,8 @@ static int init_6120_variables(struct qib_devdata *dd)
 	/* we always allocate at least 2048 bytes for eager buffers */
 	ret = ib_mtu_enum_to_int(qib_ibmtu);
 	dd->rcvegrbufsize = ret != -1 ? max(ret, 2048) : QIB_DEFAULT_MTU;
+	BUG_ON(!is_power_of_2(dd->rcvegrbufsize));
+	dd->rcvegrbufsize_shift = ilog2(dd->rcvegrbufsize);
 
 	qib_6120_tidtemplate(dd);
 

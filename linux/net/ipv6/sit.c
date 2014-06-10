@@ -91,7 +91,7 @@ struct pcpu_tstats {
 	unsigned long	rx_bytes;
 	unsigned long	tx_packets;
 	unsigned long	tx_bytes;
-};
+} __attribute__((aligned(4*sizeof(unsigned long))));
 
 static struct net_device_stats *ipip6_get_stats(struct net_device *dev)
 {
@@ -476,7 +476,7 @@ static void ipip6_tunnel_uninit(struct net_device *dev)
 	struct sit_net *sitn = net_generic(net, sit_net_id);
 
 	if (dev == sitn->fb_tunnel_dev) {
-		rcu_assign_pointer(sitn->tunnels_wc[0], NULL);
+		RCU_INIT_POINTER(sitn->tunnels_wc[0], NULL);
 	} else {
 		ipip6_tunnel_unlink(sitn, netdev_priv(dev));
 		ipip6_tunnel_del_prl(netdev_priv(dev), NULL);
@@ -674,12 +674,16 @@ static netdev_tx_t ipip6_tunnel_xmit(struct sk_buff *skb,
 	if (skb->protocol != htons(ETH_P_IPV6))
 		goto tx_error;
 
+	if (tos == 1)
+		tos = ipv6_get_dsfield(iph6);
+
 	/* ISATAP (RFC4214) - must come before 6to4 */
 	if (dev->priv_flags & IFF_ISATAP) {
 		struct neighbour *neigh = NULL;
+		bool do_tx_error = false;
 
 		if (skb_dst(skb))
-			neigh = dst_get_neighbour(skb_dst(skb));
+			neigh = dst_neigh_lookup(skb_dst(skb), &iph6->daddr);
 
 		if (neigh == NULL) {
 			if (net_ratelimit())
@@ -694,6 +698,10 @@ static netdev_tx_t ipip6_tunnel_xmit(struct sk_buff *skb,
 		     ipv6_addr_is_isatap(addr6))
 			dst = addr6->s6_addr32[3];
 		else
+			do_tx_error = true;
+
+		neigh_release(neigh);
+		if (do_tx_error)
 			goto tx_error;
 	}
 
@@ -702,9 +710,10 @@ static netdev_tx_t ipip6_tunnel_xmit(struct sk_buff *skb,
 
 	if (!dst) {
 		struct neighbour *neigh = NULL;
+		bool do_tx_error = false;
 
 		if (skb_dst(skb))
-			neigh = dst_get_neighbour(skb_dst(skb));
+			neigh = dst_neigh_lookup(skb_dst(skb), &iph6->daddr);
 
 		if (neigh == NULL) {
 			if (net_ratelimit())
@@ -720,10 +729,14 @@ static netdev_tx_t ipip6_tunnel_xmit(struct sk_buff *skb,
 			addr_type = ipv6_addr_type(addr6);
 		}
 
-		if ((addr_type & IPV6_ADDR_COMPATv4) == 0)
-			goto tx_error_icmp;
+		if ((addr_type & IPV6_ADDR_COMPATv4) != 0)
+			dst = addr6->s6_addr32[3];
+		else
+			do_tx_error = true;
 
-		dst = addr6->s6_addr32[3];
+		neigh_release(neigh);
+		if (do_tx_error)
+			goto tx_error;
 	}
 
 	rt = ip_route_output_ports(dev_net(dev), &fl4, NULL,
@@ -913,7 +926,7 @@ ipip6_tunnel_ioctl (struct net_device *dev, struct ifreq *ifr, int cmd)
 				goto done;
 #ifdef CONFIG_IPV6_SIT_6RD
 		} else {
-			ipv6_addr_copy(&ip6rd.prefix, &t->ip6rd.prefix);
+			ip6rd.prefix = t->ip6rd.prefix;
 			ip6rd.relay_prefix = t->ip6rd.relay_prefix;
 			ip6rd.prefixlen = t->ip6rd.prefixlen;
 			ip6rd.relay_prefixlen = t->ip6rd.relay_prefixlen;
@@ -1081,7 +1094,7 @@ ipip6_tunnel_ioctl (struct net_device *dev, struct ifreq *ifr, int cmd)
 			if (relay_prefix != ip6rd.relay_prefix)
 				goto done;
 
-			ipv6_addr_copy(&t->ip6rd.prefix, &prefix);
+			t->ip6rd.prefix = prefix;
 			t->ip6rd.relay_prefix = relay_prefix;
 			t->ip6rd.prefixlen = ip6rd.prefixlen;
 			t->ip6rd.relay_prefixlen = ip6rd.relay_prefixlen;

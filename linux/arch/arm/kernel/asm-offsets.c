@@ -20,6 +20,9 @@
 #include <asm/thread_info.h>
 #include <asm/memory.h>
 #include <asm/procinfo.h>
+#include <asm/hardware/cache-l2x0.h>
+#include <asm/bL_entry.h>
+#include <asm/bL_switcher.h>
 #include <linux/kbuild.h>
 
 /*
@@ -59,6 +62,9 @@ int main(void)
   DEFINE(TI_TP_VALUE,		offsetof(struct thread_info, tp_value));
   DEFINE(TI_FPSTATE,		offsetof(struct thread_info, fpstate));
   DEFINE(TI_VFPSTATE,		offsetof(struct thread_info, vfpstate));
+#ifdef CONFIG_SMP
+  DEFINE(VFP_CPU,		offsetof(union vfp_state, hard.cpu));
+#endif
 #ifdef CONFIG_ARM_THUMBEE
   DEFINE(TI_THUMBEE_STATE,	offsetof(struct thread_info, thumbee_state));
 #endif
@@ -89,6 +95,17 @@ int main(void)
   DEFINE(S_OLD_R0,		offsetof(struct pt_regs, ARM_ORIG_r0));
   DEFINE(S_FRAME_SIZE,		sizeof(struct pt_regs));
   BLANK();
+#ifdef CONFIG_CACHE_L2X0
+  DEFINE(L2X0_R_PHY_BASE,	offsetof(struct l2x0_regs, phy_base));
+  DEFINE(L2X0_R_AUX_CTRL,	offsetof(struct l2x0_regs, aux_ctrl));
+  DEFINE(L2X0_R_TAG_LATENCY,	offsetof(struct l2x0_regs, tag_latency));
+  DEFINE(L2X0_R_DATA_LATENCY,	offsetof(struct l2x0_regs, data_latency));
+  DEFINE(L2X0_R_FILTER_START,	offsetof(struct l2x0_regs, filter_start));
+  DEFINE(L2X0_R_FILTER_END,	offsetof(struct l2x0_regs, filter_end));
+  DEFINE(L2X0_R_PREFETCH_CTRL,	offsetof(struct l2x0_regs, prefetch_ctrl));
+  DEFINE(L2X0_R_PWR_CTRL,	offsetof(struct l2x0_regs, pwr_ctrl));
+  BLANK();
+#endif
 #ifdef CONFIG_CPU_HAS_ASID
   DEFINE(MM_CONTEXT_ID,		offsetof(struct mm_struct, context.id));
   BLANK();
@@ -129,5 +146,15 @@ int main(void)
   DEFINE(DMA_BIDIRECTIONAL,	DMA_BIDIRECTIONAL);
   DEFINE(DMA_TO_DEVICE,		DMA_TO_DEVICE);
   DEFINE(DMA_FROM_DEVICE,	DMA_FROM_DEVICE);
+  BLANK();
+  DEFINE(BL_POWER_UP_SETUP,	offsetof(struct bL_power_ops, power_up_setup));
+  DEFINE(BL_SYNC_CLUSTER_SIZE,	sizeof(struct bL_cluster_sync_struct));
+  DEFINE(BL_SYNC_CLUSTER_FIRST_MAN,
+			offsetof(struct bL_cluster_sync_struct, first_man));
+  DEFINE(BL_SYNC_CLUSTER_CPUS, offsetof(struct bL_cluster_sync_struct, cpus));
+  DEFINE(BL_SYNC_CLUSTER_CLUSTER,
+			offsetof(struct bL_cluster_sync_struct, cluster));
+  DEFINE(BL_SYNC_CLUSTER_INBOUND,
+			offsetof(struct bL_cluster_sync_struct, inbound));
   return 0; 
 }

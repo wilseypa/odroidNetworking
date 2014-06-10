@@ -25,143 +25,41 @@
  * Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
-#include <linux/clk.h>
+#include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/dma-mapping.h>
+#include <linux/usb/otg.h>
 #include <linux/usb/exynos_usb3_drd.h>
-#include <linux/platform_data/exynos_usb3_drd.h>
+#include <linux/platform_data/dwc3-exynos.h>
 
 #include "xhci.h"
 
 struct exynos_xhci_hcd {
-	struct device *dev;
-	struct usb_hcd *hcd;
-	struct clk *clk;
-	int irq;
+	struct device		*dev;
+	struct dwc3_exynos_data	*pdata;
+	struct usb_hcd		*hcd;
+	struct exynos_drd_core	*core;
 };
 
 struct xhci_hcd *exynos_xhci_dbg;
 
 static const char hcd_name[] = "xhci_hcd";
 
-static inline void __orr32(void __iomem *ptr, u32 val)
-{
-	writel(readl(ptr) | val, ptr);
-}
-
-static inline void __bic32(void __iomem *ptr, u32 val)
-{
-	writel(readl(ptr) & ~val, ptr);
-}
-
-static u32 exynos_xhci_change_mode(struct usb_hcd *hcd)
-{
-	u32 gctl;
-
-	gctl = readl(hcd->regs + EXYNOS_USB3_GCTL);
-	gctl &= ~(EXYNOS_USB3_GCTL_PrtCapDir_MASK |
-		EXYNOS_USB3_GCTL_FRMSCLDWN_MASK |
-		EXYNOS_USB3_GCTL_RAMClkSel_MASK);
-	gctl |= (EXYNOS_USB3_GCTL_FRMSCLDWN(0x1e85) | /* Power Down Scale */
-		EXYNOS_USB3_GCTL_PrtCapDir(0x1) | /* 0x1 : Host 0x2 : Device */
-		EXYNOS_USB3_GCTL_PrtCapDir(0x1) | /* 0x1 : Host 0x2 : Device */
-		EXYNOS_USB3_GCTL_RAMClkSel(0x2) | /* Ram Clock Select */
-		EXYNOS_USB3_GCTL_DisScramble);
-
-	writel(gctl, hcd->regs + EXYNOS_USB3_GCTL);
-
-	printk(KERN_INFO "Change xHCI host mode %x\n", gctl);
-
-	return gctl;
-}
-
-static void exynos_xhci_phy_set(struct platform_device *pdev)
-{
-	struct exynos_usb3_drd_pdata *pdata = pdev->dev.platform_data;
-	struct exynos_xhci_hcd *exynos_xhci = platform_get_drvdata(pdev);
-	struct usb_hcd *hcd = exynos_xhci->hcd;
-	/* The reset values:
-	 *	GUSB2PHYCFG(0)	= 0x00002400
-	 *	GUSB3PIPECTL(0)	= 0x00260002
-	 */
-
-	__orr32(hcd->regs + EXYNOS_USB3_GCTL, EXYNOS_USB3_GCTL_CoreSoftReset);
-	__orr32(hcd->regs + EXYNOS_USB3_GUSB2PHYCFG(0),
-			    EXYNOS_USB3_GUSB2PHYCFGx_PHYSoftRst);
-	__orr32(hcd->regs + EXYNOS_USB3_GUSB3PIPECTL(0),
-			    EXYNOS_USB3_GUSB3PIPECTLx_PHYSoftRst);
-
-	/* PHY initialization */
-	if (pdata && pdata->phy_init)
-		pdata->phy_init(pdev, pdata->phy_type);
-
-	__bic32(hcd->regs + EXYNOS_USB3_GUSB2PHYCFG(0),
-			    EXYNOS_USB3_GUSB2PHYCFGx_PHYSoftRst);
-	__bic32(hcd->regs + EXYNOS_USB3_GUSB3PIPECTL(0),
-			    EXYNOS_USB3_GUSB3PIPECTLx_PHYSoftRst);
-	__bic32(hcd->regs + EXYNOS_USB3_GCTL, EXYNOS_USB3_GCTL_CoreSoftReset);
-
-
-	__bic32(hcd->regs + EXYNOS_USB3_GUSB2PHYCFG(0),
-		EXYNOS_USB3_GUSB2PHYCFGx_SusPHY |
-		EXYNOS_USB3_GUSB2PHYCFGx_EnblSlpM |
-		EXYNOS_USB3_GUSB2PHYCFGx_USBTrdTim_MASK);
-	__orr32(hcd->regs + EXYNOS_USB3_GUSB2PHYCFG(0),
-		EXYNOS_USB3_GUSB2PHYCFGx_USBTrdTim(9));
-
-	__bic32(hcd->regs + EXYNOS_USB3_GUSB3PIPECTL(0),
-			    EXYNOS_USB3_GUSB3PIPECTLx_SuspSSPhy);
-
-	dev_dbg(exynos_xhci->dev, "GUSB2PHYCFG(0)=0x%08x, GUSB3PIPECTL(0)=0x%08x",
-		readl(hcd->regs + EXYNOS_USB3_GUSB2PHYCFG(0)),
-		readl(hcd->regs + EXYNOS_USB3_GUSB3PIPECTL(0)));
-
-	/* Global core init */
-	writel(EXYNOS_USB3_GSBUSCFG0_INCR16BrstEna |
-		EXYNOS_USB3_GSBUSCFG0_INCR8BrstEna |
-		EXYNOS_USB3_GSBUSCFG0_INCR4BrstEna,
-		hcd->regs + EXYNOS_USB3_GSBUSCFG0);
-
-	writel(EXYNOS_USB3_GSBUSCFG1_BREQLIMIT(0x3),
-		hcd->regs + EXYNOS_USB3_GSBUSCFG1);
-
-	writel(0x0, hcd->regs + EXYNOS_USB3_GTXTHRCFG);
-	writel(0x0, hcd->regs + EXYNOS_USB3_GRXTHRCFG);
-}
-
-static void exynos_xhci_phy_unset(struct platform_device *pdev)
-{
-	struct exynos_usb3_drd_pdata *pdata = pdev->dev.platform_data;
-	struct exynos_xhci_hcd *exynos_xhci = platform_get_drvdata(pdev);
-	struct usb_hcd *hcd = exynos_xhci->hcd;
-
-	__orr32(hcd->regs + EXYNOS_USB3_GUSB2PHYCFG(0),
-		EXYNOS_USB3_GUSB2PHYCFGx_SusPHY |
-		EXYNOS_USB3_GUSB2PHYCFGx_EnblSlpM);
-
-	__orr32(hcd->regs + EXYNOS_USB3_GUSB3PIPECTL(0),
-			    EXYNOS_USB3_GUSB3PIPECTLx_SuspSSPhy);
-
-	dev_dbg(exynos_xhci->dev, "GUSB2PHYCFG(0)=0x%08x, GUSB3PIPECTL(0)=0x%08x",
-		readl(hcd->regs + EXYNOS_USB3_GUSB2PHYCFG(0)),
-		readl(hcd->regs + EXYNOS_USB3_GUSB3PIPECTL(0)));
-
-	/* PHY shutdown */
-	if (pdata && pdata->phy_exit)
-		pdata->phy_exit(pdev, pdata->phy_type);
-}
-
 #ifdef CONFIG_PM
 static int exynos_xhci_suspend(struct device *dev)
 {
-	struct platform_device *pdev = to_platform_device(dev);
+	struct platform_device	*pdev = to_platform_device(dev);
 	struct exynos_xhci_hcd	*exynos_xhci;
 	struct usb_hcd		*hcd;
 	struct xhci_hcd		*xhci;
 	int			retval = 0;
 
+#ifdef CONFIG_PM_RUNTIME
+	dev_dbg(dev, "%s: usage_count = %d\n",
+		      __func__, atomic_read(&dev->power.usage_count));
+#endif
 	exynos_xhci = dev_get_drvdata(dev);
 	if (!exynos_xhci)
 		return -EINVAL;
@@ -174,24 +72,36 @@ static int exynos_xhci_suspend(struct device *dev)
 
 	if (hcd->state != HC_STATE_SUSPENDED ||
 			xhci->shared_hcd->state != HC_STATE_SUSPENDED)
-		return -EINVAL;
-
+		dev_err(dev, "%s: HC state is not suspended!\n", __func__);
+#ifdef CONFIG_USB_SUSPEND
+	if (pm_runtime_suspended(dev)) {
+		dev_dbg(dev, "xhci is runtime suspended\n");
+		return 0;
+	}
+#endif
 	retval = xhci_suspend(xhci);
+	if (retval < 0)
+		dev_err(dev, "%s: cannot stop xHC\n", __func__);
 
-	exynos_xhci_phy_unset(pdev);
-	clk_disable(exynos_xhci->clk);
+	pm_runtime_put_sync(dev->parent);
+
+	exynos_drd_put(pdev);
 
 	return retval;
 }
 
 static int exynos_xhci_resume(struct device *dev)
 {
-	struct platform_device *pdev = to_platform_device(dev);
+	struct platform_device	*pdev = to_platform_device(dev);
 	struct exynos_xhci_hcd	*exynos_xhci;
 	struct usb_hcd		*hcd;
 	struct xhci_hcd		*xhci;
 	int			retval = 0;
 
+#ifdef CONFIG_PM_RUNTIME
+	dev_dbg(dev, "%s: usage_count = %d\n",
+		      __func__, atomic_read(&dev->power.usage_count));
+#endif
 	exynos_xhci = dev_get_drvdata(dev);
 	if (!exynos_xhci)
 		return -EINVAL;
@@ -200,13 +110,34 @@ static int exynos_xhci_resume(struct device *dev)
 	if (!hcd)
 		return -EINVAL;
 
-	clk_enable(exynos_xhci->clk);
-	exynos_xhci_phy_set(pdev);
+	if (exynos_drd_try_get(pdev)) {
+		dev_err(dev, "%s: cannot get DRD\n", __func__);
+		return -EAGAIN;
+	}
 
-	exynos_xhci_change_mode(hcd);
+	/* Wake up and initialize DRD core */
+	pm_runtime_get_sync(dev->parent);
+	if (exynos_xhci->core->ops->change_mode)
+		exynos_xhci->core->ops->change_mode(exynos_xhci->core, true);
+	if (exynos_xhci->core->ops->core_init)
+		exynos_xhci->core->ops->core_init(exynos_xhci->core);
 
 	xhci = hcd_to_xhci(hcd);
 	retval = xhci_resume(xhci, 0);
+	if (retval < 0)
+		dev_err(dev, "%s: cannot start xHC\n", __func__);
+
+	/*
+	 * In xhci_resume(), config values(AHB bus and los_bias) are intialized.
+	 * So after called xhci_resume(), set the config values again.
+	 */
+	if (exynos_xhci->core->ops->config)
+		exynos_xhci->core->ops->config(exynos_xhci->core);
+
+	/* Update runtime PM status and clear runtime_error */
+	pm_runtime_disable(dev);
+	pm_runtime_set_active(dev);
+	pm_runtime_enable(dev);
 
 	return retval;
 }
@@ -218,33 +149,148 @@ static int exynos_xhci_resume(struct device *dev)
 #ifdef CONFIG_USB_SUSPEND
 static int exynos_xhci_runtime_suspend(struct device *dev)
 {
-	return 0;
+	struct platform_device	*pdev = to_platform_device(dev);
+	struct exynos_xhci_hcd	*exynos_xhci;
+	struct usb_hcd		*hcd;
+	struct xhci_hcd		*xhci;
+	int			retval = 0;
+
+	dev_dbg(dev, "%s\n", __func__);
+
+	exynos_xhci = dev_get_drvdata(dev);
+	if (!exynos_xhci)
+		return -EINVAL;
+
+	hcd = exynos_xhci->hcd;
+	if (!hcd)
+		return -EINVAL;
+
+	xhci = hcd_to_xhci(hcd);
+
+	if (hcd->state != HC_STATE_SUSPENDED ||
+			xhci->shared_hcd->state != HC_STATE_SUSPENDED) {
+		dev_dbg(dev, "%s: HC state is not suspended!\n", __func__);
+		return -EAGAIN;
+	}
+
+	retval = xhci_suspend(xhci);
+	if (retval < 0)
+		dev_err(dev, "%s: cannot stop xHC\n", __func__);
+
+	pm_runtime_put_sync(exynos_xhci->dev->parent);
+
+	exynos_drd_put(pdev);
+
+	return retval;
 }
 
 static int exynos_xhci_runtime_resume(struct device *dev)
 {
-	return 0;
+	struct platform_device	*pdev = to_platform_device(dev);
+	struct exynos_xhci_hcd	*exynos_xhci;
+	struct usb_hcd		*hcd;
+	struct xhci_hcd		*xhci;
+	int			retval = 0;
+
+	dev_dbg(dev, "%s\n", __func__);
+
+	exynos_xhci = dev_get_drvdata(dev);
+	if (!exynos_xhci)
+		return -EINVAL;
+
+	hcd = exynos_xhci->hcd;
+	if (!hcd)
+		return -EINVAL;
+
+	if (dev->power.is_suspended) {
+		dev_dbg(dev, "xhci is system suspended\n");
+		return 0;
+	}
+
+	/* Userspace may try to access host when DRD is in B-Dev mode */
+	if (exynos_drd_try_get(pdev)) {
+		dev_dbg(dev, "%s: cannot get DRD\n", __func__);
+		return -EAGAIN;
+	}
+
+	pm_runtime_get_sync(exynos_xhci->dev->parent);
+
+	/*
+	 * Parent device (DRD core) resumes before its child (xHCI).
+	 * Since we "get" DRD when it's already active, we need to
+	 * reconfigure PHY here, so PHY tuning took effect.
+	 */
+	if (exynos_xhci->core->ops->phy_set)
+		exynos_xhci->core->ops->phy_set(exynos_xhci->core);
+
+	if (exynos_xhci->core->ops->change_mode)
+		exynos_xhci->core->ops->change_mode(exynos_xhci->core, true);
+
+	if (exynos_xhci->core->ops->core_init)
+		exynos_xhci->core->ops->core_init(exynos_xhci->core);
+
+	xhci = hcd_to_xhci(hcd);
+	retval = xhci_resume(xhci, 0);
+	if (retval < 0)
+		dev_err(dev, "%s: cannot start xHC\n", __func__);
+
+	/*
+	 * In xhci_resume(), config values(AHB bus and los_bias) are intialized.
+	 * So after called xhci_resume(), set the config values again.
+	 */
+	if (exynos_xhci->core->ops->config)
+		exynos_xhci->core->ops->config(exynos_xhci->core);
+
+	return retval;
 }
 #else
 #define exynos_xhci_runtime_suspend	NULL
 #define exynos_xhci_runtime_resume	NULL
 #endif
 
+#ifdef CONFIG_PM
+int exynos_xhci_bus_resume(struct usb_hcd *hcd)
+{
+	/* When suspend is failed, re-enable clocks & PHY */
+	pm_runtime_resume(hcd->self.controller);
+
+	return xhci_bus_resume(hcd);
+}
+#else
+#define exynos_xhci_bus_resume NULL
+#endif
+
 static void exynos_xhci_quirks(struct device *dev, struct xhci_hcd *xhci)
 {
+	struct exynos_xhci_hcd  *exynos_xhci = dev_get_drvdata(dev);
+	struct exynos_drd_core  *core = exynos_xhci->core;
+
 	/* Don't use MSI interrupt */
 	xhci->quirks |= XHCI_BROKEN_MSI;
+
+	/* Race Condition in PORTSC Write Followed by Read */
+	if (core->release <= 0x210a)
+		xhci->quirks |= XHCI_PORTSC_RACE_CONDITION;
 }
 
 /* called during probe() after chip reset completes */
 static int exynos_xhci_setup(struct usb_hcd *hcd)
 {
+	struct device		*dev = hcd->self.controller;
+	struct exynos_xhci_hcd	*exynos_xhci = dev_get_drvdata(dev);
 	struct xhci_hcd		*xhci;
 	int			retval;
 
 	retval = xhci_gen_setup(hcd, exynos_xhci_quirks);
 	if (retval)
 		return retval;
+
+	/*
+	 * During xhci_gen_setup() GSBUSCFG0 DRD register resets (detected by
+	 * experiment). We need to configure it again here.
+	 */
+	if (exynos_xhci->core->ops->config)
+		exynos_xhci->core->ops->config(exynos_xhci->core);
 
 	xhci = hcd_to_xhci(hcd);
 	if (!usb_hcd_is_primary_hcd(hcd))
@@ -256,6 +302,34 @@ static int exynos_xhci_setup(struct usb_hcd *hcd)
 	return retval;
 }
 
+static int exynos_xhci_hub_control(struct usb_hcd *hcd, u16 typeReq,
+		u16 wValue, u16 wIndex, char *buf, u16 wLength)
+{
+	struct device		*dev = hcd->self.controller;
+	struct exynos_xhci_hcd	*exynos_xhci = dev_get_drvdata(dev);
+	struct exynos_drd_core  *core = exynos_xhci->core;
+	int retval = 0;
+
+	/*
+	 * When the port power is switched on to a 2.0 port and the device
+	 * is not connected, the PLS field in PORTSC does not get updated
+	 * from 4'h4 to 4'h5. It affects the version 2.00a and earlier.
+	 * The workaround is as follows;
+	 * Before switching on the port power, set the GUSB2PHYCFG[6] to 0.
+	 * After switching on the port power, set this bit to 1.
+	 */
+	if (typeReq == SetPortFeature && wValue == USB_PORT_FEAT_POWER)
+		if (core->release <= 0x200a && core->ops->phy20_suspend)
+			core->ops->phy20_suspend(core, 0);
+
+	retval = xhci_hub_control(hcd, typeReq, wValue, wIndex, buf, wLength);
+
+	if (typeReq == SetPortFeature && wValue == USB_PORT_FEAT_POWER)
+		if (core->release <= 0x200a && core->ops->phy20_suspend)
+			core->ops->phy20_suspend(core, 1);
+
+	return retval;
+}
 
 static const struct hc_driver exynos_xhci_hc_driver = {
 	.description		= hcd_name,
@@ -300,207 +374,175 @@ static const struct hc_driver exynos_xhci_hc_driver = {
 	.get_frame_number	= xhci_get_frame,
 
 	/* Root hub support */
-	.hub_control		= xhci_hub_control,
+	.hub_control		= exynos_xhci_hub_control,
 	.hub_status_data	= xhci_hub_status_data,
 	.bus_suspend		= xhci_bus_suspend,
-	.bus_resume		= xhci_bus_resume,
+	.bus_resume		= exynos_xhci_bus_resume,
 };
 
-static int usb_hcd_exynos_probe(struct platform_device *pdev, const struct hc_driver *driver)
+static int __devinit exynos_xhci_probe(struct platform_device *pdev)
 {
-	struct exynos_xhci_hcd *exynos_xhci;
-	struct exynos_xhci_plat *pdata;
+	struct dwc3_exynos_data	*pdata = pdev->dev.platform_data;
+	struct device		*dev = &pdev->dev;
+	const struct hc_driver	*driver = &exynos_xhci_hc_driver;
+	struct exynos_xhci_hcd	*exynos_xhci;
 	struct usb_hcd		*hcd;
-	struct resource *res;
-	int err;
+	struct xhci_hcd		*xhci;
+	struct resource		*res;
+	int			irq;
+	int			err;
 
 	if (usb_disabled())
 		return -ENODEV;
 
-	if (!driver)
-		return -EINVAL;
-
-	pdata = pdev->dev.platform_data;
 	if (!pdata) {
-		dev_err(&pdev->dev, "No platform data defined\n");
-		return -EINVAL;
+		dev_err(dev, "No platform data defined\n");
+		return -ENODEV;
 	}
 
-	exynos_xhci = kzalloc(sizeof(struct exynos_xhci_hcd), GFP_KERNEL);
-	if (!exynos_xhci)
+	exynos_xhci = devm_kzalloc(dev, sizeof(struct exynos_xhci_hcd),
+				   GFP_KERNEL);
+	if (!exynos_xhci) {
+		dev_err(dev, "Not enough memory\n");
 		return -ENOMEM;
-
-	hcd = usb_create_hcd(driver, &pdev->dev, dev_name(&pdev->dev));
-	if (!hcd) {
-		err = -ENOMEM;
-		goto fail_hcd;
 	}
 
+	exynos_xhci->dev = dev;
+	exynos_xhci->pdata = pdata;
+	exynos_xhci->core = exynos_drd_bind(pdev);
 
-	exynos_xhci->clk = clk_get(&pdev->dev, "usbdrd30");
-	if (IS_ERR(exynos_xhci->clk)) {
-		dev_err(&pdev->dev, "Failed to get usbhost clock\n");
-		err = PTR_ERR(exynos_xhci->clk);
-		goto fail_clk;
+	irq = platform_get_irq(pdev, 0);
+	if (irq < 0) {
+		dev_err(dev, "Failed to get IRQ\n");
+		return -ENXIO;
 	}
-
-	err = clk_enable(exynos_xhci->clk);
-	if (err)
-		goto fail_clken;
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!res) {
-		dev_err(&pdev->dev, "Failed to get I/O memory\n");
-		err = -ENXIO;
-		goto fail_io;
+		dev_err(dev, "Failed to get I/O memory\n");
+		return -ENXIO;
 	}
 
-	/* EHCI, OHCI */
-	hcd->rsrc_start = res->start;
-	hcd->rsrc_len = resource_size(res);
-	hcd->regs = ioremap(res->start, resource_size(res));
-	if (!hcd->regs) {
-		dev_err(&pdev->dev, "Failed to remap I/O memory\n");
-		err = -ENOMEM;
-		goto fail_io;
+	/* Create and add primary HCD */
+
+	hcd = usb_create_hcd(driver, dev, dev_name(dev));
+	if (!hcd) {
+		dev_err(dev, "Failed to create primary HCD\n");
+		return -ENOMEM;
 	}
 
-	exynos_xhci->irq = platform_get_irq(pdev, 0);
-	if (!exynos_xhci->irq) {
-		dev_err(&pdev->dev, "Failed to get IRQ\n");
-		err = -ENODEV;
-		goto fail;
-	}
-
-	exynos_xhci->dev = &pdev->dev;
 	exynos_xhci->hcd = hcd;
+	/* Rewrite driver data with our structure */
 	platform_set_drvdata(pdev, exynos_xhci);
 
-	exynos_xhci_phy_set(pdev);
-	exynos_xhci_change_mode(hcd);
+	hcd->rsrc_start = res->start;
+	hcd->rsrc_len = resource_size(res);
 
-	err = usb_add_hcd(hcd, exynos_xhci->irq, IRQF_DISABLED | IRQF_SHARED);
-	if (err) {
-		dev_err(&pdev->dev, "Failed to add USB HCD\n");
-		goto fail;
+	if (!devm_request_mem_region(dev, res->start,
+				     resource_size(res), dev_name(dev))) {
+		dev_err(dev, "Failed to reserve registers\n");
+		err = -ENOENT;
+		goto put_hcd;
 	}
 
-	return err;
-
-fail:
-	iounmap(hcd->regs);
-fail_io:
-	clk_disable(exynos_xhci->clk);
-fail_clken:
-	clk_put(exynos_xhci->clk);
-fail_clk:
-	usb_put_hcd(hcd);
-fail_hcd:
-	kfree(exynos_xhci);
-	return err;
-}
-
-void usb_hcd_exynos_remove(struct platform_device *pdev)
-{
-	struct exynos_xhci_hcd *exynos_xhci;
-	struct usb_hcd		*hcd;
-
-	exynos_xhci = dev_get_drvdata(&pdev->dev);
-	hcd = exynos_xhci->hcd;
-	if (!hcd)
-		return;
-
-	/* Fake an interrupt request in order to give the driver a chance
-	 * to test whether the controller hardware has been removed (e.g.,
-	 * cardbus physical eject).
-	 */
-	local_irq_disable();
-	usb_hcd_irq(0, hcd);
-	local_irq_enable();
-
-	usb_remove_hcd(hcd);
-
-	exynos_xhci_phy_unset(pdev);
-
-	if (hcd->driver->flags & HCD_MEMORY) {
-		iounmap(hcd->regs);
-		release_mem_region(hcd->rsrc_start, hcd->rsrc_len);
-	} else {
-		release_region(hcd->rsrc_start, hcd->rsrc_len);
-	}
-	usb_put_hcd(hcd);
-
-	kfree(exynos_xhci);
-	clk_disable(exynos_xhci->clk);
-	clk_put(exynos_xhci->clk);
-}
-
-static int __devinit exynos_xhci_probe(struct platform_device *pdev)
-{
-	struct exynos_xhci_hcd *exynos_xhci;
-	struct usb_hcd *hcd;
-	struct xhci_hcd *xhci;
-	int err;
-
-	/* Register the USB 2.0 roothub.
-	 * FIXME: USB core must know to register the USB 2.0 roothub first.
-	 * This is sort of silly, because we could just set the HCD driver flags
-	 * to say USB 2.0, but I'm not sure what the implications would be in
-	 * the other parts of the HCD code.
-	 */
-	err = usb_hcd_exynos_probe(pdev, &exynos_xhci_hc_driver);
-
-	if (err)
-		return err;
-
-	exynos_xhci = dev_get_drvdata(&pdev->dev);
-	hcd = exynos_xhci->hcd;
-	xhci = hcd_to_xhci(hcd);
-	xhci->shared_hcd = usb_create_shared_hcd(&exynos_xhci_hc_driver,
-				&pdev->dev, dev_name(&pdev->dev), hcd);
-	if (!hcd) {
-		dev_err(&pdev->dev, "Unable to create HCD\n");
+	hcd->regs = devm_ioremap_nocache(dev, res->start, resource_size(res));
+	if (!hcd->regs) {
+		dev_err(dev, "Failed to remap I/O memory\n");
 		err = -ENOMEM;
-		goto dealloc_usb2_hcd;
+		goto put_hcd;
+	}
+	hcd->regs -= EXYNOS_USB3_XHCI_REG_START;
+
+	err = exynos_drd_try_get(pdev);
+	if (err) {
+		/* REVISIT: what shall we do if UDC is already running */
+		dev_err(dev, "Failed to access DRD\n");
+		goto put_hcd;
 	}
 
+	/* Wake up and initialize DRD core */
+	pm_runtime_get_sync(dev->parent);
+	if (exynos_xhci->core->ops->change_mode)
+		exynos_xhci->core->ops->change_mode(exynos_xhci->core, true);
+	if (exynos_xhci->core->ops->core_init)
+		exynos_xhci->core->ops->core_init(exynos_xhci->core);
+
+	err = usb_add_hcd(hcd, irq, IRQF_SHARED);
+	if (err) {
+		dev_err(dev, "Failed to add primary HCD\n");
+		goto put_hcd;
+	}
+
+	/* Create and add shared HCD */
+
+	xhci = hcd_to_xhci(hcd);
 	exynos_xhci_dbg = xhci;
-	/* Set the xHCI pointer before exynos_xhci_setup() (aka hcd_driver.reset)
-	 * is called by usb_add_hcd().
+
+	xhci->shared_hcd = usb_create_shared_hcd(driver, dev,
+						 dev_name(dev), hcd);
+	if (!xhci->shared_hcd) {
+		dev_err(dev, "Failed to create shared HCD\n");
+		err = -ENOMEM;
+		goto remove_hcd;
+	}
+
+	xhci->shared_hcd->regs = hcd->regs;
+
+	/*
+	 * Set the xHCI pointer before exynos_xhci_setup()
+	 * (aka hcd_driver.reset) is called by usb_add_hcd().
 	 */
 	*((struct xhci_hcd **) xhci->shared_hcd->hcd_priv) = xhci;
 
-	err = usb_add_hcd(xhci->shared_hcd, exynos_xhci->irq,
-			IRQF_DISABLED | IRQF_SHARED);
-	if (err)
+	err = usb_add_hcd(xhci->shared_hcd, irq, IRQF_SHARED);
+	if (err) {
+		dev_err(dev, "Failed to add shared HCD\n");
 		goto put_usb3_hcd;
+	}
 
-	/* Roothub already marked as USB 3.0 speed */
-	return err;
+	pm_runtime_set_active(dev);
+	pm_runtime_enable(dev);
 
+	if (exynos_xhci->core->otg) {
+		err = otg_set_host(exynos_xhci->core->otg, &hcd->self);
+		if (err) {
+			dev_err(dev, "Unable to bind hcd to DRD switch\n");
+			goto remove_usb3_hcd;
+		}
+	}
+
+	return 0;
+
+remove_usb3_hcd:
+	pm_runtime_disable(dev);
+	usb_remove_hcd(xhci->shared_hcd);
 put_usb3_hcd:
 	usb_put_hcd(xhci->shared_hcd);
-dealloc_usb2_hcd:
+remove_hcd:
 	usb_remove_hcd(hcd);
-	usb_hcd_exynos_remove(pdev);
+put_hcd:
+	usb_put_hcd(hcd);
 
 	return err;
 }
 
 static int __devexit exynos_xhci_remove(struct platform_device *pdev)
 {
-	struct exynos_xhci_hcd *exynos_xhci = platform_get_drvdata(pdev);
-	struct usb_hcd *hcd = exynos_xhci->hcd;
-	struct xhci_hcd *xhci;
+	struct exynos_xhci_hcd	*exynos_xhci = platform_get_drvdata(pdev);
+	struct usb_hcd		*hcd = exynos_xhci->hcd;
+	struct xhci_hcd		*xhci = hcd_to_xhci(hcd);
 
-	xhci = hcd_to_xhci(hcd);
-	if (xhci->shared_hcd) {
-		usb_remove_hcd(xhci->shared_hcd);
-		usb_put_hcd(xhci->shared_hcd);
-	}
+	if (exynos_xhci->core->otg)
+		otg_set_host(exynos_xhci->core->otg, NULL);
+
+	pm_runtime_disable(&pdev->dev);
+
+	usb_remove_hcd(xhci->shared_hcd);
+	usb_put_hcd(xhci->shared_hcd);
+
 	usb_remove_hcd(hcd);
+	usb_put_hcd(hcd);
 
-	usb_hcd_exynos_remove(pdev);
 	kfree(xhci);
 
 	return 0;
@@ -508,8 +550,8 @@ static int __devexit exynos_xhci_remove(struct platform_device *pdev)
 
 static void exynos_xhci_shutdown(struct platform_device *pdev)
 {
-	struct exynos_xhci_hcd *s5p_xhci = platform_get_drvdata(pdev);
-	struct usb_hcd *hcd = s5p_xhci->hcd;
+	struct exynos_xhci_hcd	*s5p_xhci = platform_get_drvdata(pdev);
+	struct usb_hcd		*hcd = s5p_xhci->hcd;
 
 	if (hcd->driver->shutdown)
 		hcd->driver->shutdown(hcd);

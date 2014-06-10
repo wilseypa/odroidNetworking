@@ -25,7 +25,6 @@
 #include <linux/proc_fs.h>
 #include <linux/clk.h>
 #include <linux/i2c.h>
-#include <mach/regs-gpio.h>
 #include <linux/gpio.h>
 #include <linux/device.h>
 #include <linux/cdev.h>
@@ -40,7 +39,6 @@
 #include <linux/timer.h>
 #include <linux/proc_fs.h>
 #include <plat/gpio-cfg.h>
-#include <mach/regs-gpio.h>
 #include <mach/gpio.h>
 
 #ifdef CONFIG_HAS_EARLYSUSPEND
@@ -63,7 +61,7 @@ static int global_minor;
 
 /* ioctl command */
 #define EGALAX_IOC_MAGIC	0x72
-#define	EGALAX_IOCWAKEUP	_IO(EGALAX_IOC_MAGIC, 1)
+#define EGALAX_IOCWAKEUP	_IO(EGALAX_IOC_MAGIC, 1)
 #define EGALAX_IOC_MAXNR	1
 
 /* running mode */
@@ -82,14 +80,7 @@ struct point_data {
 	short Y;
 };
 
-struct egalax_i2c_platform_data {
-	unsigned int gpio_int;
-	unsigned int gpio_en;
-	unsigned int gpio_rst;
-};
-
 struct _egalax_i2c {
-	struct egalax_i2c_platform_data *pdata;
 	struct workqueue_struct *ktouch_wq;
 	struct work_struct work_irq;
 	struct work_struct work_idle;
@@ -143,7 +134,7 @@ static unsigned int DbgLevel; /* DBG_INT|DBG_MODULE|DBG_SUSP|DBG_WAKEUP */
 
 #define EGALAX_DBG(level, fmt, args...) { if ((level&DbgLevel) > 0) \
 			printk(KERN_INFO "[egalax_i2c]: " fmt, ## args); }
-#define IDLE_INTERVAL HZ/20 	/* 50ms */
+#define IDLE_INTERVAL	(HZ/20)
 
 static int sendLoopback(struct i2c_client *client)
 {
@@ -162,7 +153,7 @@ static int sendLoopback(struct i2c_client *client)
 static int wakeup_controller(int irq)
 {
 	int ret = 0;
-	int gpio = p_egalax_i2c_dev->pdata->gpio_int;
+	int gpio = irq_to_gpio(p_egalax_i2c_dev->client->irq);
 
 	if (gpio_get_value(gpio)) {
 		gpio_direction_output(gpio, 0);
@@ -430,9 +421,9 @@ static void ProcessReport(unsigned char *buf, struct _egalax_i2c *p_egalax_i2c)
 	Y = Y * SCREEN_HIGH / EGALAX_MAX;
 
 	if (!(ContactID >= 0 && ContactID < MAX_SUPPORT_POINT))	{
-		EGALAX_DBG(DBG_POINT, "Get I2C Point data error [%02X][%02X]\
-			[%02X][%02X][%02X][%02X]\n", buf[0], buf[1],
-			buf[2], buf[3], buf[4], buf[5]);
+		EGALAX_DBG(DBG_POINT, "Get I2C Point data error "
+			   "[%02X][%02X][%02X][%02X][%02X][%02X]\n",
+			   buf[0], buf[1], buf[2], buf[3], buf[4], buf[5]);
 		return;
 	}
 
@@ -458,15 +449,18 @@ static void ProcessReport(unsigned char *buf, struct _egalax_i2c *p_egalax_i2c)
 		for (i = 0; i < MAX_SUPPORT_POINT; i++) {
 			if (PointBuf[i].Status > 0) {
 				input_report_abs(input_dev,
-					ABS_MT_TRACKING_ID, i);
+						 ABS_MT_TRACKING_ID, i);
 				input_report_abs(input_dev,
-					ABS_MT_TOUCH_MAJOR, PointBuf[i].Status);
+						 ABS_MT_TOUCH_MAJOR,
+						 PointBuf[i].Status);
 				input_report_abs(input_dev,
-					ABS_MT_WIDTH_MAJOR, 0);
+						 ABS_MT_WIDTH_MAJOR, 0);
 				input_report_abs(input_dev,
-					ABS_MT_POSITION_X, PointBuf[ContactID].X);
+						 ABS_MT_POSITION_X,
+						 PointBuf[ContactID].X);
 				input_report_abs(input_dev,
-					ABS_MT_POSITION_Y, PointBuf[ContactID].Y);
+						 ABS_MT_POSITION_Y,
+						 PointBuf[ContactID].Y);
 				input_mt_sync(input_dev);
 				cnt_down++;
 			} else if (PointBuf[i].Status == 0) {
@@ -476,8 +470,9 @@ static void ProcessReport(unsigned char *buf, struct _egalax_i2c *p_egalax_i2c)
 			}
 		}
 		input_sync(input_dev);
-		EGALAX_DBG(DBG_POINT, " Input sync point data done! (Down:%d Up:%d)\n",
-								cnt_down, cnt_up);
+		EGALAX_DBG(DBG_POINT,
+			   "Input sync point data done! (Down:%d Up:%d)\n",
+			   cnt_down, cnt_up);
 	}
 
 	LastUpdateID = ContactID;
@@ -539,8 +534,9 @@ static int egalax_i2c_measure(struct _egalax_i2c *egalax_i2c)
 
 	if (count < 0 || (x_buf[0] != REPORTID_VENDOR && x_buf[0]
 						!= REPORTID_MTOUCH)) {
-		EGALAX_DBG(DBG_I2C, "I2C read error data\
-				with Len=%d hedaer=%d\n", count, x_buf[0]);
+		EGALAX_DBG(DBG_I2C,
+			   "I2C read error data with Len=%d hedaer=%d\n",
+			   count, x_buf[0]);
 		return -1;
 	}
 
@@ -574,7 +570,7 @@ static void egalax_i2c_wq_irq(struct work_struct *work)
 	struct _egalax_i2c *egalax_i2c =
 			container_of(work, struct _egalax_i2c, work_irq);
 	struct i2c_client *client = egalax_i2c->client;
-	int gpio = egalax_i2c->pdata->gpio_int;
+	int gpio = irq_to_gpio(client->irq);
 
 	EGALAX_DBG(DBG_INT, " egalax_i2c_wq run\n");
 
@@ -630,8 +626,9 @@ static void egalax_i2c_wq_idle(struct work_struct *work)
 			egalax_i2c->work_state = MODE_IDLE;
 			EGALAX_DBG(DBG_IDLE, " Set controller to idle mode\n");
 		} else
-			EGALAX_DBG(DBG_IDLE, " Try to set controller\
-						to idle failed:%d\n", ret);
+			EGALAX_DBG(DBG_IDLE,
+				" Try to set controller to idle failed:%d\n",
+				ret);
 	}
 }
 
@@ -652,7 +649,7 @@ static void egalax_i2c_early_suspend(struct early_suspend *handler)
 	return;
 }
 
-#endif // #ifdef CONFIG_HAS_EARLYSUSPEND
+#endif /* CONFIG_HAS_EARLYSUSPEND */
 
 static int __devinit egalax_i2c_probe(struct i2c_client *client,
 			const struct i2c_device_id *id)
@@ -668,18 +665,6 @@ static int __devinit egalax_i2c_probe(struct i2c_client *client,
 		ret = -ENOMEM;
 		goto fail1;
 	}
-
-	p_egalax_i2c_dev->pdata = kmalloc(sizeof(*(p_egalax_i2c_dev->pdata)),
-								GFP_KERNEL);
-	if (NULL == p_egalax_i2c_dev->pdata) {
-		dev_err(&client->dev, "fail to allocate mem for pdata\n");
-		goto fail1_1;
-	}
-
-	memcpy(p_egalax_i2c_dev->pdata, client->dev.platform_data,
-					sizeof(*(p_egalax_i2c_dev->pdata)));
-
-	gpio = p_egalax_i2c_dev->pdata->gpio_int;
 
 	input_dev = allocate_Input_Dev();
 	if (input_dev == NULL) {
@@ -707,6 +692,8 @@ static int __devinit egalax_i2c_probe(struct i2c_client *client,
 	i2c_set_clientdata(client, p_egalax_i2c_dev);
 
 	sendLoopback(client);
+
+	gpio = irq_to_gpio(client->irq);
 
 	if (gpio_get_value(gpio))
 		p_egalax_i2c_dev->skip_packet = 0;
@@ -746,12 +733,9 @@ static int __devinit egalax_i2c_probe(struct i2c_client *client,
 fail3:
 	i2c_set_clientdata(client, NULL);
 	destroy_workqueue(p_egalax_i2c_dev->ktouch_wq);
-	free_irq(client->irq, p_egalax_i2c_dev);
 	input_unregister_device(input_dev);
 	input_dev = NULL;
 fail2:
-	kfree(p_egalax_i2c_dev->pdata);
-fail1_1:
 	kfree(p_egalax_i2c_dev);
 fail1:
 	p_egalax_i2c_dev = NULL;
@@ -789,7 +773,6 @@ static int __devexit egalax_i2c_remove(struct i2c_client *client)
 	}
 
 	i2c_set_clientdata(client, NULL);
-	kfree(egalax_i2c->pdata);
 	kfree(egalax_i2c);
 	p_egalax_i2c_dev = NULL;
 

@@ -17,7 +17,8 @@
 #include <linux/spinlock.h>
 #include <linux/string.h>
 #include <linux/kobject.h>
-#include <linux/module.h>
+#include <linux/export.h>
+#include <linux/kmod.h>
 #include <linux/slab.h>
 #include <linux/user_namespace.h>
 #include <linux/socket.h>
@@ -257,6 +258,9 @@ int kobject_uevent_env(struct kobject *kobj, enum kobject_action action,
 		struct sock *uevent_sock = ue_sk->sk;
 		struct sk_buff *skb;
 		size_t len;
+
+		if (!netlink_has_listeners(uevent_sock, 1))
+			continue;
 
 		/* allocate message with the maximum possible size */
 		len = strlen(action_string) + strlen(devpath) + 2;

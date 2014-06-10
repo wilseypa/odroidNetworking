@@ -1,8 +1,8 @@
 /*
 * Customer code to add GPIO control during WLAN start/stop
-* Copyright (C) 1999-2011, Broadcom Corporation
+* Copyright (C) 1999-2012, Broadcom Corporation
 * 
-*         Unless you and Broadcom execute a separate written software license
+*      Unless you and Broadcom execute a separate written software license
 * agreement governing use of this software, this software is licensed to you
 * under the terms of the GNU General Public License version 2 (the "GPL"),
 * available at http://www.broadcom.com/licenses/GPLv2.php, with the
@@ -20,7 +20,7 @@
 * software in any way with any other Broadcom software provided under a license
 * other than the GPL, without Broadcom's express prior written consent.
 *
-* $Id: dhd_custom_gpio.c,v 1.2.42.1 2010-10-19 00:41:09 Exp $
+* $Id: dhd_custom_gpio.c 345514 2012-07-18 07:47:36Z $
 */
 
 #include <typedefs.h>
@@ -65,17 +65,6 @@ extern int sdioh_mmc_irq(int irq);
 #include <mach/gpio.h>
 #endif
 
-#if defined(CUSTOMER_HW)
-	#include <linux/gpio.h>
-	#include <mach/gpio.h>
-	#include <mach/regs-gpio.h>
-	#include <plat/gpio-cfg.h>
-
-	#if defined(HARD_KERNEL_OOB)
-		extern	int	odroid_get_wifi_irqnum	(void);
-	#endif
-#endif
-
 /* Customer specific Host GPIO defintion  */
 static int dhd_oob_gpio_num = -1;
 
@@ -97,25 +86,19 @@ int dhd_customer_oob_irq_map(unsigned long *irq_flags_ptr)
 {
 	int  host_oob_irq = 0;
 
-#ifdef CUSTOMER_HW2
+#if defined(CUSTOMER_HW2)
 	host_oob_irq = wifi_get_irq_number(irq_flags_ptr);
+
 #else
-
-#if defined(HARD_KERNEL_OOB)
-	host_oob_irq = odroid_get_wifi_irqnum();
-	printk("host_oob_irq: %d \r\n", host_oob_irq);
-	if(host_oob_irq > 0)	return (host_oob_irq);
-#endif
-
 #if defined(CUSTOM_OOB_GPIO_NUM)
 	if (dhd_oob_gpio_num < 0) {
 		dhd_oob_gpio_num = CUSTOM_OOB_GPIO_NUM;
 	}
-#endif /* CUSTOM_OOB_GPIO_NUM */
+#endif /* CUSTOMER_OOB_GPIO_NUM */
 
 	if (dhd_oob_gpio_num < 0) {
 		WL_ERROR(("%s: ERROR customer specific Host GPIO is NOT defined \n",
-			__FUNCTION__));
+		__FUNCTION__));
 		return (dhd_oob_gpio_num);
 	}
 
@@ -123,14 +106,14 @@ int dhd_customer_oob_irq_map(unsigned long *irq_flags_ptr)
 	         __FUNCTION__, dhd_oob_gpio_num));
 
 #if defined CUSTOMER_HW
-//	host_oob_irq = MSM_GPIO_TO_INT(dhd_oob_gpio_num);
-	host_oob_irq = gpio_to_irq(dhd_oob_gpio_num);
+	host_oob_irq = MSM_GPIO_TO_INT(dhd_oob_gpio_num);
 #elif defined CUSTOMER_HW3
 	gpio_request(dhd_oob_gpio_num, "oob irq");
 	host_oob_irq = gpio_to_irq(dhd_oob_gpio_num);
 	gpio_direction_input(dhd_oob_gpio_num);
 #endif /* CUSTOMER_HW */
 #endif /* CUSTOMER_HW2 */
+
 	return (host_oob_irq);
 }
 #endif /* defined(OOB_INTR_ONLY) */
@@ -146,7 +129,7 @@ dhd_customer_gpio_wlan_ctrl(int onoff)
 #ifdef CUSTOMER_HW
 			bcm_wlan_power_off(2);
 #endif /* CUSTOMER_HW */
-#ifdef CUSTOMER_HW2
+#if defined(CUSTOMER_HW2)
 			wifi_set_power(0, 0);
 #endif
 			WL_ERROR(("=========== WLAN placed in RESET ========\n"));
@@ -158,7 +141,7 @@ dhd_customer_gpio_wlan_ctrl(int onoff)
 #ifdef CUSTOMER_HW
 			bcm_wlan_power_on(2);
 #endif /* CUSTOMER_HW */
-#ifdef CUSTOMER_HW2
+#if defined(CUSTOMER_HW2)
 			wifi_set_power(1, 0);
 #endif
 			WL_ERROR(("=========== WLAN going back to live  ========\n"));
@@ -170,8 +153,6 @@ dhd_customer_gpio_wlan_ctrl(int onoff)
 #ifdef CUSTOMER_HW
 			bcm_wlan_power_off(1);
 #endif /* CUSTOMER_HW */
-
-			WL_ERROR(("=========== WLAN placed int REG_ON (OFF) ========\n"));
 		break;
 
 		case WLAN_POWER_ON:
@@ -182,77 +163,11 @@ dhd_customer_gpio_wlan_ctrl(int onoff)
 			/* Lets customer power to get stable */
 			OSL_DELAY(200);
 #endif /* CUSTOMER_HW */
-			WL_ERROR(("=========== WLAN placed int REG_ON (ON) ========\n"));
 		break;
 	}
 }
 
 #ifdef GET_CUSTOM_MAC_ENABLE
-#if defined(HARD_KERNEL)
-
-#if !defined(CONFIG_ANDROID_PARANOID_NETWORK)
-    const   char *filepath = "/usr/wifi/mac_addr";
-#else
-    const   char *filepath = "/data/misc/wifi/mac_addr";
-#endif
-
-int dhd_read_macaddr(unsigned char *mac)
-{
-    struct file *fp      = NULL;
-
-    char macbuffer[18]   = {0};
-    mm_segment_t oldfs   = {0};
-    char randommac[3]    = {0};
-
-    int ret = 0;
-
-    //MAC address copied from nv
-    fp = filp_open(filepath, O_RDONLY, 0);
-
-    if (IS_ERR(fp)) {
-        fp = filp_open(filepath, O_RDWR | O_CREAT, 0666);
-
-        if (IS_ERR(fp)) {
-            printk("%s : Can't file(%s) create!!\n", __func__, filepath);
-            return  -1;
-        }
-
-        oldfs = get_fs();
-        set_fs(get_ds());
-
-        /* Generating the Random Bytes for 3 last octects of the MAC address */
-        get_random_bytes(randommac, 3);
-
-        memset(macbuffer, 0x00, sizeof(macbuffer));
-        sprintf(macbuffer,"%02X:%02X:%02X:%02X:%02X:%02X",
-                0x00,0x90,0x4C,randommac[0],randommac[1],randommac[2]);
-        printk("[%s] The Random Generated MAC ID : %s\n", __func__, macbuffer);
-
-        if(fp->f_mode & FMODE_WRITE) {                  
-            ret = fp->f_op->write(fp, (const char *)macbuffer, sizeof(macbuffer), &fp->f_pos);
-
-            if(ret < 0)
-                    printk("[%s] Mac address [%s] Failed to write into File: %s\n", __func__, macbuffer, filepath);
-            else
-                    printk("[%s] Mac address [%s] written into File: %s\n", __func__, macbuffer, filepath);
-        }
-        set_fs(oldfs);
-    }
-
-    memset(macbuffer, 0x00, sizeof(macbuffer));
-
-    if((ret = kernel_read(fp, 0, macbuffer, 18)) < 0)   return  -1;      
-
-    sscanf(macbuffer, "%02X:%02X:%02X:%02X:%02X:%02X", &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]);
-
-    printk("[%s] Mac address = %02X:%02X:%02X:%02X:%02X:%02X\n", __func__, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-
-    if (fp)     filp_close(fp, NULL);
-
-    return  0;
-}
-#endif  // #if defined(HARD_KERNEL)
-
 /* Function to get custom MAC address */
 int
 dhd_custom_get_mac_address(unsigned char *buf)
@@ -262,10 +177,6 @@ dhd_custom_get_mac_address(unsigned char *buf)
 	WL_TRACE(("%s Enter\n", __FUNCTION__));
 	if (!buf)
 		return -EINVAL;
-
-#if defined(HARD_KERNEL)
-    ret = dhd_read_macaddr(buf);
-#endif
 
 	/* Customer access to MAC address stored outside of DHD driver */
 #if defined(CUSTOMER_HW2) && (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 35))
@@ -378,5 +289,5 @@ void get_customized_country_code(char *country_iso_code, wl_country_t *cspec)
 	cspec->rev = translate_custom_table[0].custom_locale_rev;
 #endif /* EXMAPLE_TABLE */
 	return;
-#endif /* defined(CUSTOMER_HW2) && (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 39)) */
+#endif /* defined(CUSTOMER_HW2) && (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 36)) */
 }

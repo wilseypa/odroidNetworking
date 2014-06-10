@@ -11,7 +11,7 @@
  */
 
 #include <linux/clk.h>
-#include <plat/clock.h>
+#include <linux/module.h>
 
 #include <sound/soc.h>
 
@@ -30,22 +30,22 @@ static int set_audio_clock_heirachy(struct platform_device *pdev)
 	if (IS_ERR(fout_epll)) {
 		printk(KERN_WARNING "%s: Cannot find fout_epll.\n",
 				__func__);
-		return PTR_ERR(fout_epll);
+		return -EINVAL;
 	}
 
 	mout_epll = clk_get(NULL, "mout_epll");
 	if (IS_ERR(mout_epll)) {
 		printk(KERN_WARNING "%s: Cannot find mout_epll.\n",
 				__func__);
-		ret = PTR_ERR(mout_epll);
+		ret = -EINVAL;
 		goto out1;
 	}
 
-	sclk_audio0 = clk_get(NULL, "audio-bus");
+	sclk_audio0 = clk_get(&pdev->dev, "sclk_audio");
 	if (IS_ERR(sclk_audio0)) {
 		printk(KERN_WARNING "%s: Cannot find sclk_audio.\n",
 				__func__);
-		ret = PTR_ERR(sclk_audio0);
+		ret = -EINVAL;
 		goto out2;
 	}
 
@@ -53,26 +53,14 @@ static int set_audio_clock_heirachy(struct platform_device *pdev)
 	if (IS_ERR(sclk_spdif)) {
 		printk(KERN_WARNING "%s: Cannot find sclk_spdif.\n",
 				__func__);
-		ret = PTR_ERR(sclk_spdif);
+		ret = -EINVAL;
 		goto out3;
 	}
 
 	/* Set audio clock hierarchy for S/PDIF */
-	if (clk_set_parent(mout_epll, fout_epll)) {
-		pr_err("unable to set parent %s of clock %s.\n",
-				fout_epll->name, mout_epll->name);
-		ret = -EINVAL;
-	}
-	if (clk_set_parent(sclk_audio0, mout_epll)) {
-		pr_err("unable to set parent %s of clock %s.\n",
-				mout_epll->name, sclk_audio0->name);
-		ret = -EINVAL;
-	}
-	if (clk_set_parent(sclk_spdif, sclk_audio0)) {
-		pr_err("unable to set parent %s of clock %s.\n",
-				sclk_audio0->name, sclk_spdif->name);
-		ret = -EINVAL;
-	}
+	clk_set_parent(mout_epll, fout_epll);
+	clk_set_parent(sclk_audio0, mout_epll);
+	clk_set_parent(sclk_spdif, sclk_audio0);
 
 	clk_put(sclk_spdif);
 out3:
@@ -92,25 +80,25 @@ out1:
 static int set_audio_clock_rate(unsigned long epll_rate,
 				unsigned long audio_rate)
 {
-	struct clk *fout_epll, *sclk_spdif;
+	struct clk *fout_epll, *sclk_audio;
 
 	fout_epll = clk_get(NULL, "fout_epll");
 	if (IS_ERR(fout_epll)) {
 		printk(KERN_ERR "%s: failed to get fout_epll\n", __func__);
-		return PTR_ERR(fout_epll);
+		return -ENOENT;
 	}
 
 	clk_set_rate(fout_epll, epll_rate);
 	clk_put(fout_epll);
 
-	sclk_spdif = clk_get(NULL, "sclk_spdif");
-	if (IS_ERR(sclk_spdif)) {
-		printk(KERN_ERR "%s: failed to get sclk_spdif\n", __func__);
-		return PTR_ERR(sclk_spdif);
+	sclk_audio = clk_get(NULL, "sclk_audio");
+	if (IS_ERR(sclk_audio)) {
+		printk(KERN_ERR "%s: failed to get sclk_audio\n", __func__);
+		return -ENOENT;
 	}
 
-	clk_set_rate(sclk_spdif, audio_rate);
-	clk_put(sclk_spdif);
+	clk_set_rate(sclk_audio, audio_rate);
+	clk_put(sclk_audio);
 
 	return 0;
 }
@@ -120,17 +108,14 @@ static int smdk_hw_params(struct snd_pcm_substream *substream,
 {
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
 	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
-	unsigned long pll_out, rclk_rate;
+	unsigned long pll_out = 180633600, rclk_rate;
 	int ret, ratio;
 
 	switch (params_rate(params)) {
 	case 44100:
-		pll_out = 45158400;
-		break;
 	case 32000:
 	case 48000:
 	case 96000:
-		pll_out = 49152000;
 		break;
 	default:
 		return -EINVAL;
@@ -172,6 +157,7 @@ static struct snd_soc_dai_link smdk_dai = {
 
 static struct snd_soc_card smdk = {
 	.name = "SMDK-S/PDIF",
+	.owner = THIS_MODULE,
 	.dai_link = &smdk_dai,
 	.num_links = 1,
 };
@@ -191,7 +177,7 @@ static int __init smdk_init(void)
 	if (ret)
 		goto err1;
 
-	smdk_snd_spdif_device = platform_device_alloc("soc-audio", -1);
+	smdk_snd_spdif_device = platform_device_alloc("soc-audio", 1);
 	if (!smdk_snd_spdif_device) {
 		ret = -ENOMEM;
 		goto err2;

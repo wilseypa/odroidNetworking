@@ -31,7 +31,7 @@ static 	int __devinit 	touch_i2c_probe		(struct i2c_client *client, const struct
 #ifdef CONFIG_PM
 static int 	touch_i2c_suspend(struct i2c_client *client, pm_message_t message)
 {
-	#ifndef CONFIG_HAS_EARLYSUSPEND
+	#ifdef CONFIG_HAS_EARLYSUSPEND
 		struct	touch	*ts = i2c_get_clientdata(client);
 	
 		ts->pdata->suspend(&client->dev);
@@ -43,7 +43,7 @@ static int 	touch_i2c_suspend(struct i2c_client *client, pm_message_t message)
 //[*]--------------------------------------------------------------------------------------------------[*]
 static int 	touch_i2c_resume(struct i2c_client *client)
 {
-	#ifndef CONFIG_HAS_EARLYSUSPEND
+	#ifdef CONFIG_HAS_EARLYSUSPEND
 		struct	touch	*ts = i2c_get_clientdata(client);
 
 		ts->pdata->resume(&cliet->dev);
@@ -159,12 +159,6 @@ static void __exit 	touch_i2c_exit(void)
 	i2c_del_driver(&touch_i2c_driver);
 }
 module_exit(touch_i2c_exit);
-
-//[*]--------------------------------------------------------------------------------------------------[*]
-MODULE_AUTHOR("HardKernel Co., Ltd.");
-MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Touchscreen I2C bus driver");
-MODULE_ALIAS("i2c:touch");
 
 //[*]--------------------------------------------------------------------------------------------------[*]
 //[*]--------------------------------------------------------------------------------------------------[*]

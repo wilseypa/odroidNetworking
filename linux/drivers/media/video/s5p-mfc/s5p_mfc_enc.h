@@ -1,7 +1,7 @@
 /*
  * linux/drivers/media/video/s5p-mfc/s5p_mfc_enc.h
  *
- * Copyright (c) 2010 Samsung Electronics Co., Ltd.
+ * Copyright (C) 2011 Samsung Electronics Co., Ltd.
  *		http://www.samsung.com/
  *
  * This program is free software; you can redistribute it and/or modify
@@ -10,10 +10,14 @@
  * (at your option) any later version.
  */
 
-#ifndef __S5P_MFC_ENC_H_
-#define __S5P_MFC_ENC_H_ __FILE__
+#ifndef S5P_MFC_ENC_H_
+#define S5P_MFC_ENC_H_
 
+struct s5p_mfc_codec_ops *get_enc_codec_ops(void);
+struct vb2_ops *get_enc_queue_ops(void);
 const struct v4l2_ioctl_ops *get_enc_v4l2_ioctl_ops(void);
-int s5p_mfc_init_enc_ctx(struct s5p_mfc_ctx *ctx);
+struct s5p_mfc_fmt *get_enc_def_fmt(bool src);
+int s5p_mfc_enc_ctrls_setup(struct s5p_mfc_ctx *ctx);
+void s5p_mfc_enc_ctrls_delete(struct s5p_mfc_ctx *ctx);
 
-#endif /* __S5P_MFC_ENC_H_  */
+#endif /* S5P_MFC_ENC_H_  */

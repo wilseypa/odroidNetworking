@@ -24,7 +24,6 @@
 #include <media/v4l2-ioctl.h>
 #include <media/videobuf2-core.h>
 #include <media/videobuf2-fb.h>
-#include "exynos/tv/mixer.h"
 
 static int debug = 1;
 module_param(debug, int, 0644);
@@ -111,42 +110,6 @@ static inline void vb2_drv_lock(struct vb2_queue *q)
 static inline void vb2_drv_unlock(struct vb2_queue *q)
 {
 	q->ops->wait_prepare(q);
-}
-
-static int vb2_wait_for_vsync(struct fb_info *info, u32 crtc) {
-        struct vb2_fb_data *data = info->par;
-        struct vb2_queue *q = data->q;
-        struct mxr_layer *layer = vb2_get_drv_priv(q);
-        struct mxr_device *mdev = layer->mdev;
-
-        if(crtc != 0)
-                return -ENODEV;
-
-        if(mxr_reg_wait4vsync(mdev) < 0)
-                return -ETIMEDOUT;
-
-        return 0;
-}
-static int do_hkdk_ioctl(struct fb_info *info, unsigned int cmd, unsigned long arg) {
-
-        struct vb2_fb_data *data = info->par;
-        u32 crtc;
-        int ret = 0;
-
-        switch (cmd) {
-        case FBIO_WAITFORVSYNC:
-                pr_emerg("videobuf2-fb: FBIO_WAITFORVSYNC called\n");
-                if(get_user(crtc, (__u32 __user *)arg))
-                        ret = -EFAULT;
-                else
-                        ret = vb2_wait_for_vsync(info, crtc);
-                break;
-        default:
-                printk(KERN_ERR "videobuf2-fb: unknown ioctl command: %x\n", cmd);
-                ret =  -EINVAL;
-                break;
-        }
-        return ret;
 }
 
 /**
@@ -272,36 +235,6 @@ static int vb2_fb_activate(struct fb_info *info)
 	info->screen_base = data->vaddr;
 	info->screen_size = size;
 	info->fix.line_length = bpl;
-
-#if    defined(CONFIG_BOARD_ODROID_X)  || \
-       defined(CONFIG_BOARD_ODROID_X2) || \
-       defined(CONFIG_BOARD_ODROID_U)  || \
-       defined(CONFIG_BOARD_ODROID_U2) || \
-       defined(CONFIG_BOARD_ODROID_Q)  || \
-       defined(CONFIG_BOARD_ODROID_Q2)
-       /*
-        * This goes in against the laziness of the author of this code, who
-        * claimed that real life users do not need such a thing as a physical
-        * adress, so that he didn't need to bother implementing something
-        * complex. He never took into account that we might need to get UMP
-        * (for the mali) and the crappily implemented exynos HDMI FB driver
-        * talking over videobuf2. Guess which vendors hw this sort of
-        * combination actually happens, and then check the email address of the
-        * author.
-        *
-        * Now, if only vb2 had a way of querying whether memory is contiguous
-        * and if only there were a useful way to retrieve the physical address
-        * in such a case... But no, we have to abuse the fact that the exynos
-        * mixer uses cma, and that the cookie is actually the paddr. Horrid,
-        * but at least I get a working lima driver under exynos, which can
-        * talk to FB directly, without breaking the binary driver or properly
-        * implementing the display engine in raw FB.
-        *
-        * 2x NIH clashing... Who would've thought it possible. --libv
-        */
-        info->fix.smem_start = (unsigned long) vb2_plane_cookie(q->bufs[0], 0);
-#endif /* BOARD_ODROID */
-
 	info->fix.smem_len = info->fix.mmio_len = size;
 
 	var = &info->var;
@@ -553,7 +486,6 @@ static struct fb_ops vb2_fb_ops = {
 	.fb_fillrect	= cfb_fillrect,
 	.fb_copyarea	= cfb_copyarea,
 	.fb_imageblit	= cfb_imageblit,
-	.fb_ioctl		= do_hkdk_ioctl,
 };
 
 /**

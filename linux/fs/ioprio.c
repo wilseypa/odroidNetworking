@@ -21,6 +21,7 @@
  */
 #include <linux/gfp.h>
 #include <linux/kernel.h>
+#include <linux/export.h>
 #include <linux/ioprio.h>
 #include <linux/blkdev.h>
 #include <linux/capability.h>
@@ -30,7 +31,7 @@
 
 int set_task_ioprio(struct task_struct *task, int ioprio)
 {
-	int err, i;
+	int err;
 	struct io_context *ioc;
 	const struct cred *cred = current_cred(), *tcred;
 
@@ -47,33 +48,12 @@ int set_task_ioprio(struct task_struct *task, int ioprio)
 	if (err)
 		return err;
 
-	task_lock(task);
-	do {
-		ioc = task->io_context;
-		/* see wmb() in current_io_context() */
-		smp_read_barrier_depends();
-		if (ioc)
-			break;
-
-		ioc = alloc_io_context(GFP_ATOMIC, -1);
-		if (!ioc) {
-			err = -ENOMEM;
-			break;
-		}
-		/* let other ioc users see the new values */
-		smp_wmb();
-		task->io_context = ioc;
-	} while (1);
-
-	if (!err) {
-		ioc->ioprio = ioprio;
-		/* make sure schedulers see the new ioprio value */
-		wmb();
-		for (i = 0; i < IOC_IOPRIO_CHANGED_BITS; i++)
-			set_bit(i, ioc->ioprio_changed);
+	ioc = get_task_io_context(task, GFP_ATOMIC, NUMA_NO_NODE);
+	if (ioc) {
+		ioc_ioprio_changed(ioc, ioprio);
+		put_io_context(ioc);
 	}
 
-	task_unlock(task);
 	return err;
 }
 EXPORT_SYMBOL_GPL(set_task_ioprio);

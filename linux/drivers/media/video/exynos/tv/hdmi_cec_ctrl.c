@@ -14,7 +14,7 @@
 #include <linux/slab.h>
 #include <linux/platform_device.h>
 #include <linux/videodev2.h>
-#include <linux/videodev2_exynos_camera.h>
+#include <linux/videodev2_exynos_media.h>
 #include <linux/irqreturn.h>
 #include <linux/stddef.h>
 
@@ -53,10 +53,10 @@ void s5p_cec_set_divider(void)
 
 	div_ratio  = S5P_HDMI_FIN / CEC_DIV_RATIO - 1;
 
-	reg = readl(S5P_HDMI_PHY_CONTROL);
+	reg = readl(EXYNOS_HDMI_PHY_CONTROL);
 	reg = (reg & ~(0x3FF << 16)) | (div_ratio << 16);
 
-	writel(reg, S5P_HDMI_PHY_CONTROL);
+	writel(reg, EXYNOS_HDMI_PHY_CONTROL);
 
 	div_val = CEC_DIV_RATIO * 0.00005 - 1;
 
@@ -117,8 +117,14 @@ void s5p_cec_unmask_tx_interrupts(void)
 
 void s5p_cec_reset(void)
 {
+	u8 reg;
+
 	writeb(S5P_CES_RX_CTRL_RESET, cec_base + S5P_CES_RX_CTRL);
 	writeb(S5P_CES_TX_CTRL_RESET, cec_base + S5P_CES_TX_CTRL);
+
+	reg = readb(cec_base + 0xc4);
+	reg &= ~0x1;
+	writeb(reg, cec_base + 0xc4);
 }
 
 void s5p_cec_tx_reset(void)
@@ -128,7 +134,13 @@ void s5p_cec_tx_reset(void)
 
 void s5p_cec_rx_reset(void)
 {
+	u8 reg;
+
 	writeb(S5P_CES_RX_CTRL_RESET, cec_base + S5P_CES_RX_CTRL);
+
+	reg = readb(cec_base + 0xc4);
+	reg &= ~0x1;
+	writeb(reg, cec_base + 0xc4);
 }
 
 void s5p_cec_threshold(void)
@@ -212,7 +224,7 @@ void s5p_cec_get_rx_buf(u32 size, u8 *buffer)
 	}
 }
 
-int __init s5p_cec_mem_probe(struct platform_device *pdev)
+int s5p_cec_mem_probe(struct platform_device *pdev)
 {
 	struct resource *res;
 	size_t	size;

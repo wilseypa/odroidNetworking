@@ -782,12 +782,6 @@ static void scsi_done(struct scsi_cmnd *cmd)
 	blk_complete_request(cmd->request);
 }
 
-/* Move this to a header if it becomes more generally useful */
-static struct scsi_driver *scsi_cmd_to_driver(struct scsi_cmnd *cmd)
-{
-	return *(struct scsi_driver **)cmd->request->rq_disk->private_data;
-}
-
 /**
  * scsi_finish_command - cleanup and pass command back to upper layer
  * @cmd: the command
@@ -1030,6 +1024,9 @@ int scsi_get_vpd_page(struct scsi_device *sdev, u8 page, unsigned char *buf,
 		      int buf_len)
 {
 	int i, result;
+
+	if (sdev->skip_vpd_pages)
+		goto fail;
 
 	/* Ask for all the pages supported by this device */
 	result = scsi_vpd_inquiry(sdev, buf, 0, buf_len);

@@ -1,4 +1,4 @@
-/* linux/arch/arm/mach-exynos/include/mach/regs-mem.h
+/* linux/arch/arm/mach-exynos4/include/mach/regs-mem.h
  *
  * Copyright (c) 2010-2011 Samsung Electronics Co., Ltd.
  *		http://www.samsung.com
@@ -19,5 +19,8 @@
 
 #define S5P_DMC0_MEMTYPE_SHIFT		8
 #define S5P_DMC0_MEMTYPE_MASK		0xF
+
+#define EXYNOS_DMC_TIMINGAREF_OFFSET	0x30
+#define EXYNOS_DMC_TIMINGROW_OFFSET	0x34
 
 #endif /* __ASM_ARCH_REGS_MEM_H */

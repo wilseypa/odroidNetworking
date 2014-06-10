@@ -17,9 +17,6 @@
 #include <linux/spi/spi.h>
 #include <linux/lcd.h>
 #include <linux/backlight.h>
-#ifdef CONFIG_HAS_EARLYSUSPEND
-#include <linux/earlysuspend.h>
-#endif
 
 #define ENDDEF			0xFF00
 #define COMMAND_ONLY	0x00
@@ -38,9 +35,6 @@ struct lms501kf03 {
 	struct lcd_device		*ld;
 	struct backlight_device		*bd;
 	struct lcd_platform_data	*lcd_pd;
-#ifdef CONFIG_HAS_EARLYSUSPEND
-	struct early_suspend		early_suspend;
-#endif
 };
 
 const unsigned short SEQ_PASSWORD[] = {
@@ -212,7 +206,7 @@ static int lms501kf03_ldi_init(struct lms501kf03 *lcd)
 		if (ret)
 			break;
 	}
-	mdelay(120);
+	msleep(120);
 
 	return ret;
 }
@@ -321,9 +315,9 @@ static int lms501kf03_power_off(struct lms501kf03 *lcd)
 	if (!pd->power_on) {
 		dev_err(lcd->dev, "power_on is NULL.\n");
 		return -EFAULT;
-	} else
+	} else {
 		pd->power_on(lcd->ld, 0);
-
+	}
 	return 0;
 }
 
@@ -392,34 +386,7 @@ static const struct backlight_ops lms501kf03_backlight_ops = {
 	.update_status = lms501kf03_set_brightness,
 };
 
-#ifdef	CONFIG_HAS_EARLYSUSPEND
-unsigned int before_power;
-
-static void lms501kf03_early_suspend(struct early_suspend *handler)
-{
-	struct lms501kf03 *lcd = NULL;
-
-	lcd = container_of(handler, struct lms501kf03, early_suspend);
-
-	before_power = lcd->power;
-
-	lms501kf03_power(lcd, FB_BLANK_POWERDOWN);
-}
-
-static void lms501kf03_late_resume(struct early_suspend *handler)
-{
-	struct lms501kf03 *lcd = NULL;
-
-	lcd = container_of(handler, struct lms501kf03, early_suspend);
-
-	if (before_power == FB_BLANK_UNBLANK)
-		lcd->power = FB_BLANK_POWERDOWN;
-
-	lms501kf03_power(lcd, before_power);
-}
-#endif
-
-static int __init lms501kf03_probe(struct spi_device *spi)
+static int __devinit lms501kf03_probe(struct spi_device *spi)
 {
 	int ret = 0;
 	struct lms501kf03 *lcd = NULL;
@@ -483,12 +450,6 @@ static int __init lms501kf03_probe(struct spi_device *spi)
 
 	dev_set_drvdata(&spi->dev, lcd);
 
-#ifdef CONFIG_HAS_EARLYSUSPEND
-	lcd->early_suspend.suspend = lms501kf03_early_suspend;
-	lcd->early_suspend.resume = lms501kf03_late_resume;
-	lcd->early_suspend.level = EARLY_SUSPEND_LEVEL_DISABLE_FB - 1;
-	register_early_suspend(&lcd->early_suspend);
-#endif
 	dev_info(&spi->dev, "lms501kf03 panel driver has been probed.\n");
 
 	return 0;
@@ -512,7 +473,6 @@ static int __devexit lms501kf03_remove(struct spi_device *spi)
 }
 
 #if defined(CONFIG_PM)
-#ifndef CONFIG_HAS_EARLYSUSPEND
 unsigned int before_power;
 
 static int lms501kf03_suspend(struct spi_device *spi, pm_message_t mesg)
@@ -553,10 +513,6 @@ static int lms501kf03_resume(struct spi_device *spi)
 	return ret;
 }
 #endif
-#else
-#define lms501kf03_suspend	NULL
-#define lms501kf03_resume	NULL
-#endif
 
 void lms501kf03_shutdown(struct spi_device *spi)
 {
@@ -574,10 +530,8 @@ static struct spi_driver lms501kf03_driver = {
 	.probe		= lms501kf03_probe,
 	.remove		= __devexit_p(lms501kf03_remove),
 	.shutdown	= lms501kf03_shutdown,
-#ifndef CONFIG_HAS_EARLYSUSPEND
 	.suspend	= lms501kf03_suspend,
 	.resume		= lms501kf03_resume,
-#endif
 };
 
 static int __init lms501kf03_init(void)
@@ -592,7 +546,3 @@ static void __exit lms501kf03_exit(void)
 
 module_init(lms501kf03_init);
 module_exit(lms501kf03_exit);
-
-MODULE_AUTHOR("Ilho Lee <Ilho215.lee@samsung.com>");
-MODULE_DESCRIPTION("lms501kf03 LCD Driver");
-MODULE_LICENSE("GPL");

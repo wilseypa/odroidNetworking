@@ -37,7 +37,6 @@
 #include <linux/rtnetlink.h>
 #include <net/rtnetlink.h>
 #include <linux/u64_stats_sync.h>
-#include <linux/sched.h>
 
 static int numdummies = 1;
 
@@ -48,6 +47,7 @@ static int dummy_set_address(struct net_device *dev, void *p)
 	if (!is_valid_ether_addr(sa->sa_data))
 		return -EADDRNOTAVAIL;
 
+	dev->addr_assign_type &= ~NET_ADDR_RANDOM;
 	memcpy(dev->dev_addr, sa->sa_data, ETH_ALEN);
 	return 0;
 }
@@ -117,7 +117,7 @@ static const struct net_device_ops dummy_netdev_ops = {
 	.ndo_uninit		= dummy_dev_uninit,
 	.ndo_start_xmit		= dummy_xmit,
 	.ndo_validate_addr	= eth_validate_addr,
-	.ndo_set_multicast_list = set_multicast_list,
+	.ndo_set_rx_mode	= set_multicast_list,
 	.ndo_set_mac_address	= dummy_set_address,
 	.ndo_get_stats64	= dummy_get_stats64,
 };
@@ -135,8 +135,8 @@ static void dummy_setup(struct net_device *dev)
 	dev->flags |= IFF_NOARP;
 	dev->flags &= ~IFF_MULTICAST;
 	dev->features	|= NETIF_F_SG | NETIF_F_FRAGLIST | NETIF_F_TSO;
-	dev->features	|= NETIF_F_NO_CSUM | NETIF_F_HIGHDMA | NETIF_F_LLTX;
-	random_ether_addr(dev->dev_addr);
+	dev->features	|= NETIF_F_HW_CSUM | NETIF_F_HIGHDMA | NETIF_F_LLTX;
+	eth_hw_addr_random(dev);
 }
 
 static int dummy_validate(struct nlattr *tb[], struct nlattr *data[])

@@ -1,7 +1,5 @@
 /*
- * linux/arch/arm/mach-exynos/setup-i2c7.c
- *
- * Copyright (c) 2010 Samsung Electronics Co., Ltd.
+ * Copyright (c) 2010-2012 Samsung Electronics Co., Ltd.
  *
  * I2C7 GPIO configuration.
  *
@@ -21,8 +19,9 @@ void s3c_i2c7_cfg_gpio(struct platform_device *dev)
 {
 	if (soc_is_exynos5250())
 		s3c_gpio_cfgall_range(EXYNOS5_GPB2(2), 2,
-			S3C_GPIO_SFN(3), S3C_GPIO_PULL_UP);
-	else
+				      S3C_GPIO_SFN(3), S3C_GPIO_PULL_UP);
+
+	else	/* EXYNOS4210, EXYNOS4212, and EXYNOS4412 */
 		s3c_gpio_cfgall_range(EXYNOS4_GPD0(2), 2,
-			S3C_GPIO_SFN(3), S3C_GPIO_PULL_UP);
+				      S3C_GPIO_SFN(3), S3C_GPIO_PULL_UP);
 }

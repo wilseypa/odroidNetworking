@@ -168,6 +168,11 @@ static inline void * isa_bus_to_virt(unsigned long address)
 extern void __iomem * __ioremap(phys_t offset, phys_t size, unsigned long flags);
 extern void __iounmap(const volatile void __iomem *addr);
 
+#ifndef CONFIG_PCI
+struct pci_dev;
+static inline void pci_iounmap(struct pci_dev *dev, void __iomem *addr) {}
+#endif
+
 static inline void __iomem * __ioremap_mode(phys_t offset, unsigned long size,
 	unsigned long flags)
 {
@@ -329,14 +334,10 @@ static inline void pfx##write##bwlq(type val,				\
 			"dsrl32	%L0, %L0, 0"			"\n\t"	\
 			"dsll32	%M0, %M0, 0"			"\n\t"	\
 			"or	%L0, %L0, %M0"			"\n\t"	\
-			".set	push"				"\n\t"	\
-			".set	noreorder"			"\n\t"	\
-			".set	nomacro"			"\n\t"	\
 			"sd	%L0, %2"			"\n\t"	\
-			".set	pop"				"\n\t"	\
 			".set	mips0"				"\n"	\
 			: "=r" (__tmp)					\
-			: "0" (__val), "R" (*__mem));			\
+			: "0" (__val), "m" (*__mem));			\
 		if (irq)						\
 			local_irq_restore(__flags);			\
 	} else								\
@@ -359,16 +360,12 @@ static inline type pfx##read##bwlq(const volatile void __iomem *mem)	\
 			local_irq_save(__flags);			\
 		__asm__ __volatile__(					\
 			".set	mips3"		"\t\t# __readq"	"\n\t"	\
-			".set	push"				"\n\t"	\
-			".set	noreorder"			"\n\t"	\
-			".set	nomacro"			"\n\t"	\
 			"ld	%L0, %1"			"\n\t"	\
-			".set	pop"				"\n\t"	\
 			"dsra32	%M0, %L0, 0"			"\n\t"	\
 			"sll	%L0, %L0, 0"			"\n\t"	\
 			".set	mips0"				"\n"	\
 			: "=r" (__val)					\
-			: "R" (*__mem));				\
+			: "m" (*__mem));				\
 		if (irq)						\
 			local_irq_restore(__flags);			\
 	} else {							\

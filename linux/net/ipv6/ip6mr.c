@@ -16,7 +16,6 @@
  *
  */
 
-#include <asm/system.h>
 #include <asm/uaccess.h>
 #include <linux/types.h>
 #include <linux/sched.h>
@@ -51,6 +50,7 @@
 #include <linux/pim.h>
 #include <net/addrconf.h>
 #include <linux/netfilter_ipv6.h>
+#include <linux/export.h>
 #include <net/ip6_checksum.h>
 
 struct mr6_table {
@@ -1109,8 +1109,8 @@ static int ip6mr_cache_report(struct mr6_table *mrt, struct sk_buff *pkt,
 		msg->im6_msgtype = MRT6MSG_WHOLEPKT;
 		msg->im6_mif = mrt->mroute_reg_vif_num;
 		msg->im6_pad = 0;
-		ipv6_addr_copy(&msg->im6_src, &ipv6_hdr(pkt)->saddr);
-		ipv6_addr_copy(&msg->im6_dst, &ipv6_hdr(pkt)->daddr);
+		msg->im6_src = ipv6_hdr(pkt)->saddr;
+		msg->im6_dst = ipv6_hdr(pkt)->daddr;
 
 		skb->ip_summed = CHECKSUM_UNNECESSARY;
 	} else
@@ -1135,8 +1135,8 @@ static int ip6mr_cache_report(struct mr6_table *mrt, struct sk_buff *pkt,
 	msg->im6_msgtype = assert;
 	msg->im6_mif = mifi;
 	msg->im6_pad = 0;
-	ipv6_addr_copy(&msg->im6_src, &ipv6_hdr(pkt)->saddr);
-	ipv6_addr_copy(&msg->im6_dst, &ipv6_hdr(pkt)->daddr);
+	msg->im6_src = ipv6_hdr(pkt)->saddr;
+	msg->im6_dst = ipv6_hdr(pkt)->daddr;
 
 	skb_dst_set(skb, dst_clone(skb_dst(pkt)));
 	skb->ip_summed = CHECKSUM_UNNECESSARY;
@@ -1930,8 +1930,10 @@ static int ip6mr_forward2(struct net *net, struct mr6_table *mrt,
 	};
 
 	dst = ip6_route_output(net, NULL, &fl6);
-	if (!dst)
+	if (dst->error) {
+		dst_release(dst);
 		goto out_free;
+	}
 
 	skb_dst_drop(skb);
 	skb_dst_set(skb, dst);
@@ -2185,8 +2187,8 @@ int ip6mr_get_route(struct net *net,
 		iph->payload_len = 0;
 		iph->nexthdr = IPPROTO_NONE;
 		iph->hop_limit = 0;
-		ipv6_addr_copy(&iph->saddr, &rt->rt6i_src.addr);
-		ipv6_addr_copy(&iph->daddr, &rt->rt6i_dst.addr);
+		iph->saddr = rt->rt6i_src.addr;
+		iph->daddr = rt->rt6i_dst.addr;
 
 		err = ip6mr_cache_unresolved(mrt, vif, skb2);
 		read_unlock(&mrt_lock);

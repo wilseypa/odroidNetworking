@@ -128,17 +128,6 @@ void max98090_set_record_main_mic(struct snd_soc_codec *codec)
 {
 	int reg;
 
-#if defined(CONFIG_BOARD_ODROID_U) || defined(CONFIG_BOARD_ODROID_U2)
-
-	reg = snd_soc_read(codec, M98090_00C_DIGITAL_MIC);
-	reg |= (1<<4); // DMIC CLK enable, DMIC CLK = MCLK/8
-	snd_soc_write(codec, M98090_00C_DIGITAL_MIC, reg);
-	
-	reg = M98090_IN12_TO_ADCL; // MIC2 to ADC L/R Mixer
-	snd_soc_write(codec, M98090_015_MIX_ADC_L, reg);
-	snd_soc_write(codec, M98090_016_MIX_ADC_R, reg);
-
-#else
 	// 0x4C Mic bias, ADC L enable
 	reg = snd_soc_read(codec, M98090_03E_IPUT_ENABLE);
 	reg &= ~(M98090_ADLEN | M98090_ADREN | M98090_MBEN | M98090_LINEAEN | M98090_LINEBEN);
@@ -158,7 +147,6 @@ void max98090_set_record_main_mic(struct snd_soc_codec *codec)
 	reg = TUNNING_ADC_GAIN;
 	snd_soc_write(codec, M98090_017_ADC_L_LVL, reg);
 	snd_soc_write(codec, M98090_018_ADC_R_LVL, reg);
-#endif
 
 	printk("\t[MAX98090] %s(%d)\n",__FUNCTION__,__LINE__);
 	return;

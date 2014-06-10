@@ -21,8 +21,8 @@
  *          15 May 2002
  */
 
-#ifndef MMC_MMC_H
-#define MMC_MMC_H
+#ifndef LINUX_MMC_MMC_H
+#define LINUX_MMC_MMC_H
 
 /* Standard MMC commands (4.1)           type  argument     response */
    /* class 1 */
@@ -278,15 +278,18 @@ struct _mmc_csd {
 #define EXT_CSD_PACKED_FAILURE_INDEX	35	/* RO */
 #define EXT_CSD_PACKED_CMD_STATUS	36	/* RO */
 #define EXT_CSD_EXP_EVENTS_STATUS	54	/* RO, 2 bytes */
-#define EXT_CSD_EXP_EVENTS_CTRL		56	/* R/W, 2 bytes */
+#define EXT_CSD_EXP_EVENTS_CTRL	56	/* R/W, 2 bytes */
+#define EXT_CSD_DATA_SECTOR_SIZE	61	/* R */
+#define EXT_CSD_GP_SIZE_MULT		143	/* R/W */
 #define EXT_CSD_PARTITION_ATTRIBUTE	156	/* R/W */
 #define EXT_CSD_PARTITION_SUPPORT	160	/* RO */
 #define EXT_CSD_HPI_MGMT		161	/* R/W */
 #define EXT_CSD_RST_N_FUNCTION		162	/* R/W */
+#define EXT_CSD_BKOPS_EN		163	/* R/W */
 #define EXT_CSD_SANITIZE_START		165     /* W */
 #define EXT_CSD_WR_REL_PARAM		166	/* RO */
+#define EXT_CSD_BOOT_WP			173	/* R/W */
 #define EXT_CSD_ERASE_GROUP_DEF		175	/* R/W */
-#define EXT_CSD_BOOT_CONFIG_PROT	178	/* R/W */
 #define EXT_CSD_PART_CONFIG		179	/* R/W */
 #define EXT_CSD_ERASED_MEM_CONT		181	/* RO */
 #define EXT_CSD_BUS_WIDTH		183	/* R/W */
@@ -319,6 +322,8 @@ struct _mmc_csd {
 #define EXT_CSD_POWER_OFF_LONG_TIME	247	/* RO */
 #define EXT_CSD_GENERIC_CMD6_TIME	248	/* RO */
 #define EXT_CSD_CACHE_SIZE		249	/* RO, 4 bytes */
+#define EXT_CSD_TAG_UNIT_SIZE		498	/* RO */
+#define EXT_CSD_DATA_TAG_SUPPORT	499	/* RO */
 #define EXT_CSD_MAX_PACKED_WRITES	500	/* RO */
 #define EXT_CSD_MAX_PACKED_READS	501	/* RO */
 #define EXT_CSD_HPI_FEATURES		503	/* RO */
@@ -329,9 +334,16 @@ struct _mmc_csd {
 
 #define EXT_CSD_WR_REL_PARAM_EN		(1<<2)
 
+#define EXT_CSD_BOOT_WP_B_PWR_WP_DIS	(0x40)
+#define EXT_CSD_BOOT_WP_B_PERM_WP_DIS	(0x10)
+#define EXT_CSD_BOOT_WP_B_PERM_WP_EN	(0x04)
+#define EXT_CSD_BOOT_WP_B_PWR_WP_EN	(0x01)
+
 #define EXT_CSD_PART_CONFIG_ACC_MASK	(0x7)
 #define EXT_CSD_PART_CONFIG_ACC_BOOT0	(0x1)
-#define EXT_CSD_PART_CONFIG_ACC_BOOT1	(0x2)
+#define EXT_CSD_PART_CONFIG_ACC_GP0	(0x4)
+
+#define EXT_CSD_PART_SUPPORT_PART_EN	(0x1)
 
 #define EXT_CSD_CMD_SET_NORMAL		(1<<0)
 #define EXT_CSD_CMD_SET_SECURE		(1<<1)
@@ -339,7 +351,7 @@ struct _mmc_csd {
 
 #define EXT_CSD_CARD_TYPE_26	(1<<0)	/* Card can run at 26MHz */
 #define EXT_CSD_CARD_TYPE_52	(1<<1)	/* Card can run at 52MHz */
-#define EXT_CSD_CARD_TYPE_MASK	0x3F	/* Mask out reserved bits */
+#define EXT_CSD_CARD_TYPE_MASK	0xFF	/* Mask out reserved bits */
 #define EXT_CSD_CARD_TYPE_DDR_1_8V  (1<<2)   /* Card can run at 52MHz */
 					     /* DDR mode @1.8V or 3V I/O */
 #define EXT_CSD_CARD_TYPE_DDR_1_2V  (1<<3)   /* Card can run at 52MHz */
@@ -349,66 +361,12 @@ struct _mmc_csd {
 #define EXT_CSD_CARD_TYPE_SDR_1_8V	(1<<4)	/* Card can run at 200MHz */
 #define EXT_CSD_CARD_TYPE_SDR_1_2V	(1<<5)	/* Card can run at 200MHz */
 						/* SDR mode @1.2V I/O */
-
-#define EXT_CSD_CARD_TYPE_SDR_200	(EXT_CSD_CARD_TYPE_SDR_1_8V | \
-					 EXT_CSD_CARD_TYPE_SDR_1_2V)
-
-#define EXT_CSD_CARD_TYPE_SDR_ALL	(EXT_CSD_CARD_TYPE_SDR_200 | \
-					 EXT_CSD_CARD_TYPE_52 | \
-					 EXT_CSD_CARD_TYPE_26)
-
-#define	EXT_CSD_CARD_TYPE_SDR_1_2V_ALL	(EXT_CSD_CARD_TYPE_SDR_1_2V | \
-					 EXT_CSD_CARD_TYPE_52 | \
-					 EXT_CSD_CARD_TYPE_26)
-
-#define	EXT_CSD_CARD_TYPE_SDR_1_8V_ALL	(EXT_CSD_CARD_TYPE_SDR_1_8V | \
-					 EXT_CSD_CARD_TYPE_52 | \
-					 EXT_CSD_CARD_TYPE_26)
-
-#define EXT_CSD_CARD_TYPE_SDR_1_2V_DDR_1_8V	(EXT_CSD_CARD_TYPE_SDR_1_2V | \
-						 EXT_CSD_CARD_TYPE_DDR_1_8V | \
-						 EXT_CSD_CARD_TYPE_52 | \
-						 EXT_CSD_CARD_TYPE_26)
-
-#define EXT_CSD_CARD_TYPE_SDR_1_8V_DDR_1_8V	(EXT_CSD_CARD_TYPE_SDR_1_8V | \
-						 EXT_CSD_CARD_TYPE_DDR_1_8V | \
-						 EXT_CSD_CARD_TYPE_52 | \
-						 EXT_CSD_CARD_TYPE_26)
-
-#define EXT_CSD_CARD_TYPE_SDR_1_2V_DDR_1_2V	(EXT_CSD_CARD_TYPE_SDR_1_2V | \
-						 EXT_CSD_CARD_TYPE_DDR_1_2V | \
-						 EXT_CSD_CARD_TYPE_52 | \
-						 EXT_CSD_CARD_TYPE_26)
-
-#define EXT_CSD_CARD_TYPE_SDR_1_8V_DDR_1_2V	(EXT_CSD_CARD_TYPE_SDR_1_8V | \
-						 EXT_CSD_CARD_TYPE_DDR_1_2V | \
-						 EXT_CSD_CARD_TYPE_52 | \
-						 EXT_CSD_CARD_TYPE_26)
-
-#define EXT_CSD_CARD_TYPE_SDR_1_2V_DDR_52	(EXT_CSD_CARD_TYPE_SDR_1_2V | \
-						 EXT_CSD_CARD_TYPE_DDR_52 | \
-						 EXT_CSD_CARD_TYPE_52 | \
-						 EXT_CSD_CARD_TYPE_26)
-
-#define EXT_CSD_CARD_TYPE_SDR_1_8V_DDR_52	(EXT_CSD_CARD_TYPE_SDR_1_8V | \
-						 EXT_CSD_CARD_TYPE_DDR_52 | \
-						 EXT_CSD_CARD_TYPE_52 | \
-						 EXT_CSD_CARD_TYPE_26)
-
-#define EXT_CSD_CARD_TYPE_SDR_ALL_DDR_1_8V	(EXT_CSD_CARD_TYPE_SDR_200 | \
-						 EXT_CSD_CARD_TYPE_DDR_1_8V | \
-						 EXT_CSD_CARD_TYPE_52 | \
-						 EXT_CSD_CARD_TYPE_26)
-
-#define EXT_CSD_CARD_TYPE_SDR_ALL_DDR_1_2V	(EXT_CSD_CARD_TYPE_SDR_200 | \
-						 EXT_CSD_CARD_TYPE_DDR_1_2V | \
-						 EXT_CSD_CARD_TYPE_52 | \
-						 EXT_CSD_CARD_TYPE_26)
-
-#define EXT_CSD_CARD_TYPE_SDR_ALL_DDR_52	(EXT_CSD_CARD_TYPE_SDR_200 | \
-						 EXT_CSD_CARD_TYPE_DDR_52 | \
-						 EXT_CSD_CARD_TYPE_52 | \
-						 EXT_CSD_CARD_TYPE_26)
+#define EXT_CSD_CARD_TYPE_DDR_200_1_8V	(1<<6)	/* Card can run at 200MHz */
+						/* DDR mode @1.8V I/O */
+#define EXT_CSD_CARD_TYPE_DDR_200_1_2V	(1<<7)	/* Card can run at 200MHz */
+						/* DDR mode @1.2V I/O */
+#define EXT_CSD_CARD_TYPE_DDR_200	(EXT_CSD_CARD_TYPE_DDR_200_1_8V \
+					 | EXT_CSD_CARD_TYPE_DDR_200_1_2V)
 
 #define EXT_CSD_BUS_WIDTH_1	0	/* Card is in 1 bit mode */
 #define EXT_CSD_BUS_WIDTH_4	1	/* Card is in 4 bit mode */
@@ -450,5 +408,4 @@ struct _mmc_csd {
 #define MMC_SWITCH_MODE_CLEAR_BITS	0x02	/* Clear bits which are 1 in value */
 #define MMC_SWITCH_MODE_WRITE_BYTE	0x03	/* Set target to value */
 
-#endif  /* MMC_MMC_PROTOCOL_H */
-
+#endif /* LINUX_MMC_MMC_H */

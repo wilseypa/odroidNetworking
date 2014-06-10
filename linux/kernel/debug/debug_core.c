@@ -41,6 +41,7 @@
 #include <linux/delay.h>
 #include <linux/sched.h>
 #include <linux/sysrq.h>
+#include <linux/reboot.h>
 #include <linux/init.h>
 #include <linux/kgdb.h>
 #include <linux/kdb.h>
@@ -51,8 +52,7 @@
 
 #include <asm/cacheflush.h>
 #include <asm/byteorder.h>
-#include <asm/atomic.h>
-#include <asm/system.h>
+#include <linux/atomic.h>
 
 #include "debug_core.h"
 
@@ -75,6 +75,8 @@ static int			exception_level;
 struct kgdb_io		*dbg_io_ops;
 static DEFINE_SPINLOCK(kgdb_registration_lock);
 
+/* Action for the reboot notifiter, a global allow kdb to change it */
+static int kgdbreboot;
 /* kgdb console driver is loaded */
 static int kgdb_con_registered;
 /* determine if kgdb console output should be used */
@@ -83,6 +85,10 @@ static int kgdb_use_con;
 bool dbg_is_early = true;
 /* Next cpu to become the master debug core */
 int dbg_switch_cpu;
+/* Flag for entering kdb when a panic occurs */
+static bool break_on_panic = true;
+/* Flag for entering kdb when an exception occurs */
+static bool break_on_exception = true;
 
 /* Use kdb or gdbserver mode */
 int dbg_kdb_mode = 1;
@@ -96,6 +102,9 @@ static int __init opt_kgdb_con(char *str)
 early_param("kgdbcon", opt_kgdb_con);
 
 module_param(kgdb_use_con, int, 0644);
+module_param(kgdbreboot, int, 0644);
+module_param(break_on_panic, bool, 0644);
+module_param(break_on_exception, bool, 0644);
 
 /*
  * Holds information about breakpoints in a kernel. These breakpoints are
@@ -670,6 +679,9 @@ kgdb_handle_exception(int evector, int signo, int ecode, struct pt_regs *regs)
 	struct kgdb_state kgdb_var;
 	struct kgdb_state *ks = &kgdb_var;
 
+	if (unlikely(signo != SIGTRAP && !break_on_exception))
+		return 1;
+
 	ks->cpu			= raw_smp_processor_id();
 	ks->ex_vector		= evector;
 	ks->signo		= signo;
@@ -756,6 +768,9 @@ static int kgdb_panic_event(struct notifier_block *self,
 			    unsigned long val,
 			    void *data)
 {
+	if (!break_on_panic)
+		return NOTIFY_DONE;
+
 	if (dbg_kdb_mode)
 		kdb_printf("PANIC: %s\n", (char *)data);
 	kgdb_breakpoint();
@@ -779,6 +794,33 @@ void __init dbg_late_init(void)
 	kdb_init(KDB_INIT_FULL);
 }
 
+static int
+dbg_notify_reboot(struct notifier_block *this, unsigned long code, void *x)
+{
+	/*
+	 * Take the following action on reboot notify depending on value:
+	 *    1 == Enter debugger
+	 *    0 == [the default] detatch debug client
+	 *   -1 == Do nothing... and use this until the board resets
+	 */
+	switch (kgdbreboot) {
+	case 1:
+		kgdb_breakpoint();
+	case -1:
+		goto done;
+	}
+	if (!dbg_kdb_mode)
+		gdbstub_exit(code);
+done:
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block dbg_reboot_notifier = {
+	.notifier_call		= dbg_notify_reboot,
+	.next			= NULL,
+	.priority		= INT_MAX,
+};
+
 static void kgdb_register_callbacks(void)
 {
 	if (!kgdb_io_module_registered) {
@@ -786,6 +828,7 @@ static void kgdb_register_callbacks(void)
 		kgdb_arch_init();
 		if (!dbg_is_early)
 			kgdb_arch_late();
+		register_reboot_notifier(&dbg_reboot_notifier);
 		atomic_notifier_chain_register(&panic_notifier_list,
 					       &kgdb_panic_event_nb);
 #ifdef CONFIG_MAGIC_SYSRQ
@@ -807,6 +850,7 @@ static void kgdb_unregister_callbacks(void)
 	 */
 	if (kgdb_io_module_registered) {
 		kgdb_io_module_registered = 0;
+		unregister_reboot_notifier(&dbg_reboot_notifier);
 		atomic_notifier_chain_unregister(&panic_notifier_list,
 					       &kgdb_panic_event_nb);
 		kgdb_arch_exit();

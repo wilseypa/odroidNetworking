@@ -7,7 +7,7 @@
  * Arbitrary resource management.
  */
 
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/errno.h>
 #include <linux/ioport.h>
 #include <linux/init.h>
@@ -558,6 +558,27 @@ int allocate_resource(struct resource *root, struct resource *new,
 
 EXPORT_SYMBOL(allocate_resource);
 
+/**
+ * lookup_resource - find an existing resource by a resource start address
+ * @root: root resource descriptor
+ * @start: resource start address
+ *
+ * Returns a pointer to the resource if found, NULL otherwise
+ */
+struct resource *lookup_resource(struct resource *root, resource_size_t start)
+{
+	struct resource *res;
+
+	read_lock(&resource_lock);
+	for (res = root->child; res; res = res->sibling) {
+		if (res->start == start)
+			break;
+	}
+	read_unlock(&resource_lock);
+
+	return res;
+}
+
 /*
  * Insert a resource into the resource tree. If successful, return NULL,
  * otherwise return the conflicting resource (compare to __request_resource())
@@ -728,6 +749,7 @@ int adjust_resource(struct resource *res, resource_size_t start, resource_size_t
 	write_unlock(&resource_lock);
 	return result;
 }
+EXPORT_SYMBOL(adjust_resource);
 
 static void __init __reserve_region_with_split(struct resource *root,
 		resource_size_t start, resource_size_t end,
@@ -796,8 +818,6 @@ void __init reserve_region_with_split(struct resource *root,
 	__reserve_region_with_split(root, start, end, name);
 	write_unlock(&resource_lock);
 }
-
-EXPORT_SYMBOL(adjust_resource);
 
 /**
  * resource_alignment - calculate resource's alignment

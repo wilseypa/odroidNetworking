@@ -22,6 +22,9 @@
 #include <linux/gpio.h>
 #include <linux/regulator/consumer.h>
 #include <linux/videodev2.h>
+#include <linux/videodev2_exynos_media.h>
+#include <linux/module.h>
+#include <linux/moduleparam.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-subdev.h>
@@ -88,7 +91,7 @@ static struct v4l2_mbus_framefmt default_fmt[M5MOLS_RES_MAX] = {
 	[M5MOLS_RES_MON] = {
 		.width		= DEFAULT_SENSOR_WIDTH,
 		.height		= DEFAULT_SENSOR_HEIGHT,
-		.code		= V4L2_MBUS_FMT_YUYV8_2X8,
+		.code		= V4L2_MBUS_FMT_VYUY8_2X8,
 		.field		= V4L2_FIELD_NONE,
 		.colorspace	= V4L2_COLORSPACE_JPEG,
 	},
@@ -105,7 +108,7 @@ static struct v4l2_mbus_framefmt default_fmt[M5MOLS_RES_MAX] = {
 
 static const struct m5mols_format m5mols_formats[] = {
 	[M5MOLS_RES_MON] = {
-		.code		= V4L2_MBUS_FMT_YUYV8_2X8,
+		.code		= V4L2_MBUS_FMT_VYUY8_2X8,
 		.colorspace	= V4L2_COLORSPACE_JPEG,
 	},
 	[M5MOLS_RES_CAPTURE] = {
@@ -886,6 +889,7 @@ static int m5mols_s_stream(struct v4l2_subdev *sd, int enable)
 {
 	struct m5mols_info *info = to_m5mols(sd);
 
+	printk("%s\n", __func__);
 	if (enable) {
 		if (info->code == to_code(M5MOLS_RES_MON)) {
 			v4l2_info(sd, "%s : monitor mode\n", __func__);
@@ -971,7 +975,6 @@ static const struct v4l2_ctrl_config ctrl_private[] = {
 		.min = 0,
 		.def = 0,
 		.is_private = 1,
-		.is_volatile = 1,
 	},
 };
 /*
@@ -1518,7 +1521,6 @@ static int m5mols_probe(struct i2c_client *client,
 	}
 
 	sd = &info->sd;
-	strlcpy(sd->name, MOD_NAME, sizeof(sd->name));
 
 	init_waitqueue_head(&info->cap_wait);
 
@@ -1530,6 +1532,7 @@ static int m5mols_probe(struct i2c_client *client,
 
 	m5mols_init_formats(sd, NULL);
 
+	strlcpy(sd->name, MOD_NAME, sizeof(sd->name));
 	sd->entity.type = MEDIA_ENT_T_V4L2_SUBDEV_SENSOR;
 	sd->flags = V4L2_SUBDEV_FL_HAS_DEVNODE;
 	sd->internal_ops = &m5mols_v4l2_internal_ops;
@@ -1581,18 +1584,7 @@ static struct i2c_driver m5mols_i2c_driver = {
 	.id_table	= m5mols_id,
 };
 
-static int __init m5mols_mod_init(void)
-{
-	return i2c_add_driver(&m5mols_i2c_driver);
-}
-
-static void __exit m5mols_mod_exit(void)
-{
-	i2c_del_driver(&m5mols_i2c_driver);
-}
-
-module_init(m5mols_mod_init);
-module_exit(m5mols_mod_exit);
+module_i2c_driver(m5mols_i2c_driver);
 
 MODULE_AUTHOR("HeungJun Kim <riverful.kim@samsung.com>");
 MODULE_AUTHOR("Dongsoo Kim <dongsoo45.kim@samsung.com>");

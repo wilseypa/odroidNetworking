@@ -244,7 +244,4 @@ void	touch_sysfs_remove		(struct device *dev)
 }
 
 //[*]--------------------------------------------------------------------------------------------------[*]
-MODULE_AUTHOR("HardKernel Co., Ltd.");
-MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Touchscreen Driver");
 //[*]--------------------------------------------------------------------------------------------------[*]

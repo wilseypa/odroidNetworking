@@ -321,6 +321,8 @@
 #define __NR_syncfs			1329
 #define __NR_setns			1330
 #define __NR_sendmmsg			1331
+#define __NR_process_vm_readv		1332
+#define __NR_process_vm_writev		1333
 #define __NR_accept4			1334
 
 #ifdef __KERNEL__

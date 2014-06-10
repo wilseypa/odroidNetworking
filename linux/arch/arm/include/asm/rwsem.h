@@ -35,6 +35,16 @@
 #define RWSEM_ACTIVE_READ_BIAS		RWSEM_ACTIVE_BIAS
 #define RWSEM_ACTIVE_WRITE_BIAS		(RWSEM_WAITING_BIAS + RWSEM_ACTIVE_BIAS)
 
+extern void __init_rwsem(struct rw_semaphore *sem, const char *name,
+			 struct lock_class_key *key);
+
+#define init_rwsem(sem)				\
+do {						\
+	static struct lock_class_key __key;	\
+						\
+	__init_rwsem((sem), #sem, &__key);	\
+} while (0)
+
 /*
  * lock for reading
  */
@@ -75,8 +85,7 @@ static inline int __down_write_trylock(struct rw_semaphore *sem)
 	int tmp;
 
 	tmp = cmpxchg(&sem->count, RWSEM_UNLOCKED_VALUE,
-			RWSEM_ACTIVE_WRITE_BIAS);
-
+		      RWSEM_ACTIVE_WRITE_BIAS);
 	return tmp == RWSEM_UNLOCKED_VALUE;
 }
 
@@ -98,7 +107,7 @@ static inline void __up_read(struct rw_semaphore *sem)
 static inline void __up_write(struct rw_semaphore *sem)
 {
 	if (atomic_sub_return(RWSEM_ACTIVE_WRITE_BIAS,
-					(atomic_t *)(&sem->count)) < 0)
+			      (atomic_t *)(&sem->count)) < 0)
 		rwsem_wake(sem);
 }
 

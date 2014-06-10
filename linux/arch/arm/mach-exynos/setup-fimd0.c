@@ -1,4 +1,4 @@
-/* linux/arch/arm/mach-exynos/setup-fimd0.c
+/* linux/arm/mach-exynos4/setup-fimd0.c
  *
  * Copyright (c) 2009-2011 Samsung Electronics Co., Ltd.
  *             http://www.samsung.com
@@ -10,8 +10,6 @@
  * published by the Free Software Foundation.
 */
 
-#include <linux/kernel.h>
-#include <linux/types.h>
 #include <linux/fb.h>
 #include <linux/gpio.h>
 #include <linux/clk.h>
@@ -19,13 +17,12 @@
 #include <plat/fb.h>
 #include <plat/gpio-cfg.h>
 #include <plat/clock.h>
+#include <plat/regs-fb-v4.h>
 
-#include <mach/regs-clock.h>
 #include <mach/map.h>
 
-#ifdef CONFIG_FB_S3C
 static void exynos4_fimd0_cfg_gpios(unsigned int base, unsigned int nr,
-		unsigned int cfg, s5p_gpio_drvstr_t drvstr)
+				    unsigned int cfg, s5p_gpio_drvstr_t drvstr)
 {
 	s3c_gpio_cfgrange_nopull(base, nr, cfg);
 
@@ -36,22 +33,16 @@ static void exynos4_fimd0_cfg_gpios(unsigned int base, unsigned int nr,
 void exynos4_fimd0_gpio_setup_24bpp(void)
 {
 	unsigned int reg = 0;
-#if defined(CONFIG_LCD_WA101S) || defined(CONFIG_LCD_LTE480WV)
-	exynos4_fimd0_cfg_gpios(EXYNOS4_GPF0(0), 8, S3C_GPIO_SFN(2), S5P_GPIO_DRVSTR_LV4);
-	exynos4_fimd0_cfg_gpios(EXYNOS4_GPF1(0), 8, S3C_GPIO_SFN(2), S5P_GPIO_DRVSTR_LV4);
-	exynos4_fimd0_cfg_gpios(EXYNOS4_GPF2(0), 8, S3C_GPIO_SFN(2), S5P_GPIO_DRVSTR_LV4);
-	exynos4_fimd0_cfg_gpios(EXYNOS4_GPF3(0), 4, S3C_GPIO_SFN(2), S5P_GPIO_DRVSTR_LV4);
-#elif defined(CONFIG_LCD_AMS369FG06)
-	exynos4_fimd0_cfg_gpios(EXYNOS4_GPF0(0), 8, S3C_GPIO_SFN(2), S5P_GPIO_DRVSTR_LV1);
-	exynos4_fimd0_cfg_gpios(EXYNOS4_GPF1(0), 8, S3C_GPIO_SFN(2), S5P_GPIO_DRVSTR_LV1);
-	exynos4_fimd0_cfg_gpios(EXYNOS4_GPF2(0), 8, S3C_GPIO_SFN(2), S5P_GPIO_DRVSTR_LV1);
-	exynos4_fimd0_cfg_gpios(EXYNOS4_GPF3(0), 4, S3C_GPIO_SFN(2), S5P_GPIO_DRVSTR_LV1);
-#elif defined(CONFIG_LCD_LMS501KF03)
-	exynos4_fimd0_cfg_gpios(EXYNOS4_GPF0(0), 8, S3C_GPIO_SFN(2), S5P_GPIO_DRVSTR_LV4);
-	exynos4_fimd0_cfg_gpios(EXYNOS4_GPF1(0), 8, S3C_GPIO_SFN(2), S5P_GPIO_DRVSTR_LV1);
-	exynos4_fimd0_cfg_gpios(EXYNOS4_GPF2(0), 8, S3C_GPIO_SFN(2), S5P_GPIO_DRVSTR_LV1);
-	exynos4_fimd0_cfg_gpios(EXYNOS4_GPF3(0), 4, S3C_GPIO_SFN(2), S5P_GPIO_DRVSTR_LV1);
-#endif
+
+	exynos4_fimd0_cfg_gpios(EXYNOS4_GPF0(0), 8, \
+				S3C_GPIO_SFN(2), S5P_GPIO_DRVSTR_LV4);
+	exynos4_fimd0_cfg_gpios(EXYNOS4_GPF1(0), 8, \
+				S3C_GPIO_SFN(2), S5P_GPIO_DRVSTR_LV1);
+	exynos4_fimd0_cfg_gpios(EXYNOS4_GPF2(0), 8, \
+				S3C_GPIO_SFN(2), S5P_GPIO_DRVSTR_LV1);
+	exynos4_fimd0_cfg_gpios(EXYNOS4_GPF3(0), 4, \
+				S3C_GPIO_SFN(2), S5P_GPIO_DRVSTR_LV1);
+
 	/*
 	 * Set DISPLAY_CONTROL register for Display path selection.
 	 *
@@ -66,15 +57,14 @@ void exynos4_fimd0_gpio_setup_24bpp(void)
 	reg |= (1 << 1);
 	__raw_writel(reg, S3C_VA_SYS + 0x0210);
 }
-#endif
 
-int __init exynos4_fimd0_setup_clock(struct device *dev, const char *parent,
-					unsigned long clk_rate)
+int __init exynos4_fimd_setup_clock(struct device *dev, const char *bus_clk,
+				    const char *parent, unsigned long clk_rate)
 {
 	struct clk *clk_parent;
 	struct clk *sclk;
 
-	sclk = clk_get(dev, "sclk_fimd");
+	sclk = clk_get(dev, bus_clk);
 	if (IS_ERR(sclk))
 		return PTR_ERR(sclk);
 
@@ -86,7 +76,7 @@ int __init exynos4_fimd0_setup_clock(struct device *dev, const char *parent,
 
 	if (clk_set_parent(sclk, clk_parent)) {
 		pr_err("Unable to set parent %s of clock %s.\n",
-				clk_parent->name, sclk->name);
+		       clk_parent->name, sclk->name);
 		clk_put(sclk);
 		clk_put(clk_parent);
 		return PTR_ERR(sclk);

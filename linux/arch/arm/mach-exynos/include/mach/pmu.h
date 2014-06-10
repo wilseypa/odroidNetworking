@@ -3,7 +3,7 @@
  * Copyright (c) 2011 Samsung Electronics Co., Ltd.
  *		http://www.samsung.com/
  *
- * EXYNOS4210 - PMU support
+ * EXYNOS - PMU(Power Management Unit) support
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -13,29 +13,8 @@
 #ifndef __ASM_ARCH_PMU_H
 #define __ASM_ARCH_PMU_H __FILE__
 
-#include <linux/cpu.h>
-
-static inline void exynos4_reset_assert_ctrl(unsigned int on)
-{
-	unsigned int i;
-	unsigned int core_option;
-
-	for (i = 0 ; i < num_possible_cpus(); i++) {
-		core_option = __raw_readl(S5P_ARM_CORE_OPTION(i));
-		core_option &= ~S5P_USE_DELAYED_RESET_ASSERTION;
-		core_option |= (on << S5P_USE_DELAYED_RESET_OFFSET);
-		__raw_writel(core_option, S5P_ARM_CORE_OPTION(i));
-	}
-}
-
-static inline int exynos4_is_c2c_use(void)
-{
-	unsigned int ret;
-
-	ret = __raw_readl(S5P_C2C_CTRL);
-
-	return ret;
-}
+#define PMU_TABLE_END	NULL
+#define CLUSTER_NUM	2
 
 enum sys_powerdown {
 	SYS_AFTR,
@@ -44,31 +23,33 @@ enum sys_powerdown {
 	NUM_SYS_POWERDOWN,
 };
 
-struct exynos4_pmu_conf {
+enum running_cpu {
+	KFC,
+	ARM,
+};
+
+enum type_pmu_wdt_reset {
+	/* if pmu_wdt_reset is EXYNOS_SYS_WDTRESET */
+	PMU_WDT_RESET_TYPE0 = 0,
+	/* if pmu_wdt_reset is EXYNOS5410_SYS_WDTRESET */
+	PMU_WDT_RESET_TYPE1,
+};
+
+extern unsigned long l2x0_regs_phys;
+struct exynos_pmu_conf {
 	void __iomem *reg;
-	unsigned long val[NUM_SYS_POWERDOWN];
+	unsigned int val[NUM_SYS_POWERDOWN];
 };
 
-enum c2c_pwr_mode {
-	MIN_LATENCY,
-	SHORT_LATENCY,
-	MAX_LATENCY,
-};
-
-struct exynos4_c2c_pmu_conf {
-	void __iomem *reg;
-	unsigned long val;
-};
-
-/* external function for exynos4 series */
-extern void exynos4_sys_powerdown_conf(enum sys_powerdown mode);
-extern int exynos4_enter_lp(unsigned long *saveblk, long);
-extern void exynos4_idle_resume(void);
-extern void exynos4_c2c_request_pwr_mode(enum c2c_pwr_mode mode);
-
-/* external function for exynos5 series */
-extern void exynos5_sys_powerdown_conf(enum sys_powerdown mode);
-extern int exynos5_enter_lp(unsigned long *saveblk, long);
-extern void exynos5_idle_resume(void);
+extern void exynos_sys_powerdown_conf(enum sys_powerdown mode);
+extern void exynos_xxti_sys_powerdown(bool enable);
+extern void s3c_cpu_resume(void);
+extern void exynos_reset_assert_ctrl(bool on);
+extern void exynos_set_core_flag(void);
+extern void exynos_l2_common_pwr_ctrl(void);
+extern void exynos_enable_idle_clock_down(unsigned int cluster);
+extern void exynos_disable_idle_clock_down(unsigned int cluster);
+extern void exynos_lpi_mask_ctrl(bool on);
+extern void exynos_pmu_wdt_control(bool on, unsigned int pmu_wdt_reset_type);
 
 #endif /* __ASM_ARCH_PMU_H */

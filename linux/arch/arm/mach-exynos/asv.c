@@ -1,6 +1,6 @@
 /* linux/arch/arm/mach-exynos/asv.c
  *
- * Copyright (c) 2011 Samsung Electronics Co., Ltd.
+ * Copyright (c) 201 Samsung Electronics Co., Ltd.
  *		http://www.samsung.com/
  *
  * EXYNOS4 - ASV(Adaptive Supply Voltage) driver
@@ -25,7 +25,10 @@
 
 static struct samsung_asv *exynos_asv;
 unsigned int exynos_result_of_asv;
+unsigned int exynos_result_mif_asv;
 unsigned int exynos_special_flag;
+bool exynos_lot_id;
+bool exynos_lot_is_nzvpu;
 bool exynos_dynamic_ema;
 
 static int __init exynos4_asv_init(void)
@@ -36,9 +39,7 @@ static int __init exynos4_asv_init(void)
 	if (!exynos_asv)
 		goto out1;
 
-	if (soc_is_exynos4210())
-		ret = exynos4210_asv_init(exynos_asv);
-	else if (soc_is_exynos4412() || soc_is_exynos4212()) {
+	if (soc_is_exynos4412() || soc_is_exynos4212()) {
 		ret = exynos4x12_asv_init(exynos_asv);
 
 		/*
@@ -46,8 +47,10 @@ static int __init exynos4_asv_init(void)
 		 * There is already value for asv group.
 		 * So, It is not necessary to execute for getting asv group.
 		 */
-		if (ret)
+		if (ret) {
+			kfree(exynos_asv);
 			return 0;
+		}
 	} else {
 		pr_info("EXYNOS: There is no type for ASV\n");
 		goto out2;
@@ -92,10 +95,12 @@ static int __init exynos4_asv_init(void)
 		goto out2;
 	}
 
+	kfree(exynos_asv);
+
 	return 0;
 out2:
 	kfree(exynos_asv);
 out1:
 	return -EINVAL;
 }
-device_initcall_sync(exynos4_asv_init);
+arch_initcall_sync(exynos4_asv_init);

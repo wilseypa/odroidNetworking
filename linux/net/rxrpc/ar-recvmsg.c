@@ -11,6 +11,7 @@
 
 #include <linux/net.h>
 #include <linux/skbuff.h>
+#include <linux/export.h>
 #include <net/sock.h>
 #include <net/af_rxrpc.h>
 #include "ar-internal.h"
@@ -142,10 +143,13 @@ int rxrpc_recvmsg(struct kiocb *iocb, struct socket *sock,
 
 		/* copy the peer address and timestamp */
 		if (!continue_call) {
-			if (msg->msg_name && msg->msg_namelen > 0)
+			if (msg->msg_name) {
+				size_t len =
+					sizeof(call->conn->trans->peer->srx);
 				memcpy(msg->msg_name,
-				       &call->conn->trans->peer->srx,
-				       sizeof(call->conn->trans->peer->srx));
+				       &call->conn->trans->peer->srx, len);
+				msg->msg_namelen = len;
+			}
 			sock_recv_ts_and_drops(msg, &rx->sk, skb);
 		}
 

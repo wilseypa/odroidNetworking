@@ -1,9 +1,9 @@
 /*
  * SDIO access interface for drivers - linux specific (pci only)
  *
- * Copyright (C) 1999-2011, Broadcom Corporation
+ * Copyright (C) 1999-2012, Broadcom Corporation
  * 
- *         Unless you and Broadcom execute a separate written software license
+ *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
  * under the terms of the GNU General Public License version 2 (the "GPL"),
  * available at http://www.broadcom.com/licenses/GPLv2.php, with the
@@ -21,7 +21,7 @@
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
  *
- * $Id: bcmsdh_linux.c 308641 2012-01-17 02:18:02Z $
+ * $Id: bcmsdh_linux.c 347638 2012-07-27 11:39:03Z $
  */
 
 /**
@@ -47,26 +47,8 @@ extern void dhdsdio_isr(void * args);
 #include <bcmutils.h>
 #include <dngl_stats.h>
 #include <dhd.h>
-
-#if defined(HARD_KERNEL_OOB)
-	#include <linux/gpio.h>
-	#include <mach/gpio.h>
-	#include <mach/regs-gpio.h>
-	#include <plat/gpio-cfg.h>
-#endif
-
-#if defined(HARD_KERNEL)
-	#include <linux/hrtimer.h>
-	
-	#if !defined(OOB_TIMER_INTERVAL_NS)
-		#define	OOB_TIMER_INTERVAL_NS		100000000	// ns value (100ms)
-	#endif
-	
-	// interrupt generation timer
-	static	struct hrtimer	oob_timer;
-#endif
-
 #endif /* defined(OOB_INTR_ONLY) */
+
 
 /**
  * SDIO Host Controller info
@@ -90,7 +72,7 @@ struct bcmsdh_hc {
 	bool oob_irq_enable_flag;
 #if defined(OOB_INTR_ONLY)
 	spinlock_t irq_lock;
-#endif
+#endif /* defined(OOB_INTR_ONLY) */
 };
 static bcmsdh_hc_t *sdhcinfo = NULL;
 
@@ -163,11 +145,11 @@ EXPORT_SYMBOL(bcmsdh_remove);
 /* forward declarations */
 static int __devinit bcmsdh_probe(struct device *dev);
 static int __devexit bcmsdh_remove(struct device *dev);
-#endif /* BCMLXSDMMC */
+#endif /* defined(BCMLXSDMMC) */
 
-#ifndef BCMLXSDMMC
+#if !defined(BCMLXSDMMC)
 static
-#endif /* BCMLXSDMMC */
+#endif /* !defined(BCMLXSDMMC) */
 int bcmsdh_probe(struct device *dev)
 {
 	osl_t *osh = NULL;
@@ -177,7 +159,7 @@ int bcmsdh_probe(struct device *dev)
 #if !defined(BCMLXSDMMC) && defined(BCMPLATFORM_BUS)
 	struct platform_device *pdev;
 	struct resource *r;
-#endif /* BCMLXSDMMC */
+#endif /* !defined(BCMLXSDMMC) && defined(BCMPLATFORM_BUS) */
 	int irq = 0;
 	uint32 vendevid;
 	unsigned long irq_flags = 0;
@@ -188,7 +170,7 @@ int bcmsdh_probe(struct device *dev)
 	irq = platform_get_irq(pdev, 0);
 	if (!r || irq == NO_IRQ)
 		return -ENXIO;
-#endif /* BCMLXSDMMC */
+#endif /* !defined(BCMLXSDMMC) && defined(BCMPLATFORM_BUS) */
 
 #if defined(OOB_INTR_ONLY)
 #ifdef HW_OOB
@@ -202,9 +184,7 @@ int bcmsdh_probe(struct device *dev)
 	irq = dhd_customer_oob_irq_map(&irq_flags);
 	if  (irq < 0) {
 		SDLX_MSG(("%s: Host irq is not defined\n", __FUNCTION__));
-#if !defined(HARD_KERNEL)
 		return 1;
-#endif
 	}
 #endif /* defined(OOB_INTR_ONLY) */
 	/* allocate SDIO Host Controller state info */
@@ -223,7 +203,7 @@ int bcmsdh_probe(struct device *dev)
 
 	sdhc->dev = (void *)dev;
 
-#ifdef BCMLXSDMMC
+#if defined(BCMLXSDMMC)
 	if (!(sdh = bcmsdh_attach(osh, (void *)0,
 	                          (void **)&regs, irq))) {
 		SDLX_MSG(("%s: bcmsdh_attach failed\n", __FUNCTION__));
@@ -235,7 +215,7 @@ int bcmsdh_probe(struct device *dev)
 		SDLX_MSG(("%s: bcmsdh_attach failed\n", __FUNCTION__));
 		goto err;
 	}
-#endif /* BCMLXSDMMC */
+#endif /* defined(BCMLXSDMMC) */
 	sdhc->sdh = sdh;
 	sdhc->oob_irq = irq;
 	sdhc->oob_flags = irq_flags;
@@ -243,7 +223,7 @@ int bcmsdh_probe(struct device *dev)
 	sdhc->oob_irq_enable_flag = FALSE;
 #if defined(OOB_INTR_ONLY)
 	spin_lock_init(&sdhc->irq_lock);
-#endif
+#endif /* defined(BCMLXSDMMC) */
 
 	/* chain SDIO Host Controller info together */
 	sdhc->next = sdhcinfo;
@@ -273,17 +253,13 @@ err:
 	return -ENODEV;
 }
 
-#ifndef BCMLXSDMMC
+#if !defined(BCMLXSDMMC)
 static
-#endif /* BCMLXSDMMC */
+#endif /* !defined(BCMLXSDMMC) */
 int bcmsdh_remove(struct device *dev)
 {
 	bcmsdh_hc_t *sdhc, *prev;
 	osl_t *osh;
-
-#if defined(HARD_KERNEL) && defined(OOB_INTR_ONLY) && defined(HW_OOB)
-	hrtimer_cancel(&oob_timer);		msleep(100);
-#endif	
 
 	sdhc = sdhcinfo;
 	drvinfo.detach(sdhc->ch);
@@ -537,6 +513,21 @@ bcmsdh_pci_remove(struct pci_dev *pdev)
 
 extern int sdio_function_init(void);
 
+extern int sdio_func_reg_notify(void* semaphore);
+extern void sdio_func_unreg_notify(void);
+
+#if defined(BCMLXSDMMC)
+int bcmsdh_reg_sdio_notify(void* semaphore)
+{
+	return sdio_func_reg_notify(semaphore);
+}
+
+void bcmsdh_unreg_sdio_notify(void)
+{
+	sdio_func_unreg_notify();
+}
+#endif /* defined(BCMLXSDMMC) */
+
 int
 bcmsdh_register(bcmsdh_driver_t *driver)
 {
@@ -591,39 +582,14 @@ void bcmsdh_oob_intr_set(bool enable)
 
 	spin_lock_irqsave(&sdhcinfo->irq_lock, flags);
 	if (curstate != enable) {
-#if !defined(HARD_KERNEL)
 		if (enable)
 			enable_irq(sdhcinfo->oob_irq);
 		else
 			disable_irq_nosync(sdhcinfo->oob_irq);
-#endif			
 		curstate = enable;
 	}
 	spin_unlock_irqrestore(&sdhcinfo->irq_lock, flags);
 }
-
-#if defined(HARD_KERNEL)
-
-static enum hrtimer_restart oob_irq_timer(struct hrtimer *timer)
-{
-	dhd_pub_t *dhdp;
-
-	dhdp = (dhd_pub_t *)dev_get_drvdata(sdhcinfo->dev);
-
-	bcmsdh_oob_intr_set(0);
-
-	if (dhdp == NULL) {
-		SDLX_MSG(("Out of band GPIO interrupt fired way too early\n"));
-		return HRTIMER_NORESTART;
-	}
-
-	dhdsdio_isr((void *)dhdp->bus);
-	hrtimer_start(&oob_timer, ktime_set(0, OOB_TIMER_INTERVAL_NS), HRTIMER_MODE_REL);
-
-	return HRTIMER_NORESTART;
-}
-
-#else
 
 static irqreturn_t wlan_oob_irq(int irq, void *dev_id)
 {
@@ -643,9 +609,10 @@ static irqreturn_t wlan_oob_irq(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-#endif	// #if defined(HARD_KERNEL)
 int bcmsdh_register_oob_intr(void * dhdp)
 {
+	int error = 0;
+
 	SDLX_MSG(("%s Enter \n", __FUNCTION__));
 
 	/* IORESOURCE_IRQ | IORESOURCE_IRQ_HIGHLEVEL | IORESOURCE_IRQ_SHAREABLE; */
@@ -653,11 +620,6 @@ int bcmsdh_register_oob_intr(void * dhdp)
 	dev_set_drvdata(sdhcinfo->dev, dhdp);
 
 	if (!sdhcinfo->oob_irq_registered) {
-#if defined(HARD_KERNEL)
-		hrtimer_init(&oob_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-		oob_timer.function = oob_irq_timer;
-		hrtimer_start(&oob_timer, ktime_set(0, OOB_TIMER_INTERVAL_NS), HRTIMER_MODE_REL);
-#else		
 		SDLX_MSG(("%s IRQ=%d Type=%X \n", __FUNCTION__,
 			(int)sdhcinfo->oob_irq, (int)sdhcinfo->oob_flags));
 		/* Refer to customer Host IRQ docs about proper irqflags definition */
@@ -666,8 +628,9 @@ int bcmsdh_register_oob_intr(void * dhdp)
 		if (error)
 			return -ENODEV;
 
-		enable_irq_wake(sdhcinfo->oob_irq);
-#endif
+		error = enable_irq_wake(sdhcinfo->oob_irq);
+		if (error)
+			SDLX_MSG(("%s enable_irq_wake error=%d \n", __FUNCTION__, error));
 		sdhcinfo->oob_irq_registered = TRUE;
 		sdhcinfo->oob_irq_enable_flag = TRUE;
 	}
@@ -675,31 +638,18 @@ int bcmsdh_register_oob_intr(void * dhdp)
 	return 0;
 }
 
-void *bcmsdh_get_drvdata(void)
-{
-	if (!sdhcinfo)
-		return NULL;
-	return dev_get_drvdata(sdhcinfo->dev);
-}
-
 void bcmsdh_set_irq(int flag)
 {
 	if (sdhcinfo->oob_irq_registered && sdhcinfo->oob_irq_enable_flag != flag) {
 		SDLX_MSG(("%s Flag = %d", __FUNCTION__, flag));
 		sdhcinfo->oob_irq_enable_flag = flag;
-#if !defined(HARD_KERNEL)
 		if (flag) {
 			enable_irq(sdhcinfo->oob_irq);
-#if !defined(USE_OOB_WITH_SHARED_IRQ)			
 			enable_irq_wake(sdhcinfo->oob_irq);
-#endif
 		} else {
-#if !defined(USE_OOB_WITH_SHARED_IRQ)			
 			disable_irq_wake(sdhcinfo->oob_irq);
-#endif
 			disable_irq(sdhcinfo->oob_irq);
 		}
-#endif		
 	}
 }
 
@@ -709,24 +659,21 @@ void bcmsdh_unregister_oob_intr(void)
 
 	if (sdhcinfo->oob_irq_registered == TRUE) {
 		bcmsdh_set_irq(FALSE);
-#if !defined(HARD_KERNEL)
 		free_irq(sdhcinfo->oob_irq, NULL);
-#endif		
 		sdhcinfo->oob_irq_registered = FALSE;
 	}
 }
-#else
-//
-// ADD Hardkernel/Odroid
-//
+#endif /* defined(OOB_INTR_ONLY) */
+
+#if defined(BCMLXSDMMC)
 void *bcmsdh_get_drvdata(void)
 {
 	if (!sdhcinfo)
 		return NULL;
 	return dev_get_drvdata(sdhcinfo->dev);
 }
+#endif
 
-#endif /* defined(OOB_INTR_ONLY) */
 /* Module parameters specific to each host-controller driver */
 
 extern uint sd_msglevel;	/* Debug message level */
@@ -753,6 +700,11 @@ module_param(sd_f2_blocksize, int, 0);
 #ifdef BCMSDIOH_STD
 extern int sd_uhsimode;
 module_param(sd_uhsimode, int, 0);
+#endif
+
+#ifdef BCMSDIOH_TXGLOM
+extern uint sd_txglom;
+module_param(sd_txglom, uint, 0);
 #endif
 
 #ifdef BCMSDH_MODULE

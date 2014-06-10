@@ -1,9 +1,11 @@
 #include <linux/dcache.h>
 #include <linux/debugfs.h>
 #include <linux/delay.h>
+#include <linux/hardirq.h>
 #include <linux/mm.h>
 #include <linux/string.h>
 #include <linux/slab.h>
+#include <linux/export.h>
 
 #include "decl.h"
 #include "cmd.h"
@@ -18,12 +20,6 @@ static char *szStates[] = {
 #ifdef PROC_DEBUG
 static void lbs_debug_init(struct lbs_private *priv);
 #endif
-
-static int open_file_generic(struct inode *inode, struct file *file)
-{
-	file->private_data = inode->i_private;
-	return 0;
-}
 
 static ssize_t write_file_dummy(struct file *file, const char __user *buf,
                                 size_t count, loff_t *ppos)
@@ -694,7 +690,7 @@ out_unlock:
 
 #define FOPS(fread, fwrite) { \
 	.owner = THIS_MODULE, \
-	.open = open_file_generic, \
+	.open = simple_open, \
 	.read = (fread), \
 	.write = (fwrite), \
 	.llseek = generic_file_llseek, \
@@ -702,7 +698,7 @@ out_unlock:
 
 struct lbs_debugfs_files {
 	const char *name;
-	int perm;
+	umode_t perm;
 	struct file_operations fops;
 };
 
@@ -917,7 +913,10 @@ static ssize_t lbs_debugfs_write(struct file *f, const char __user *buf,
 	char *p2;
 	struct debug_data *d = f->private_data;
 
-	pdata = kmalloc(cnt, GFP_KERNEL);
+	if (cnt == 0)
+		return 0;
+
+	pdata = kmalloc(cnt + 1, GFP_KERNEL);
 	if (pdata == NULL)
 		return 0;
 
@@ -926,6 +925,7 @@ static ssize_t lbs_debugfs_write(struct file *f, const char __user *buf,
 		kfree(pdata);
 		return 0;
 	}
+	pdata[cnt] = '\0';
 
 	p0 = pdata;
 	for (i = 0; i < num_of_items; i++) {
@@ -960,7 +960,7 @@ static ssize_t lbs_debugfs_write(struct file *f, const char __user *buf,
 
 static const struct file_operations lbs_debug_fops = {
 	.owner = THIS_MODULE,
-	.open = open_file_generic,
+	.open = simple_open,
 	.write = lbs_debugfs_write,
 	.read = lbs_debugfs_read,
 	.llseek = default_llseek,

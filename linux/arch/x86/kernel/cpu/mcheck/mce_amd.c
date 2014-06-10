@@ -17,7 +17,6 @@
 #include <linux/notifier.h>
 #include <linux/kobject.h>
 #include <linux/percpu.h>
-#include <linux/sysdev.h>
 #include <linux/errno.h>
 #include <linux/sched.h>
 #include <linux/sysfs.h>
@@ -225,7 +224,6 @@ void mce_amd_feature_init(struct cpuinfo_x86 *c)
 
 			if (!block)
 				per_cpu(bank_map, cpu) |= (1 << bank);
-
 			if (shared_bank[bank] && c->cpu_core_id)
 				break;
 
@@ -557,6 +555,7 @@ static __cpuinit int threshold_create_bank(unsigned int cpu, unsigned int bank)
 {
 	int i, err = 0;
 	struct threshold_bank *b = NULL;
+	struct device *dev = per_cpu(mce_device, cpu);
 	char name[32];
 
 	sprintf(name, "threshold_bank%i", bank);
@@ -578,8 +577,7 @@ static __cpuinit int threshold_create_bank(unsigned int cpu, unsigned int bank)
 		if (!b)
 			goto out;
 
-		err = sysfs_create_link(&per_cpu(mce_dev, cpu).kobj,
-					b->kobj, name);
+		err = sysfs_create_link(&dev->kobj, b->kobj, name);
 		if (err)
 			goto out;
 
@@ -601,7 +599,7 @@ static __cpuinit int threshold_create_bank(unsigned int cpu, unsigned int bank)
 		goto out;
 	}
 
-	b->kobj = kobject_create_and_add(name, &per_cpu(mce_dev, cpu).kobj);
+	b->kobj = kobject_create_and_add(name, &dev->kobj);
 	if (!b->kobj)
 		goto out_free;
 
@@ -621,8 +619,9 @@ static __cpuinit int threshold_create_bank(unsigned int cpu, unsigned int bank)
 		if (i == cpu)
 			continue;
 
-		err = sysfs_create_link(&per_cpu(mce_dev, i).kobj,
-					b->kobj, name);
+		dev = per_cpu(mce_device, i);
+		if (dev)
+			err = sysfs_create_link(&dev->kobj,b->kobj, name);
 		if (err)
 			goto out;
 
@@ -685,6 +684,7 @@ static void deallocate_threshold_block(unsigned int cpu,
 static void threshold_remove_bank(unsigned int cpu, int bank)
 {
 	struct threshold_bank *b;
+	struct device *dev;
 	char name[32];
 	int i = 0;
 
@@ -699,7 +699,8 @@ static void threshold_remove_bank(unsigned int cpu, int bank)
 #ifdef CONFIG_SMP
 	/* sibling symlink */
 	if (shared_bank[bank] && b->blocks->cpu != cpu) {
-		sysfs_remove_link(&per_cpu(mce_dev, cpu).kobj, name);
+		dev = per_cpu(mce_device, cpu);
+		sysfs_remove_link(&dev->kobj, name);
 		per_cpu(threshold_banks, cpu)[bank] = NULL;
 
 		return;
@@ -711,7 +712,9 @@ static void threshold_remove_bank(unsigned int cpu, int bank)
 		if (i == cpu)
 			continue;
 
-		sysfs_remove_link(&per_cpu(mce_dev, i).kobj, name);
+		dev = per_cpu(mce_device, i);
+		if (dev)
+			sysfs_remove_link(&dev->kobj, name);
 		per_cpu(threshold_banks, i)[bank] = NULL;
 	}
 

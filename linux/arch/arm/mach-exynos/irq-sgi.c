@@ -1,8 +1,8 @@
-/* linux/arch/arm/mach-exynos/irq-sgi.c
+/*
+ * Copyright (c) 2012 Samsung Electronics Co., Ltd.
+ *		htt://www.samsung.com
  *
  * Copyright (c) 2011 Gisecke & Devrient
- *
- * Copyright (c) 2011 Samsung Electronics Co., Ltd.
  *
  * Based on linux/arch/arm/plat-s5p/irq-eint.c
  *
@@ -72,5 +72,4 @@ int __init exynos_init_irq_sgi(void)
 
 	return 0;
 }
-
 arch_initcall(exynos_init_irq_sgi);

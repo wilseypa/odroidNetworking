@@ -43,11 +43,10 @@
 	#define MY_NAME	THIS_MODULE->name
 #endif
 
-extern int shpchp_poll_mode;
+extern bool shpchp_poll_mode;
 extern int shpchp_poll_time;
-extern int shpchp_debug;
+extern bool shpchp_debug;
 extern struct workqueue_struct *shpchp_wq;
-extern struct workqueue_struct *shpchp_ordered_wq;
 
 #define dbg(format, arg...)						\
 do {									\

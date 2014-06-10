@@ -37,6 +37,7 @@ struct clk_ops {
 	unsigned long	    (*get_rate)(struct clk *c);
 	unsigned long	    (*round_rate)(struct clk *c, unsigned long rate);
 	int		    (*set_parent)(struct clk *c, struct clk *parent);
+	struct clk *	    (*get_parent)(struct clk *c);
 };
 
 struct clk {
@@ -49,14 +50,19 @@ struct clk {
 	int		      usage;
 	unsigned long         rate;
 	unsigned long         ctrlbit;
+	int			orig_src;
+	int			orig_div;
 
 	struct clk_ops		*ops;
+	int		    (*init)(struct clk *);
 	int		    (*enable)(struct clk *, int enable);
 	struct clk_lookup	lookup;
 #if defined(CONFIG_PM_DEBUG) && defined(CONFIG_DEBUG_FS)
 	struct dentry		*dent;	/* For visible tree hierarchy */
 #endif
 };
+
+struct clk *__clk_get_parent(struct clk*);
 
 /* other clocks which may be registered by board support */
 
@@ -78,6 +84,10 @@ extern struct clk clk_upll;
 extern struct clk clk_epll;
 extern struct clk clk_xtal;
 extern struct clk clk_ext;
+
+/* S3C2443/S3C2416 specific clocks */
+extern struct clksrc_clk clk_epllref;
+extern struct clksrc_clk clk_esysclk;
 
 /* S3C64XX specific clocks */
 extern struct clk clk_h2;
@@ -115,7 +125,23 @@ extern void s3c24xx_setup_clocks(unsigned long fclk,
 extern void s3c2410_setup_clocks(void);
 extern void s3c2412_setup_clocks(void);
 extern void s3c244x_setup_clocks(void);
-extern void s3c2443_setup_clocks(void);
+
+/* S3C2410 specific clock functions */
+
+extern int s3c2410_baseclk_add(void);
+
+/* S3C2443/S3C2416 specific clock functions */
+
+typedef unsigned int (*pll_fn)(unsigned int reg, unsigned int base);
+
+extern void s3c2443_common_setup_clocks(pll_fn get_mpll);
+extern void s3c2443_common_init_clocks(int xtal, pll_fn get_mpll,
+				       unsigned int *divs, int nr_divs,
+				       int divmask);
+
+extern int s3c2443_clkcon_enable_h(struct clk *clk, int enable);
+extern int s3c2443_clkcon_enable_p(struct clk *clk, int enable);
+extern int s3c2443_clkcon_enable_s(struct clk *clk, int enable);
 
 /* S3C64XX specific functions and clocks */
 

@@ -13,6 +13,7 @@
 #include <linux/platform_device.h>
 #include <mach/map.h>
 #include <plat/mipi_csis.h>
+#include <asm-generic/sizes.h>
 
 static struct resource s5p_mipi_csis0_resource[] = {
 	[0] = {

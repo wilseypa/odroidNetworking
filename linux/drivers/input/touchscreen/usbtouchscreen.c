@@ -16,6 +16,8 @@
  *  - JASTEC USB touch controller/DigiTech DTR-02U
  *  - Zytronic capacitive touchscreen
  *  - NEXIO/iNexio
+ *  - Elo TouchSystems 2700 IntelliTouch
+ *  - EasyTouch USB Dual/Multi touch controller from Data Modul
  *
  * Copyright (C) 2004-2007 by Daniel Ritz <daniel.ritz@gmx.ch>
  * Copyright (C) by Todd E. Johnson (mtouchusb.c)
@@ -59,11 +61,11 @@
 #define DRIVER_AUTHOR		"Daniel Ritz <daniel.ritz@gmx.ch>"
 #define DRIVER_DESC		"USB Touchscreen Driver"
 
-static int swap_xy;
+static bool swap_xy;
 module_param(swap_xy, bool, 0644);
 MODULE_PARM_DESC(swap_xy, "If set X and Y axes are swapped.");
 
-static int hwcalib_xy;
+static bool hwcalib_xy;
 module_param(hwcalib_xy, bool, 0644);
 MODULE_PARM_DESC(hwcalib_xy, "If set hw-calibrated X/Y are used if available");
 
@@ -104,6 +106,7 @@ struct usbtouch_device_info {
 struct usbtouch_usb {
 	unsigned char *data;
 	dma_addr_t data_dma;
+	int data_size;
 	unsigned char *buffer;
 	int buf_len;
 	struct urb *irq;
@@ -138,6 +141,8 @@ enum {
 	DEVTYPE_ZYTRONIC,
 	DEVTYPE_TC45USB,
 	DEVTYPE_NEXIO,
+	DEVTYPE_ELO,
+	DEVTYPE_ETOUCH,
 };
 
 #define USB_DEVICE_HID_CLASS(vend, prod) \
@@ -237,6 +242,18 @@ static const struct usb_device_id usbtouch_devices[] = {
 		.driver_info = DEVTYPE_NEXIO},
 	{USB_DEVICE_AND_INTERFACE_INFO(0x1870, 0x0001, 0x0a, 0x00, 0x00),
 		.driver_info = DEVTYPE_NEXIO},
+#if defined(CONFIG_TOUCHSCREEN_NEXIO_USB)
+	{USB_DEVICE(0x1870, 0x0100), .driver_info = DEVTYPE_NEXIO},
+#endif
+	
+#endif
+
+#ifdef CONFIG_TOUCHSCREEN_USB_ELO
+	{USB_DEVICE(0x04e7, 0x0020), .driver_info = DEVTYPE_ELO},
+#endif
+
+#ifdef CONFIG_TOUCHSCREEN_USB_EASYTOUCH
+	{USB_DEVICE(0x7374, 0x0001), .driver_info = DEVTYPE_ETOUCH},
 #endif
 
 	{}
@@ -320,6 +337,51 @@ static int egalax_get_pkt_len(unsigned char *buf, int len)
 }
 #endif
 
+/*****************************************************************************
+ * EasyTouch part
+ */
+
+#ifdef CONFIG_TOUCHSCREEN_USB_EASYTOUCH
+
+#ifndef MULTI_PACKET
+#define MULTI_PACKET
+#endif
+
+#define ETOUCH_PKT_TYPE_MASK		0xFE
+#define ETOUCH_PKT_TYPE_REPT		0x80
+#define ETOUCH_PKT_TYPE_REPT2		0xB0
+#define ETOUCH_PKT_TYPE_DIAG		0x0A
+
+static int etouch_read_data(struct usbtouch_usb *dev, unsigned char *pkt)
+{
+	if ((pkt[0] & ETOUCH_PKT_TYPE_MASK) != ETOUCH_PKT_TYPE_REPT &&
+		(pkt[0] & ETOUCH_PKT_TYPE_MASK) != ETOUCH_PKT_TYPE_REPT2)
+		return 0;
+
+	dev->x = ((pkt[1] & 0x1F) << 7) | (pkt[2] & 0x7F);
+	dev->y = ((pkt[3] & 0x1F) << 7) | (pkt[4] & 0x7F);
+	dev->touch = pkt[0] & 0x01;
+
+	return 1;
+}
+
+static int etouch_get_pkt_len(unsigned char *buf, int len)
+{
+	switch (buf[0] & ETOUCH_PKT_TYPE_MASK) {
+	case ETOUCH_PKT_TYPE_REPT:
+	case ETOUCH_PKT_TYPE_REPT2:
+		return 5;
+
+	case ETOUCH_PKT_TYPE_DIAG:
+		if (len < 2)
+			return -1;
+
+		return buf[1] + 2;
+	}
+
+	return 0;
+}
+#endif
 
 /*****************************************************************************
  * PanJit Part
@@ -714,7 +776,11 @@ static int zytronic_read_data(struct usbtouch_usb *dev, unsigned char *pkt)
 #ifdef CONFIG_TOUCHSCREEN_USB_NEXIO
 
 #define NEXIO_TIMEOUT	5000
-#define NEXIO_BUFSIZE	1024
+#if defined(CONFIG_TOUCHSCREEN_NEXIO_USB)
+    #define NEXIO_BUFSIZE	16
+#else
+    #define NEXIO_BUFSIZE	1024
+#endif
 #define NEXIO_THRESHOLD	50
 
 struct nexio_priv {
@@ -769,6 +835,16 @@ out_buf:
 	return ret;
 }
 
+#if defined(CONFIG_TOUCHSCREEN_NEXIO_USB)
+	#define	NEXIO_USB_TOUCH_VENDOR	0x1870
+	#define	NEXIO_USB_TOUCH_PRODUCT	0x0100
+
+	unsigned char	nexio_touch_driver_open = false;
+	extern	void	nexio_touch_report_data(void *data, unsigned short dsize);
+
+	EXPORT_SYMBOL(nexio_touch_driver_open);
+#endif
+
 static int nexio_init(struct usbtouch_usb *usbtouch)
 {
 	struct usb_device *dev = interface_to_usbdev(usbtouch->interface);
@@ -796,6 +872,9 @@ static int nexio_init(struct usbtouch_usb *usbtouch)
 	if (!buf)
 		goto out_buf;
 
+#if defined(CONFIG_TOUCHSCREEN_NEXIO_USB)
+    printk(KERN_INFO "Nexio USB Touchscreen Devuce (0x%04X:0x%04X\n", NEXIO_USB_TOUCH_VENDOR, NEXIO_USB_TOUCH_PRODUCT);
+#else
 	/* two empty reads */
 	for (i = 0; i < 2; i++) {
 		ret = usb_bulk_msg(dev, usb_rcvbulkpipe(dev, input_ep),
@@ -832,9 +911,9 @@ static int nexio_init(struct usbtouch_usb *usbtouch)
 			break;
 		}
 	}
-
-	printk(KERN_INFO "Nexio device: %s, firmware version: %s\n",
-	       device_name, firmware_ver);
+    printk(KERN_INFO "Nexio device: %s, firmware version: %s\n",
+    	       device_name, firmware_ver);
+#endif
 
 	kfree(firmware_ver);
 	kfree(device_name);
@@ -861,6 +940,14 @@ static void nexio_exit(struct usbtouch_usb *usbtouch)
 
 static int nexio_read_data(struct usbtouch_usb *usbtouch, unsigned char *pkt)
 {
+#if defined(CONFIG_TOUCHSCREEN_NEXIO_USB)
+	struct nexio_priv *priv = usbtouch->priv;
+
+    if(nexio_touch_driver_open)
+        nexio_touch_report_data((void *)pkt, 14);
+    usb_submit_urb(priv->ack, GFP_ATOMIC);
+    return  0;
+#else
 	struct nexio_touch_packet *packet = (void *) pkt;
 	struct nexio_priv *priv = usbtouch->priv;
 	unsigned int data_len = be16_to_cpu(packet->data_len);
@@ -940,6 +1027,25 @@ static int nexio_read_data(struct usbtouch_usb *usbtouch, unsigned char *pkt)
 
 	}
 	return 0;
+#endif
+}
+#endif
+
+
+/*****************************************************************************
+ * ELO part
+ */
+
+#ifdef CONFIG_TOUCHSCREEN_USB_ELO
+
+static int elo_read_data(struct usbtouch_usb *dev, unsigned char *pkt)
+{
+	dev->x = (pkt[3] << 8) | pkt[2];
+	dev->y = (pkt[5] << 8) | pkt[4];
+	dev->touch = pkt[6] > 0;
+	dev->press = pkt[6];
+
+	return 1;
 }
 #endif
 
@@ -953,6 +1059,18 @@ static void usbtouch_process_multi(struct usbtouch_usb *usbtouch,
 #endif
 
 static struct usbtouch_device_info usbtouch_dev_info[] = {
+#ifdef CONFIG_TOUCHSCREEN_USB_ELO
+	[DEVTYPE_ELO] = {
+		.min_xc		= 0x0,
+		.max_xc		= 0x0fff,
+		.min_yc		= 0x0,
+		.max_yc		= 0x0fff,
+		.max_press	= 0xff,
+		.rept_size	= 8,
+		.read_data	= elo_read_data,
+	},
+#endif
+
 #ifdef CONFIG_TOUCHSCREEN_USB_EGALAX
 	[DEVTYPE_EGALAX] = {
 		.min_xc		= 0x0,
@@ -1131,12 +1249,28 @@ static struct usbtouch_device_info usbtouch_dev_info[] = {
 
 #ifdef CONFIG_TOUCHSCREEN_USB_NEXIO
 	[DEVTYPE_NEXIO] = {
+#if defined(CONFIG_TOUCHSCREEN_NEXIO_USB)
+		.rept_size	= 16,
+#else
 		.rept_size	= 1024,
+#endif
 		.irq_always	= true,
 		.read_data	= nexio_read_data,
 		.alloc		= nexio_alloc,
 		.init		= nexio_init,
 		.exit		= nexio_exit,
+	},
+#endif
+#ifdef CONFIG_TOUCHSCREEN_USB_EASYTOUCH
+	[DEVTYPE_ETOUCH] = {
+		.min_xc		= 0x0,
+		.max_xc		= 0x07ff,
+		.min_yc		= 0x0,
+		.max_yc		= 0x07ff,
+		.rept_size	= 16,
+		.process_pkt	= usbtouch_process_multi,
+		.get_pkt_len	= etouch_get_pkt_len,
+		.read_data	= etouch_read_data,
 	},
 #endif
 };
@@ -1375,7 +1509,7 @@ static int usbtouch_reset_resume(struct usb_interface *intf)
 static void usbtouch_free_buffers(struct usb_device *udev,
 				  struct usbtouch_usb *usbtouch)
 {
-	usb_free_coherent(udev, usbtouch->type->rept_size,
+	usb_free_coherent(udev, usbtouch->data_size,
 			  usbtouch->data, usbtouch->data_dma);
 	kfree(usbtouch->buffer);
 }
@@ -1420,7 +1554,20 @@ static int usbtouch_probe(struct usb_interface *intf,
 	if (!type->process_pkt)
 		type->process_pkt = usbtouch_process_pkt;
 
-	usbtouch->data = usb_alloc_coherent(udev, type->rept_size,
+	usbtouch->data_size = type->rept_size;
+	if (type->get_pkt_len) {
+		/*
+		 * When dealing with variable-length packets we should
+		 * not request more than wMaxPacketSize bytes at once
+		 * as we do not know if there is more data coming or
+		 * we filled exactly wMaxPacketSize bytes and there is
+		 * nothing else.
+		 */
+		usbtouch->data_size = min(usbtouch->data_size,
+					  usb_endpoint_maxp(endpoint));
+	}
+
+	usbtouch->data = usb_alloc_coherent(udev, usbtouch->data_size,
 					    GFP_KERNEL, &usbtouch->data_dma);
 	if (!usbtouch->data)
 		goto out_free;
@@ -1479,12 +1626,12 @@ static int usbtouch_probe(struct usb_interface *intf,
 	if (usb_endpoint_type(endpoint) == USB_ENDPOINT_XFER_INT)
 		usb_fill_int_urb(usbtouch->irq, udev,
 			 usb_rcvintpipe(udev, endpoint->bEndpointAddress),
-			 usbtouch->data, type->rept_size,
+			 usbtouch->data, usbtouch->data_size,
 			 usbtouch_irq, usbtouch, endpoint->bInterval);
 	else
 		usb_fill_bulk_urb(usbtouch->irq, udev,
 			 usb_rcvbulkpipe(udev, endpoint->bEndpointAddress),
-			 usbtouch->data, type->rept_size,
+			 usbtouch->data, usbtouch->data_size,
 			 usbtouch_irq, usbtouch);
 
 	usbtouch->irq->dev = udev;
@@ -1580,18 +1727,7 @@ static struct usb_driver usbtouch_driver = {
 	.supports_autosuspend = 1,
 };
 
-static int __init usbtouch_init(void)
-{
-	return usb_register(&usbtouch_driver);
-}
-
-static void __exit usbtouch_cleanup(void)
-{
-	usb_deregister(&usbtouch_driver);
-}
-
-module_init(usbtouch_init);
-module_exit(usbtouch_cleanup);
+module_usb_driver(usbtouch_driver);
 
 MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(DRIVER_DESC);

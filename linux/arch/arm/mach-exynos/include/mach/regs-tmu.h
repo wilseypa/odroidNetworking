@@ -1,19 +1,16 @@
-/* linux/arch/arm/mach-exynos/include/mach/regs-tmu.h
-
-* Copyright (c) 2010 Samsung Electronics Co., Ltd.
-*      http://www.samsung.com/
-*
-* EXYNOS4 - Thermal Management support
-*
-* This program is free software; you can redistribute it and/or modify
-* it under the terms of the GNU General Public License version 2 as
-* published by the Free Software Foundation.
-*/
+/*
+ * Copyright (c) 2012 Samsung Electronics Co., Ltd.
+ *      http://www.samsung.com/
+ *
+ * EXYNOS - Thermal Management support
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ */
 
 #ifndef __ASM_ARCH_REGS_THERMAL_H
 #define __ASM_ARCH_REGS_THERMAL_H __FILE__
-
-#include "regs-tmu-4210.h"
 
 #define TRIMINFO		(0x0)
 #define TRIMINFO_CON		(0x14)
@@ -23,7 +20,6 @@
 #define SAMPLING_INTERNAL	(0x2C)
 #define CNT_VALUE0		(0x30)
 #define CNT_VALUE1		(0x34)
-
 #define CURRENT_TEMP		(0x40)
 
 #define THD_TEMP_RISE		(0x50)
@@ -77,6 +73,6 @@
 #define CLEAR_FALL_INT		(INTCLEAR_FALL0 | INTCLEAR_FALL1 | \
 				 INTCLEAR_FALL2)
 #define EMUL_EN		(1)
-#define HW_TRIP_MODE		(7<<13)
-#define HW_TRIPPING_EN		(1<<12)
+
+#define FREQ_IN_PLL		24000000	/* 24MHz in Hz */
 #endif

@@ -15,14 +15,13 @@
 #include <asm/cacheflush.h>
 #include <asm/cputype.h>
 
-#include <plat/cpu.h>
-
 #define SCU_CTRL		0x00
 #define SCU_CONFIG		0x04
 #define SCU_CPU_STATUS		0x08
 #define SCU_INVALIDATE		0x0c
 #define SCU_FPGA_REVISION	0x10
 
+#ifdef CONFIG_SMP
 /*
  * Get the number of CPU cores from the SCU configuration
  */
@@ -35,7 +34,7 @@ unsigned int __init scu_get_core_count(void __iomem *scu_base)
 /*
  * Enable the SCU
  */
-void __init scu_enable(void __iomem *scu_base)
+void scu_enable(void __iomem *scu_base)
 {
 	u32 scu_ctrl;
 
@@ -53,8 +52,6 @@ void __init scu_enable(void __iomem *scu_base)
 	if (scu_ctrl & 1)
 		return;
 
-	if (soc_is_exynos4412() && (samsung_rev() >= EXYNOS4412_REV_1_0))
-		scu_ctrl |= (1<<3);
 	scu_ctrl |= 1;
 	__raw_writel(scu_ctrl, scu_base + SCU_CTRL);
 
@@ -64,6 +61,7 @@ void __init scu_enable(void __iomem *scu_base)
 	 */
 	flush_cache_all();
 }
+#endif
 
 /*
  * Set the executing CPUs power mode as defined.  This will be in

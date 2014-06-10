@@ -1,6 +1,6 @@
 /* linux/arch/arm/mach-exynos/include/mach/regs-usb-phy-4212.h
  *
- * Copyright (c) 2010-2011 Samsung Electronics Co., Ltd.
+ * Copyright (c) 2010-2012 Samsung Electronics Co., Ltd.
  *		http://www.samsung.com
  *
  * EXYNOS4 - 4212 USB PHY definition

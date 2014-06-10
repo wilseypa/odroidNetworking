@@ -143,9 +143,9 @@ static inline void *inet_csk_ca(const struct sock *sk)
 	return (void *)inet_csk(sk)->icsk_ca_priv;
 }
 
-extern struct sock *inet_csk_clone(struct sock *sk,
-				   const struct request_sock *req,
-				   const gfp_t priority);
+extern struct sock *inet_csk_clone_lock(const struct sock *sk,
+					const struct request_sock *req,
+					const gfp_t priority);
 
 enum inet_csk_ack_state_t {
 	ICSK_ACK_SCHED	= 1,
@@ -317,6 +317,7 @@ extern void inet_csk_reqsk_queue_prune(struct sock *parent,
 				       const unsigned long max_rto);
 
 extern void inet_csk_destroy_sock(struct sock *sk);
+extern void inet_csk_prepare_forced_close(struct sock *sk);
 
 /*
  * LISTEN is a special case for poll..

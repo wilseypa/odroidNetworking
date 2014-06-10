@@ -34,6 +34,7 @@
 
 #include <linux/skbuff.h>
 #include <linux/rtnetlink.h>
+#include <linux/moduleparam.h>
 #include <linux/ip.h>
 #include <linux/in.h>
 #include <linux/igmp.h>
@@ -248,8 +249,11 @@ static int ipoib_mcast_join_finish(struct ipoib_mcast *mcast,
 		av.grh.dgid = mcast->mcmember.mgid;
 
 		ah = ipoib_create_ah(dev, priv->pd, &av);
-		if (!ah) {
-			ipoib_warn(priv, "ib_address_create failed\n");
+		if (IS_ERR(ah)) {
+			ipoib_warn(priv, "ib_address_create failed %ld\n",
+				-PTR_ERR(ah));
+			/* use original error */
+			return PTR_ERR(ah);
 		} else {
 			spin_lock_irq(&priv->lock);
 			mcast->ah = ah;
@@ -271,7 +275,6 @@ static int ipoib_mcast_join_finish(struct ipoib_mcast *mcast,
 		netif_tx_unlock_bh(dev);
 
 		skb->dev = dev;
-
 		if (dev_queue_xmit(skb))
 			ipoib_warn(priv, "dev_queue_xmit failed to requeue packet\n");
 
@@ -718,7 +721,7 @@ out:
 
 		rcu_read_lock();
 		if (dst)
-			n = dst_get_neighbour(dst);
+			n = dst_get_neighbour_noref(dst);
 		if (n && !*to_ipoib_neigh(n)) {
 			struct ipoib_neigh *neigh = ipoib_neigh_alloc(n,
 								      skb->dev);

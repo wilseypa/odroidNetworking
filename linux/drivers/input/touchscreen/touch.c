@@ -61,6 +61,7 @@ static	void	touch_disable				(struct touch *ts);
 static	void 	touch_input_close			(struct input_dev *input);
 static	int		touch_input_open			(struct input_dev *input);
 static	int		touch_check_functionality	(struct touch_pdata *pdata);
+static  void    touch_dummy_mode            (struct touch *ts);
 
 		void 	touch_hw_reset				(struct touch *ts);
 		int		touch_info_display			(struct touch *ts);
@@ -353,6 +354,51 @@ static	int		touch_check_functionality	(struct touch_pdata *pdata)
 }
 
 //[*]--------------------------------------------------------------------------------------------------[*]
+#if defined(CONFIG_LCD_MIPI_TC358764)
+    extern  unsigned short FrameBufferSizeX;
+    extern  unsigned short FrameBufferSizeY;
+#endif
+
+static  void    touch_dummy_mode    (struct touch *ts)
+{
+    ts->irq = 0;    
+    
+    ts->pdata->irq_gpio         = 0;
+    ts->pdata->probe            = 0;
+    ts->pdata->i2c_read			= touch_i2c_read;
+    ts->pdata->i2c_write 		= touch_i2c_write;
+    
+    ts->pdata->i2c_boot_read	= touch_i2c_read;
+    ts->pdata->i2c_boot_write	= touch_i2c_write;
+    
+    ts->pdata->enable 			= touch_enable;
+    ts->pdata->disable			= touch_disable;
+
+    if(ts->pdata->max_fingers == 1) ts->pdata->report   = touch_report_single;	
+    else    {
+    	if(ts->pdata->id_max)		ts->pdata->report   = touch_report_protocol_b;
+    	else					    ts->pdata->report   = touch_report_protocol_a;
+    }
+
+	ts->pdata->key_report		= touch_key_report;
+
+	ts->pdata->touch_work		= touch_work;
+	ts->pdata->irq_func			= touch_irq;
+
+	ts->pdata->event_clear		= touch_event_clear;
+		
+#ifdef	CONFIG_HAS_EARLYSUSPEND
+	ts->pdata->resume			= touch_resume;
+	ts->pdata->suspend			= touch_suspend;
+#endif
+	
+#if defined(CONFIG_LCD_MIPI_TC358764)
+    ts->pdata->abs_max_x = FrameBufferSizeX;
+    ts->pdata->abs_max_y = FrameBufferSizeY;
+#endif
+}
+
+//[*]--------------------------------------------------------------------------------------------------[*]
 void 	touch_hw_reset		(struct touch *ts)
 {
 	if(ts->pdata->reset_gpio)	{
@@ -379,6 +425,7 @@ void 	touch_hw_reset		(struct touch *ts)
 //[*]--------------------------------------------------------------------------------------------------[*]
 int		touch_info_display	(struct touch *ts)
 {
+#ifdef CONFIG_ODROIDXU_DEBUG_MESSAGES
 	printk("--------------------------------------------------------\n");
 	printk("           TOUCH SCREEN INFORMATION\n");
 	printk("--------------------------------------------------------\n");
@@ -435,10 +482,13 @@ int		touch_info_display	(struct touch *ts)
 	}
 	else	{
 		printk("TOUCH INPUT Name = %s\n", ts->pdata->name);
-		printk("Dummy Touchscreen driver!\n");
+		printk("TOUCH ABS X MAX = %d, TOUCH ABS X MIN = %d\n", ts->pdata->abs_max_x, ts->pdata->abs_min_x);
+		printk("TOUCH ABS Y MAX = %d, TOUCH ABS Y MIN = %d\n", ts->pdata->abs_max_y, ts->pdata->abs_min_y);
+		printk("odroidxu: Dummy Touchscreen driver!\n");
 	}
-
-	printk("--------------------------------------------------------\n");
+#else
+	printk("odroidxu: Dummy touchscreen driver!\n");
+#endif
 	
 	return	0;
 }
@@ -481,7 +531,7 @@ int		touch_probe		(struct i2c_client *client)
 	if(ts->pdata->reset_gpio)	touch_hw_reset(ts);
 
 	if(ts->pdata->early_probe)	{
-		if((rc = ts->pdata->early_probe(ts)) < 0)	goto err_free_mem;
+		if((rc = ts->pdata->early_probe(ts)) < 0)   touch_dummy_mode(ts);
 	}
 
 	dev_set_drvdata(dev, ts);
@@ -662,11 +712,6 @@ int 	touch_remove	(struct device *dev)
 
 	return 0;
 }
-
-//[*]--------------------------------------------------------------------------------------------------[*]
-MODULE_AUTHOR("HardKernel Co., Ltd.");
-MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Touchscreen Driver");
 
 //[*]--------------------------------------------------------------------------------------------------[*]
 //[*]--------------------------------------------------------------------------------------------------[*]

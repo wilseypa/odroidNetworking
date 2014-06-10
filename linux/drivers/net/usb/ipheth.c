@@ -429,28 +429,21 @@ static void ipheth_tx_timeout(struct net_device *net)
 	usb_unlink_urb(dev->tx_urb);
 }
 
-static struct net_device_stats *ipheth_stats(struct net_device *net)
-{
-	struct ipheth_device *dev = netdev_priv(net);
-	return &dev->net->stats;
-}
-
 static u32 ipheth_ethtool_op_get_link(struct net_device *net)
 {
 	struct ipheth_device *dev = netdev_priv(net);
 	return netif_carrier_ok(dev->net);
 }
 
-static struct ethtool_ops ops = {
+static const struct ethtool_ops ops = {
 	.get_link = ipheth_ethtool_op_get_link
 };
 
 static const struct net_device_ops ipheth_netdev_ops = {
-	.ndo_open = &ipheth_open,
-	.ndo_stop = &ipheth_close,
-	.ndo_start_xmit = &ipheth_tx,
-	.ndo_tx_timeout = &ipheth_tx_timeout,
-	.ndo_get_stats = &ipheth_stats,
+	.ndo_open = ipheth_open,
+	.ndo_stop = ipheth_close,
+	.ndo_start_xmit = ipheth_tx,
+	.ndo_tx_timeout = ipheth_tx_timeout,
 };
 
 static int ipheth_probe(struct usb_interface *intf,
@@ -565,25 +558,7 @@ static struct usb_driver ipheth_driver = {
 	.id_table =	ipheth_table,
 };
 
-static int __init ipheth_init(void)
-{
-	int retval;
-
-	retval = usb_register(&ipheth_driver);
-	if (retval) {
-		err("usb_register failed: %d", retval);
-		return retval;
-	}
-	return 0;
-}
-
-static void __exit ipheth_exit(void)
-{
-	usb_deregister(&ipheth_driver);
-}
-
-module_init(ipheth_init);
-module_exit(ipheth_exit);
+module_usb_driver(ipheth_driver);
 
 MODULE_AUTHOR("Diego Giagio <diego@giagio.com>");
 MODULE_DESCRIPTION("Apple iPhone USB Ethernet driver");

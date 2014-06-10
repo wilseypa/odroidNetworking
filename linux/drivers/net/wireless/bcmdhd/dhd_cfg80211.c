@@ -1,9 +1,9 @@
 /*
  * Linux cfg80211 driver - Dongle Host Driver (DHD) related
  *
- * Copyright (C) 1999-2011, Broadcom Corporation
+ * Copyright (C) 1999-2012, Broadcom Corporation
  * 
- *         Unless you and Broadcom execute a separate written software license
+ *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
  * under the terms of the GNU General Public License version 2 (the "GPL"),
  * available at http://www.broadcom.com/licenses/GPLv2.php, with the
@@ -30,8 +30,27 @@
 #include <wldev_common.h>
 #include <wl_cfg80211.h>
 #include <dhd_cfg80211.h>
+
+#ifdef PKT_FILTER_SUPPORT
+#include <dngl_stats.h>
+#include <dhd.h>
+#endif
+
 extern struct wl_priv *wlcfg_drv_priv;
+
+#ifdef PKT_FILTER_SUPPORT
+extern uint dhd_pkt_filter_enable;
+extern uint dhd_master_mode;
+extern void dhd_pktfilter_offload_enable(dhd_pub_t * dhd, char *arg, int enable, int master_mode);
+#endif
+
 static int dhd_dongle_up = FALSE;
+
+#include <dngl_stats.h>
+#include <dhd.h>
+#include <dhdioctl.h>
+#include <wlioctl.h>
+#include <dhd_cfg80211.h>
 
 static s32 wl_dongle_up(struct net_device *ndev, u32 up);
 
@@ -54,6 +73,35 @@ s32 dhd_cfg80211_deinit(struct wl_priv *wl)
 s32 dhd_cfg80211_down(struct wl_priv *wl)
 {
 	dhd_dongle_up = FALSE;
+	return 0;
+}
+
+s32 dhd_cfg80211_set_p2p_info(struct wl_priv *wl, int val)
+{
+	dhd_pub_t *dhd =  (dhd_pub_t *)(wl->pub);
+	dhd->op_mode |= val;
+	WL_ERR(("Set : op_mode=0x%04x\n", dhd->op_mode));
+#ifdef ARP_OFFLOAD_SUPPORT
+	/* IF P2P is enabled, disable arpoe */
+	dhd_arp_offload_set(dhd, 0);
+	dhd_arp_offload_enable(dhd, false);
+#endif /* ARP_OFFLOAD_SUPPORT */
+
+	return 0;
+}
+
+s32 dhd_cfg80211_clean_p2p_info(struct wl_priv *wl)
+{
+	dhd_pub_t *dhd =  (dhd_pub_t *)(wl->pub);
+	dhd->op_mode &= ~(DHD_FLAG_P2P_GC_MODE | DHD_FLAG_P2P_GO_MODE);
+	WL_ERR(("Clean : op_mode=0x%04x\n", dhd->op_mode));
+
+#ifdef ARP_OFFLOAD_SUPPORT
+	/* IF P2P is disabled, enable arpoe back for STA mode. */
+	dhd_arp_offload_set(dhd, dhd_arp_mode);
+	dhd_arp_offload_enable(dhd, true);
+#endif /* ARP_OFFLOAD_SUPPORT */
+
 	return 0;
 }
 
@@ -371,7 +419,7 @@ static void wl_cfg80211_bt_handler(struct work_struct *work)
 				__FUNCTION__));
 			btcx_inf->bt_state = BT_DHCP_OPPR_WIN;
 			mod_timer(&btcx_inf->timer,
-				jiffies + BT_DHCP_OPPR_WIN_TIME*HZ/1000);
+				jiffies + msecs_to_jiffies(BT_DHCP_OPPR_WIN_TIME));
 			btcx_inf->timer_on = 1;
 			break;
 
@@ -391,7 +439,7 @@ static void wl_cfg80211_bt_handler(struct work_struct *work)
 				wl_cfg80211_bt_setflag(btcx_inf->dev, TRUE);
 			btcx_inf->bt_state = BT_DHCP_FLAG_FORCE_TIMEOUT;
 			mod_timer(&btcx_inf->timer,
-				jiffies + BT_DHCP_FLAG_FORCE_TIME*HZ/1000);
+				jiffies + msecs_to_jiffies(BT_DHCP_FLAG_FORCE_TIME));
 			btcx_inf->timer_on = 1;
 			break;
 
@@ -489,12 +537,25 @@ int wl_cfg80211_set_btcoex_dhcp(struct net_device *dev, char *command)
 	struct btcoex_info *btco_inf = wl->btcoex_info;
 #endif /* COEX_DHCP */
 
+#ifdef PKT_FILTER_SUPPORT
+	dhd_pub_t *dhd =  (dhd_pub_t *)(wl->pub);
+#endif
+
 	/* Figure out powermode 1 or o command */
 	strncpy((char *)&powermode_val, command + strlen("BTCOEXMODE") +1, 1);
 
 	if (strnicmp((char *)&powermode_val, "1", strlen("1")) == 0) {
+		WL_TRACE_HW4(("%s: DHCP session starts\n", __FUNCTION__));
 
-		WL_TRACE(("%s: DHCP session starts\n", __FUNCTION__));
+#ifdef PKT_FILTER_SUPPORT
+		dhd->dhcp_in_progress = 1;
+
+		/* Disable packet filtering */
+		if (dhd->early_suspended) {
+			WL_TRACE_HW4(("DHCP in progressing , disable packet filter!!!\n"));
+			dhd_enable_packet_filter(0, dhd);
+		}
+#endif
 
 		/* Retrieve and saved orig regs value */
 		if ((saved_status == FALSE) &&
@@ -539,6 +600,17 @@ int wl_cfg80211_set_btcoex_dhcp(struct net_device *dev, char *command)
 	}
 	else if (strnicmp((char *)&powermode_val, "2", strlen("2")) == 0) {
 
+
+#ifdef PKT_FILTER_SUPPORT
+		dhd->dhcp_in_progress = 0;
+		WL_TRACE_HW4(("%s: DHCP is complete \n", __FUNCTION__));
+
+		/* Enable packet filtering */
+		if (dhd->early_suspended) {
+			WL_TRACE_HW4(("DHCP is complete , enable packet filter!!!\n"));
+			dhd_enable_packet_filter(1, dhd);
+		}
+#endif
 
 		/* Restoring PM mode */
 

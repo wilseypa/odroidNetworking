@@ -99,6 +99,7 @@ static bool ima_match_rules(struct ima_measure_rule_entry *rule,
 			    struct inode *inode, enum ima_hooks func, int mask)
 {
 	struct task_struct *tsk = current;
+	const struct cred *cred = current_cred();
 	int i;
 
 	if ((rule->flags & IMA_FUNC) && rule->func != func)
@@ -108,7 +109,7 @@ static bool ima_match_rules(struct ima_measure_rule_entry *rule,
 	if ((rule->flags & IMA_FSMAGIC)
 	    && rule->fsmagic != inode->i_sb->s_magic)
 		return false;
-	if ((rule->flags & IMA_UID) && rule->uid != tsk->cred->uid)
+	if ((rule->flags & IMA_UID) && rule->uid != cred->uid)
 		return false;
 	for (i = 0; i < MAX_LSM_RULES; i++) {
 		int rc = 0;
@@ -416,7 +417,7 @@ static int ima_parse_rule(char *rule, struct ima_measure_rule_entry *entry)
 	if (!result && (entry->action == UNKNOWN))
 		result = -EINVAL;
 
-	audit_log_format(ab, "res=%d", !!result);
+	audit_log_format(ab, "res=%d", !result);
 	audit_log_end(ab);
 	return result;
 }

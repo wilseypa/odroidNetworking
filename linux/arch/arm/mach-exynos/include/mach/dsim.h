@@ -138,8 +138,6 @@ enum dsim_lane_change {
 enum dsim_int_src {
 	DSIM_ALL_OF_INTR 	= 0xffffffff,
 	DSIM_PLL_STABLE 	= (1 << 31),
-        DSIM_REL_SWRST		= (1 << 30),
-        DSIM_FIFO_EMPTY		= (1 << 29),
 };
 
 enum dsim_data_id {
@@ -216,8 +214,6 @@ struct dsim_config {
 	unsigned char bta_timeout;
 	unsigned short rx_timeout;
 	enum dsim_video_mode_type e_lane_swap;
-
-	unsigned long hs_toggle;
 };
 
 struct dsim_lcd_config {
@@ -229,15 +225,12 @@ struct dsim_lcd_config {
 
 	/* platform data for lcd panel based on MIPI-DSI. */
 	void *mipi_ddi_pd;
-
-	unsigned int lcd_enabled;
 };
 
 struct s5p_platform_dsim {
 	char	*clk_name;
 	char	lcd_panel_name[64];
 	unsigned int te_irq;
-	unsigned int platform_rev;
 
 	struct dsim_config *dsim_info;
 	struct dsim_lcd_config *dsim_lcd_info;
@@ -246,14 +239,12 @@ struct s5p_platform_dsim {
 	void (*enable_clk) (void *d_clk, unsigned char enable);
 	void (*part_reset) (void);
 	void (*init_d_phy) (unsigned int dsim_base);
-	void (*exit_d_phy) (unsigned int dsim_base);
 	void (*cfg_gpio) (void);
 };
 
 extern void s5p_dsim_enable_clk(void *d_clk, unsigned char enable);
 extern void s5p_dsim_part_reset(void);
 extern void s5p_dsim_init_d_phy(unsigned int dsim_base);
-extern void s5p_dsim_exit_d_phy(unsigned int dsim_base);
 extern void exynos4_dsim_gpio_setup_24bpp(void);
 
 #endif /* _DSIM_H */

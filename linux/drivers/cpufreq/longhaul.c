@@ -35,6 +35,7 @@
 #include <linux/acpi.h>
 
 #include <asm/msr.h>
+#include <asm/cpu_device_id.h>
 #include <acpi/processor.h>
 
 #include "longhaul.h"
@@ -76,7 +77,7 @@ static unsigned int longhaul_index;
 static int scale_voltage;
 static int disable_acpi_c3;
 static int revid_errata;
-
+static int enable;
 
 /* Clock ratios multiplied by 10 */
 static int mults[32];
@@ -951,14 +952,23 @@ static struct cpufreq_driver longhaul_driver = {
 	.attr	= longhaul_attr,
 };
 
+static const struct x86_cpu_id longhaul_id[] = {
+	{ X86_VENDOR_CENTAUR, 6 },
+	{}
+};
+MODULE_DEVICE_TABLE(x86cpu, longhaul_id);
 
 static int __init longhaul_init(void)
 {
 	struct cpuinfo_x86 *c = &cpu_data(0);
 
-	if (c->x86_vendor != X86_VENDOR_CENTAUR || c->x86 != 6)
+	if (!x86_match_cpu(longhaul_id))
 		return -ENODEV;
 
+	if (!enable) {
+		printk(KERN_ERR PFX "Option \"enable\" not set. Aborting.\n");
+		return -ENODEV;
+	}
 #ifdef CONFIG_SMP
 	if (num_online_cpus() > 1) {
 		printk(KERN_ERR PFX "More than 1 CPU detected, "
@@ -1015,6 +1025,10 @@ MODULE_PARM_DESC(scale_voltage, "Scale voltage of processor");
  * such. */
 module_param(revid_errata, int, 0644);
 MODULE_PARM_DESC(revid_errata, "Ignore CPU Revision ID");
+/* By default driver is disabled to prevent incompatible
+ * system freeze. */
+module_param(enable, int, 0644);
+MODULE_PARM_DESC(enable, "Enable driver");
 
 MODULE_AUTHOR("Dave Jones <davej@redhat.com>");
 MODULE_DESCRIPTION("Longhaul driver for VIA Cyrix processors.");

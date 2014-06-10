@@ -2,23 +2,13 @@
 # Misc strange devices
 #
 
-# This one has to live outside of the MISC_DEVICES conditional,
-# because it may be selected by drivers/platform/x86/hp_accel.
+menu "Misc devices"
+
 config SENSORS_LIS3LV02D
 	tristate
 	depends on INPUT
 	select INPUT_POLLDEV
 	default n
-
-menuconfig MISC_DEVICES
-	bool "Misc devices"
-	---help---
-	  Say Y here to get to see options for device drivers from various
-	  different categories. This option alone does not add any kernel code.
-
-	  If you say N, all options in this submenu will be skipped and disabled.
-
-if MISC_DEVICES
 
 config AD525X_DPOT
 	tristate "Analog Devices Digital Potentiometers"
@@ -63,7 +53,7 @@ config AD525X_DPOT_SPI
 
 config ATMEL_PWM
 	tristate "Atmel AT32/AT91 PWM support"
-	depends on AVR32 || ARCH_AT91SAM9263 || ARCH_AT91SAM9RL || ARCH_AT91CAP9
+	depends on HAVE_CLK
 	help
 	  This option enables device driver support for the PWM channels
 	  on certain Atmel processors.  Pulse Width Modulation is used for
@@ -146,6 +136,7 @@ config PHANTOM
 
 config INTEL_MID_PTI
 	tristate "Parallel Trace Interface for MIPI P1149.7 cJTAG standard"
+	depends on PCI
 	default n
 	help
 	  The PTI (Parallel Trace Interface) driver directs
@@ -482,16 +473,6 @@ config BMP085
 	  To compile this driver as a module, choose M here: the
 	  module will be called bmp085.
 
-config BMP180
-	tristate "BMP180 digital pressure sensor"
-	depends on I2C && SYSFS
-	help
-		If you say yes here you get support for the Bosch Sensortec
-		BMP180 digital pressure sensor.
-		
-		To compile this driver as a module, choose M here: the
-		module will be called bmp180.
-
 config PCH_PHUB
 	tristate "Intel EG20T PCH/LAPIS Semicon IOH(ML7213/ML7223/ML7831) PHUB"
 	depends on PCI
@@ -512,6 +493,23 @@ config PCH_PHUB
 	  To compile this driver as a module, choose M here: the module will
 	  be called pch_phub.
 
+config USB_SWITCH_FSA9480
+	tristate "FSA9480 USB Switch"
+	depends on I2C
+	help
+	  The FSA9480 is a USB port accessory detector and switch.
+	  The FSA9480 is fully controlled using I2C and enables USB data,
+	  stereo and mono audio, video, microphone and UART data to use
+	  a common connector port.
+
+config MAX8997_MUIC
+	tristate "MAX8997 MUIC Support"
+	depends on MFD_MAX8997
+	help
+	  If you say yes here you get support for the MUIC device of
+	  Maxim MAX8997 PMIC.
+	  The MAX8997 MUIC is a USB port accessory detector and switch.
+
 config WL127X_RFKILL
 	tristate "Bluetooth power control driver for TI wl127x"
 	depends on RFKILL
@@ -519,22 +517,7 @@ config WL127X_RFKILL
 	---help---
 	 Creates an rfkill entry in sysfs for power control of Bluetooth
 	 TI wl127x chips.
-
-config APANIC
-	bool "Android kernel panic diagnostics driver"
-	default n
-	---help---
-	 Driver which handles kernel panics and attempts to write
-	 critical debugging data to flash.
-
-config APANIC_PLABEL
-	string "Android panic dump flash partition label"
-	depends on APANIC
-	default "kpanic"
-	---help---
-	 If your platform uses a different flash partition label for storing
- 	 crashdumps, enter it here.
-
+	 
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"
 source "drivers/misc/cb710/Kconfig"
@@ -542,27 +525,5 @@ source "drivers/misc/iwmc3200top/Kconfig"
 source "drivers/misc/ti-st/Kconfig"
 source "drivers/misc/lis3lv02d/Kconfig"
 source "drivers/misc/carma/Kconfig"
-source "drivers/misc/c2c/Kconfig"
-# Invensense Library version 4.4.1 for mpu6050
-source "drivers/misc/inv_mpu/Kconfig"
-
-config SLP_LOWMEM_NOTIFY
-	bool "Driver for SLP Low Memory Notification"
-	depends on SLP
-	help
-	  Provide interface to register for low memory notifications.
-
-config SLP_PROCESS_MON
-	bool "Driver for SLP process monitoring"
-	depends on SLP
-	help
-	  Providing monitoring important processes. Users can register the process
-	  with sysfs.
-
-config FSYNC_CONTROL
-        bool "Support for FSync Control"
-        default y
-        help
-          Say Y here to enable FSync Control
-
-endif # MISC_DEVICES
+source "drivers/misc/altera-stapl/Kconfig"
+endmenu

@@ -18,7 +18,6 @@
 #include <linux/errno.h>
 #include <linux/bug.h>
 #include <linux/interrupt.h>
-#include <linux/workqueue.h>
 #include <linux/device.h>
 #include <linux/platform_device.h>
 #include <linux/list.h>
@@ -34,11 +33,14 @@ static int gsc_ctx_stop_req(struct gsc_ctx *ctx)
 	struct gsc_ctx *curr_ctx;
 	struct gsc_dev *gsc = ctx->gsc_dev;
 	int ret = 0;
+	unsigned long flags;
 
 	curr_ctx = v4l2_m2m_get_curr_priv(gsc->m2m.m2m_dev);
 	if (!gsc_m2m_run(gsc) || (curr_ctx != ctx))
 		return 0;
+	spin_lock_irqsave(&ctx->slock, flags);
 	ctx->state |= GSC_CTX_STOP_REQ;
+	spin_unlock_irqrestore(&ctx->slock, flags);
 	ret = wait_event_timeout(gsc->irq_queue,
 			!gsc_ctx_state_is_set(GSC_CTX_STOP_REQ, ctx),
 			GSC_SHUTDOWN_TIMEOUT);
@@ -54,12 +56,11 @@ static int gsc_m2m_stop_streaming(struct vb2_queue *q)
 	struct gsc_dev *gsc = ctx->gsc_dev;
 	int ret;
 
+	vb2_wait_for_all_buffers(q);
 	ret = gsc_ctx_stop_req(ctx);
 	/* FIXME: need to add v4l2_m2m_job_finish(fail) if ret is timeout */
 	if (ret < 0)
 		dev_err(&gsc->pdev->dev, "wait timeout : %s\n", __func__);
-
-	v4l2_m2m_get_next_job(gsc->m2m.m2m_dev, ctx->m2m_ctx);
 
 	return 0;
 }
@@ -70,12 +71,12 @@ static void gsc_m2m_job_abort(void *priv)
 	struct gsc_dev *gsc = ctx->gsc_dev;
 	int ret;
 
+	vb2_wait_for_all_buffers(v4l2_m2m_get_src_vq(ctx->m2m_ctx));
+	vb2_wait_for_all_buffers(v4l2_m2m_get_dst_vq(ctx->m2m_ctx));
 	ret = gsc_ctx_stop_req(ctx);
 	/* FIXME: need to add v4l2_m2m_job_finish(fail) if ret is timeout */
 	if (ret < 0)
 		dev_err(&gsc->pdev->dev, "wait timeout : %s\n", __func__);
-
-	v4l2_m2m_get_next_job(gsc->m2m.m2m_dev, ctx->m2m_ctx);
 }
 
 int gsc_fill_addr(struct gsc_ctx *ctx)
@@ -88,14 +89,45 @@ int gsc_fill_addr(struct gsc_ctx *ctx)
 	d_frame = &ctx->d_frame;
 
 	vb = v4l2_m2m_next_src_buf(ctx->m2m_ctx);
+	if (vb->num_planes != s_frame->fmt->num_planes) {
+		gsc_err("gsc(%s): vb(%p) planes=%d s_frame(%p) planes=%d\n",
+			v4l2_m2m_get_src_vq(ctx->m2m_ctx)->name,
+			vb, vb->num_planes, s_frame, s_frame->fmt->num_planes);
+		return -EINVAL;
+	}
 	ret = gsc_prepare_addr(ctx, vb, s_frame, &s_frame->addr);
 	if (ret)
 		return ret;
 
 	vb = v4l2_m2m_next_dst_buf(ctx->m2m_ctx);
+	if (vb->num_planes != d_frame->fmt->num_planes) {
+		gsc_err("gsc(%s): vb(%p) planes=%d d_frame(%p) planes=%d\n",
+			v4l2_m2m_get_dst_vq(ctx->m2m_ctx)->name,
+			vb, vb->num_planes, d_frame, d_frame->fmt->num_planes);
+		return -EINVAL;
+	}
 	ret = gsc_prepare_addr(ctx, vb, d_frame, &d_frame->addr);
 
 	return ret;
+}
+
+void gsc_op_timer_handler(unsigned long arg)
+{
+	struct gsc_ctx *ctx = (struct gsc_ctx *)arg;
+	struct gsc_dev *gsc = ctx->gsc_dev;
+	struct vb2_buffer *src_vb, *dst_vb;
+
+	clear_bit(ST_M2M_RUN, &gsc->state);
+	pm_runtime_put_sync(&gsc->pdev->dev);
+
+	src_vb = v4l2_m2m_src_buf_remove(ctx->m2m_ctx);
+	dst_vb = v4l2_m2m_dst_buf_remove(ctx->m2m_ctx);
+	if (src_vb && dst_vb) {
+		v4l2_m2m_buf_done(src_vb, VB2_BUF_STATE_ERROR);
+		v4l2_m2m_buf_done(dst_vb, VB2_BUF_STATE_ERROR);
+	}
+	gsc_err("GSCALER[%d] interrupt hasn't been triggered", gsc->id);
+	gsc_err("erro ctx: %p, ctx->state: 0x%x", ctx, ctx->state);
 }
 
 static void gsc_m2m_device_run(void *priv)
@@ -103,14 +135,18 @@ static void gsc_m2m_device_run(void *priv)
 	struct gsc_ctx *ctx = priv;
 	struct gsc_dev *gsc;
 	unsigned long flags;
-	u32 ret;
+	int ret;
 	bool is_set = false;
 
 	if (WARN(!ctx, "null hardware context\n"))
 		return;
 
 	gsc = ctx->gsc_dev;
-	pm_runtime_get_sync(&gsc->pdev->dev);
+
+	if (in_irq())
+		pm_runtime_get(&gsc->pdev->dev);
+	else
+		pm_runtime_get_sync(&gsc->pdev->dev);
 
 	spin_lock_irqsave(&ctx->slock, flags);
 	/* Reconfigure hardware if the context has changed. */
@@ -134,15 +170,25 @@ static void gsc_m2m_device_run(void *priv)
 		goto put_device;
 	}
 
-	gsc_set_prefbuf(gsc, ctx->s_frame);
-	gsc_hw_set_input_addr(gsc, &ctx->s_frame.addr, GSC_M2M_BUF_NUM);
-	gsc_hw_set_output_addr(gsc, &ctx->d_frame.addr, GSC_M2M_BUF_NUM);
+	if (!gsc->protected_content) {
+		struct gsc_frame *frame = &ctx->s_frame;
+		exynos_sysmmu_set_pbuf(&gsc->pdev->dev, frame->fmt->nr_comp,
+				ctx->prebuf);
+	}
 
 	if (ctx->state & GSC_PARAMS) {
+		gsc_hw_set_sw_reset(gsc);
+		ret = gsc_wait_reset(gsc);
+		if (ret < 0) {
+			gsc_err("gscaler s/w reset timeout");
+			goto put_device;
+		}
 		gsc_hw_set_input_buf_masking(gsc, GSC_M2M_BUF_NUM, false);
 		gsc_hw_set_output_buf_masking(gsc, GSC_M2M_BUF_NUM, false);
 		gsc_hw_set_frm_done_irq_mask(gsc, false);
 		gsc_hw_set_gsc_irq_enable(gsc, true);
+		gsc_hw_set_one_frm_mode(gsc, true);
+		gsc_hw_set_freerun_clock_mode(gsc, false);
 
 		if (gsc_set_scaler_info(ctx)) {
 			gsc_err("Scaler setup error");
@@ -159,12 +205,14 @@ static void gsc_m2m_device_run(void *priv)
 
 		gsc_hw_set_prescaler(ctx);
 		gsc_hw_set_mainscaler(ctx);
+		gsc_hw_set_h_coef(ctx);
+		gsc_hw_set_v_coef(ctx);
 		gsc_hw_set_rotation(ctx);
 		gsc_hw_set_global_alpha(ctx);
 	}
-	/* When you update SFRs in the middle of operating
-	gsc_hw_set_sfr_update(ctx);
-	*/
+
+	gsc_hw_set_input_addr(gsc, &ctx->s_frame.addr, GSC_M2M_BUF_NUM);
+	gsc_hw_set_output_addr(gsc, &ctx->d_frame.addr, GSC_M2M_BUF_NUM);
 
 	ctx->state &= ~GSC_PARAMS;
 
@@ -173,13 +221,18 @@ static void gsc_m2m_device_run(void *priv)
 		 GSCALER_ON on -> GSCALER_OP_STATUS is operating ->
 		 GSCALER_ON off */
 		gsc_hw_enable_control(gsc, true);
+#ifdef GSC_PERF
+		gsc->start_time = sched_clock();
+#endif
 		ret = gsc_wait_operating(gsc);
 		if (ret < 0) {
 			gsc_err("gscaler wait operating timeout");
 			goto put_device;
 		}
-		gsc_hw_enable_control(gsc, false);
 	}
+
+	ctx->op_timer.expires = (jiffies + 2 * HZ);
+	add_timer(&ctx->op_timer);
 
 	spin_unlock_irqrestore(&ctx->slock, flags);
 	return;
@@ -190,9 +243,9 @@ put_device:
 	pm_runtime_put_sync(&gsc->pdev->dev);
 }
 
-static int gsc_m2m_queue_setup(struct vb2_queue *vq, unsigned int *num_buffers,
-			       unsigned int *num_planes, unsigned long sizes[],
-			       void *allocators[])
+static int gsc_m2m_queue_setup(struct vb2_queue *vq, const struct v4l2_format *fmt,
+				unsigned int *num_buffers, unsigned int *num_planes,
+				unsigned int sizes[], void *allocators[])
 {
 	struct gsc_ctx *ctx = vb2_get_drv_priv(vq);
 	struct gsc_frame *frame;
@@ -216,7 +269,6 @@ static int gsc_m2m_queue_setup(struct vb2_queue *vq, unsigned int *num_buffers,
 static int gsc_m2m_buf_prepare(struct vb2_buffer *vb)
 {
 	struct gsc_ctx *ctx = vb2_get_drv_priv(vb->vb2_queue);
-	struct gsc_dev *gsc = ctx->gsc_dev;
 	struct gsc_frame *frame;
 	int i;
 
@@ -229,25 +281,77 @@ static int gsc_m2m_buf_prepare(struct vb2_buffer *vb)
 			vb2_set_plane_payload(vb, i, frame->payload[i]);
 	}
 
-	if (frame->cacheable)
-		gsc->vb2->cache_flush(vb, frame->fmt->num_planes);
+	vb2_ion_buf_prepare(vb);
 
 	return 0;
+}
+
+static void gsc_m2m_fence_work(struct work_struct *work)
+{
+	struct gsc_ctx *ctx = container_of(work, struct gsc_ctx, fence_work);
+	struct v4l2_m2m_buffer *buffer;
+	struct sync_fence *fence;
+	unsigned long flags;
+	int ret;
+
+	spin_lock_irqsave(&ctx->slock, flags);
+
+	while (!list_empty(&ctx->fence_wait_list)) {
+		buffer = list_first_entry(&ctx->fence_wait_list,
+					  struct v4l2_m2m_buffer, wait);
+		list_del(&buffer->wait);
+		spin_unlock_irqrestore(&ctx->slock, flags);
+
+		fence = buffer->vb.acquire_fence;
+		if (fence) {
+			buffer->vb.acquire_fence = NULL;
+			ret = sync_fence_wait(fence, 1000);
+			if (ret == -ETIME) {
+				gsc_warn("sync_fence_wait() timeout");
+				ret = sync_fence_wait(fence, 10 * MSEC_PER_SEC);
+			}
+			if (ret)
+				gsc_warn("sync_fence_wait() error");
+			sync_fence_put(fence);
+		}
+
+		if (ctx->m2m_ctx) {
+			v4l2_m2m_buf_queue(ctx->m2m_ctx, &buffer->vb);
+			v4l2_m2m_try_schedule(ctx->m2m_ctx);
+		}
+
+		spin_lock_irqsave(&ctx->slock, flags);
+	}
+
+	spin_unlock_irqrestore(&ctx->slock, flags);
 }
 
 static void gsc_m2m_buf_queue(struct vb2_buffer *vb)
 {
 	struct gsc_ctx *ctx = vb2_get_drv_priv(vb->vb2_queue);
+	struct v4l2_m2m_buffer *b = container_of(vb, struct v4l2_m2m_buffer, vb);
+	unsigned long flags;
+	struct sync_fence *fence;
 
 	gsc_dbg("ctx: %p, ctx->state: 0x%x", ctx, ctx->state);
 
-	if (ctx->m2m_ctx)
-		v4l2_m2m_buf_queue(ctx->m2m_ctx, vb);
+	fence = vb->acquire_fence;
+	if (fence) {
+		spin_lock_irqsave(&ctx->slock, flags);
+		list_add_tail(&b->wait, &ctx->fence_wait_list);
+		spin_unlock_irqrestore(&ctx->slock, flags);
+
+		queue_work(ctx->gsc_dev->irq_workqueue, &ctx->fence_work);
+	} else {
+		if (ctx->m2m_ctx)
+			v4l2_m2m_buf_queue(ctx->m2m_ctx, vb);
+	}
 }
 
 struct vb2_ops gsc_m2m_qops = {
 	.queue_setup	 = gsc_m2m_queue_setup,
 	.buf_prepare	 = gsc_m2m_buf_prepare,
+	.buf_finish	 = vb2_ion_buf_finish,
 	.buf_queue	 = gsc_m2m_buf_queue,
 	.wait_prepare	 = gsc_unlock,
 	.wait_finish	 = gsc_lock,
@@ -356,6 +460,7 @@ static int gsc_m2m_reqbufs(struct file *file, void *fh,
 
 	max_cnt = (reqbufs->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE) ?
 		gsc->variant->in_buf_cnt : gsc->variant->out_buf_cnt;
+
 	if (reqbufs->count > max_cnt)
 		return -EINVAL;
 	else if (reqbufs->count == 0) {
@@ -364,6 +469,8 @@ static int gsc_m2m_reqbufs(struct file *file, void *fh,
 		else
 			gsc_ctx_state_lock_clear(GSC_DST_FMT, ctx);
 	}
+
+	gsc_set_protected_content(gsc, ctx->gsc_ctrls.drm_en->cur.val);
 
 	frame = ctx_get_frame(ctx, reqbufs->type);
 	frame->cacheable = ctx->gsc_ctrls.cacheable->val;
@@ -397,6 +504,7 @@ static int gsc_m2m_streamon(struct file *file, void *fh,
 			   enum v4l2_buf_type type)
 {
 	struct gsc_ctx *ctx = fh_to_ctx(fh);
+	struct gsc_dev *gsc = ctx->gsc_dev;
 
 	/* The source and target color format need to be set */
 	if (V4L2_TYPE_IS_OUTPUT(type)) {
@@ -406,6 +514,8 @@ static int gsc_m2m_streamon(struct file *file, void *fh,
 		return -EINVAL;
 	}
 
+	gsc_pm_qos_ctrl(gsc, GSC_QOS_ON, 160000, 160000);
+
 	return v4l2_m2m_streamon(file, ctx->m2m_ctx, type);
 }
 
@@ -413,6 +523,10 @@ static int gsc_m2m_streamoff(struct file *file, void *fh,
 			    enum v4l2_buf_type type)
 {
 	struct gsc_ctx *ctx = fh_to_ctx(fh);
+	struct gsc_dev *gsc = ctx->gsc_dev;
+
+	gsc_pm_qos_ctrl(gsc, GSC_QOS_OFF, 0, 0);
+
 	return v4l2_m2m_streamoff(file, ctx->m2m_ctx, type);
 }
 
@@ -522,8 +636,9 @@ static int queue_init(void *priv, struct vb2_queue *src_vq,
 	int ret;
 
 	memset(src_vq, 0, sizeof(*src_vq));
+	src_vq->name = kasprintf(GFP_KERNEL, "%s-src", dev_name(&ctx->gsc_dev->pdev->dev));
 	src_vq->type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
-	src_vq->io_modes = VB2_MMAP | VB2_USERPTR;
+	src_vq->io_modes = VB2_MMAP | VB2_USERPTR | VB2_DMABUF;
 	src_vq->drv_priv = ctx;
 	src_vq->ops = &gsc_m2m_qops;
 	src_vq->mem_ops = ctx->gsc_dev->vb2->ops;
@@ -534,8 +649,9 @@ static int queue_init(void *priv, struct vb2_queue *src_vq,
 		return ret;
 
 	memset(dst_vq, 0, sizeof(*dst_vq));
+	dst_vq->name = kasprintf(GFP_KERNEL, "%s-dst", dev_name(&ctx->gsc_dev->pdev->dev));
 	dst_vq->type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-	dst_vq->io_modes = VB2_MMAP | VB2_USERPTR;
+	dst_vq->io_modes = VB2_MMAP | VB2_USERPTR | VB2_DMABUF;
 	dst_vq->drv_priv = ctx;
 	dst_vq->ops = &gsc_m2m_qops;
 	dst_vq->mem_ops = ctx->gsc_dev->vb2->ops;
@@ -580,6 +696,13 @@ static int gsc_m2m_open(struct file *file)
 	ctx->out_path = GSC_DMA;
 	spin_lock_init(&ctx->slock);
 
+	init_timer(&ctx->op_timer);
+	ctx->op_timer.data = (unsigned long)ctx;
+	ctx->op_timer.function = gsc_op_timer_handler;
+
+	INIT_LIST_HEAD(&ctx->fence_wait_list);
+	INIT_WORK(&ctx->fence_work, gsc_m2m_fence_work);
+
 	ctx->m2m_ctx = v4l2_m2m_ctx_init(gsc->m2m.m2m_dev, ctx, queue_init);
 	if (IS_ERR(ctx->m2m_ctx)) {
 		gsc_err("Failed to initialize m2m context");
@@ -608,6 +731,14 @@ static int gsc_m2m_release(struct file *file)
 	gsc_dbg("pid: %d, state: 0x%lx, refcnt= %d",
 		task_pid_nr(current), gsc->state, gsc->m2m.refcnt);
 
+	/* if we didn't properly sequence with the secure side to turn off
+	 * content protection, we may be left in a very bad state and the
+	 * only way to recover this reliably is to reboot.
+	 */
+	BUG_ON(gsc->protected_content);
+
+	kfree(ctx->m2m_ctx->cap_q_ctx.q.name);
+	kfree(ctx->m2m_ctx->out_q_ctx.q.name);
 	v4l2_m2m_ctx_release(ctx->m2m_ctx);
 	gsc_ctrls_delete(ctx);
 	v4l2_fh_del(&ctx->fh);

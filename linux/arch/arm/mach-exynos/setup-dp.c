@@ -1,6 +1,6 @@
 /* linux/arch/arm/mach-exynos/setup-dp.c
  *
- * Copyright (c) 2011 Samsung Electronics Co., Ltd.
+ * Copyright (c) 2012 Samsung Electronics Co., Ltd.
  *	http://www.samsung.com/
  *
  * Base Samsung Exynos DP configuration
@@ -17,16 +17,16 @@ void s5p_dp_phy_init(void)
 {
 	u32 reg;
 
-	reg = __raw_readl(S5P_DPTX_PHY_CONTROL);
-	reg |= S5P_DPTX_PHY_ENABLE;
-	__raw_writel(reg, S5P_DPTX_PHY_CONTROL);
+	reg = __raw_readl(EXYNOS5250_DPTX_PHY_CONTROL);
+	reg |= EXYNOS5250_DPTX_PHY_ENABLE;
+	__raw_writel(reg, EXYNOS5250_DPTX_PHY_CONTROL);
 }
 
 void s5p_dp_phy_exit(void)
 {
 	u32 reg;
 
-	reg = __raw_readl(S5P_DPTX_PHY_CONTROL);
-	reg &= ~S5P_DPTX_PHY_ENABLE;
-	__raw_writel(reg, S5P_DPTX_PHY_CONTROL);
+	reg = __raw_readl(EXYNOS5250_DPTX_PHY_CONTROL);
+	reg &= ~EXYNOS5250_DPTX_PHY_ENABLE;
+	__raw_writel(reg, EXYNOS5250_DPTX_PHY_CONTROL);
 }

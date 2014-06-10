@@ -32,7 +32,7 @@
 #include <linux/sht15.h>
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
-#include <asm/atomic.h>
+#include <linux/atomic.h>
 
 /* Commands */
 #define SHT15_MEASURE_TEMP		0x03
@@ -671,7 +671,7 @@ static ssize_t sht15_show_status(struct device *dev,
  * @buf:	sysfs buffer to read the new heater state from.
  * @count:	length of the data.
  *
- * Will be called on read access to heater_enable sysfs attribute.
+ * Will be called on write access to heater_enable sysfs attribute.
  * Returns number of bytes actually decoded, negative errno on error.
  */
 static ssize_t sht15_store_heater(struct device *dev,
@@ -683,7 +683,7 @@ static ssize_t sht15_store_heater(struct device *dev,
 	long value;
 	u8 status;
 
-	if (strict_strtol(buf, 10, &value))
+	if (kstrtol(buf, 10, &value))
 		return -EINVAL;
 
 	mutex_lock(&data->read_lock);
@@ -806,7 +806,7 @@ static void sht15_bh_read_data(struct work_struct *work_s)
 		 */
 		atomic_set(&data->interrupt_handled, 0);
 		enable_irq(gpio_to_irq(data->pdata->gpio_data));
-		/* If still not occurred or another handler has been scheduled */
+		/* If still not occurred or another handler was scheduled */
 		if (gpio_get_value(data->pdata->gpio_data)
 		    || atomic_read(&data->interrupt_handled))
 			return;

@@ -435,7 +435,7 @@ int usb_sg_init(struct usb_sg_request *io, struct usb_device *dev,
 
 			len = sg->length;
 			if (length) {
-				len = min_t(unsigned, len, length);
+				len = min_t(size_t, len, length);
 				length -= len;
 				if (length == 0)
 					io->entries = i + 1;
@@ -1869,9 +1869,9 @@ free_interfaces:
 			continue;
 		}
 #ifdef CONFIG_HOST_COMPLIANT_TEST
-		if (usb_get_intfdata(intf) == NULL ) {
-		       dev_info( &intf->dev, "%s : Not match interface - driver detect fail\n",__func__);
-		}
+		if (usb_get_intfdata(intf) == NULL)
+			dev_info(&intf->dev, "%s : match interface failed\n",
+					__func__);
 #endif
 		create_intf_ep_devs(intf);
 	}

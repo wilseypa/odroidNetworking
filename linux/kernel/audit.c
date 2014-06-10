@@ -43,9 +43,9 @@
 
 #include <linux/init.h>
 #include <asm/types.h>
-#include <asm/atomic.h>
+#include <linux/atomic.h>
 #include <linux/mm.h>
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/slab.h>
 #include <linux/err.h>
 #include <linux/kthread.h>
@@ -55,6 +55,9 @@
 #include <net/sock.h>
 #include <net/netlink.h>
 #include <linux/skbuff.h>
+#ifdef CONFIG_SECURITY
+#include <linux/security.h>
+#endif
 #include <linux/netlink.h>
 #include <linux/freezer.h>
 #include <linux/tty.h>
@@ -598,13 +601,13 @@ static int audit_netlink_ok(struct sk_buff *skb, u16 msg_type)
 	case AUDIT_TTY_SET:
 	case AUDIT_TRIM:
 	case AUDIT_MAKE_EQUIV:
-		if (security_netlink_recv(skb, CAP_AUDIT_CONTROL))
+		if (!capable(CAP_AUDIT_CONTROL))
 			err = -EPERM;
 		break;
 	case AUDIT_USER:
 	case AUDIT_FIRST_USER_MSG ... AUDIT_LAST_USER_MSG:
 	case AUDIT_FIRST_USER_MSG2 ... AUDIT_LAST_USER_MSG2:
-		if (security_netlink_recv(skb, CAP_AUDIT_WRITE))
+		if (!capable(CAP_AUDIT_WRITE))
 			err = -EPERM;
 		break;
 	default:  /* bad msg */
@@ -622,13 +625,13 @@ static int audit_log_common_recv_msg(struct audit_buffer **ab, u16 msg_type,
 	char *ctx = NULL;
 	u32 len;
 
-	if (!audit_enabled) {
+	if (!audit_enabled && msg_type != AUDIT_USER_AVC) {
 		*ab = NULL;
 		return rc;
 	}
 
 	*ab = audit_log_start(NULL, GFP_KERNEL, msg_type);
-	audit_log_format(*ab, "user pid=%d uid=%u auid=%u ses=%u",
+	audit_log_format(*ab, "pid=%d uid=%u auid=%u ses=%u",
 			 pid, uid, auid, ses);
 	if (sid) {
 		rc = security_secid_to_secctx(sid, &ctx, &len);
@@ -681,6 +684,7 @@ static int audit_receive_msg(struct sk_buff *skb, struct nlmsghdr *nlh)
 
 	switch (msg_type) {
 	case AUDIT_GET:
+		status_set.mask		 = 0;
 		status_set.enabled	 = audit_enabled;
 		status_set.failure	 = audit_failure;
 		status_set.pid		 = audit_pid;
@@ -692,7 +696,7 @@ static int audit_receive_msg(struct sk_buff *skb, struct nlmsghdr *nlh)
 				 &status_set, sizeof(status_set));
 		break;
 	case AUDIT_SET:
-		if (nlh->nlmsg_len < sizeof(struct audit_status))
+		if (nlmsg_len(nlh) < sizeof(struct audit_status))
 			return -EINVAL;
 		status_get   = (struct audit_status *)data;
 		if (status_get->mask & AUDIT_STATUS_ENABLED) {
@@ -1257,12 +1261,13 @@ static void audit_log_vformat(struct audit_buffer *ab, const char *fmt,
 		avail = audit_expand(ab,
 			max_t(unsigned, AUDIT_BUFSIZ, 1+len-avail));
 		if (!avail)
-			goto out;
+			goto out_va_end;
 		len = vsnprintf(skb_tail_pointer(skb), avail, fmt, args2);
 	}
-	va_end(args2);
 	if (len > 0)
 		skb_put(skb, len);
+out_va_end:
+	va_end(args2);
 out:
 	return;
 }
@@ -1414,12 +1419,12 @@ void audit_log_untrustedstring(struct audit_buffer *ab, const char *string)
 
 /* This is a helper-function to print the escaped d_path */
 void audit_log_d_path(struct audit_buffer *ab, const char *prefix,
-		      struct path *path)
+		      const struct path *path)
 {
 	char *p, *pathname;
 
 	if (prefix)
-		audit_log_format(ab, " %s", prefix);
+		audit_log_format(ab, "%s", prefix);
 
 	/* We will allow 11 spaces for ' (deleted)' to be appended */
 	pathname = kmalloc(PATH_MAX+11, ab->gfp_mask);
@@ -1501,6 +1506,32 @@ void audit_log(struct audit_context *ctx, gfp_t gfp_mask, int type,
 		audit_log_end(ab);
 	}
 }
+
+#ifdef CONFIG_SECURITY
+/**
+ * audit_log_secctx - Converts and logs SELinux context
+ * @ab: audit_buffer
+ * @secid: security number
+ *
+ * This is a helper function that calls security_secid_to_secctx to convert
+ * secid to secctx and then adds the (converted) SELinux context to the audit
+ * log by calling audit_log_format, thus also preventing leak of internal secid
+ * to userspace. If secid cannot be converted audit_panic is called.
+ */
+void audit_log_secctx(struct audit_buffer *ab, u32 secid)
+{
+	u32 len;
+	char *secctx;
+
+	if (security_secid_to_secctx(secid, &secctx, &len)) {
+		audit_panic("Cannot convert secid to context");
+	} else {
+		audit_log_format(ab, " obj=%s", secctx);
+		security_release_secctx(secctx, len);
+	}
+}
+EXPORT_SYMBOL(audit_log_secctx);
+#endif
 
 EXPORT_SYMBOL(audit_log_start);
 EXPORT_SYMBOL(audit_log_end);

@@ -1,5 +1,7 @@
-config SND_SAMSUNG_ALP
-	bool "ALP Audio support"
-	select SND_SOC_SAMSUNG_I2S_IDMA
+config SND_SAMSUNG_RP_DEBUG
+	bool "Enable debug message for ALP Audio"
+	depends on SND_SAMSUNG_ALP
+	default y
 	help
-	  Say Y if you want to support ALP audio.
+	  Say Y if you want to add debug message for ALP Audio.
+

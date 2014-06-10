@@ -69,20 +69,20 @@ static const struct mxr_format mxr_fb_fmt_argb8888 = {
 	.cookie = 7,
 };
 
-#ifdef CONFIG_VIDEO_EXYNOS_24_FORCE
-static const struct mxr_format *mxr_graph_format[] = {
-        &mxr_fb_fmt_argb8888,
-	&mxr_fb_fmt_rgb565,
-	&mxr_fb_fmt_argb1555,
-	&mxr_fb_fmt_argb4444,
-};
+#if !defined(CONFIG_ANDROID_PARANOID_NETWORK)
+    static const struct mxr_format *mxr_graph_format[] = {
+    	&mxr_fb_fmt_argb8888,
+    	&mxr_fb_fmt_rgb565,
+    	&mxr_fb_fmt_argb1555,
+    	&mxr_fb_fmt_argb4444,
+    };
 #else
-static const struct mxr_format *mxr_graph_format[] = {
-        &mxr_fb_fmt_rgb565,  
-        &mxr_fb_fmt_argb1555,
-        &mxr_fb_fmt_argb4444,
-        &mxr_fb_fmt_argb8888,
-};
+    static const struct mxr_format *mxr_graph_format[] = {
+    	&mxr_fb_fmt_rgb565,
+    	&mxr_fb_fmt_argb1555,
+    	&mxr_fb_fmt_argb4444,
+    	&mxr_fb_fmt_argb8888,
+    };
 #endif
 
 /* AUXILIARY CALLBACKS */
@@ -109,10 +109,11 @@ static void mxr_graph_stream_set(struct mxr_layer *layer, int en)
 	mxr_reg_graph_layer_stream(layer->mdev, layer->idx, en);
 }
 
-static void mxr_graph_format_set(struct mxr_layer *layer)
+static void mxr_graph_format_set(struct mxr_layer *layer,
+				 const struct mxr_format *fmt,
+				 struct mxr_geometry *geo)
 {
-	mxr_reg_graph_format(layer->mdev, layer->idx,
-			layer->fmt, &layer->geo);
+	mxr_reg_graph_format(layer->mdev, layer->idx, fmt, geo);
 }
 
 static void mxr_graph_fix_geometry(struct mxr_layer *layer)
