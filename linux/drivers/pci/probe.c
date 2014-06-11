@@ -12,6 +12,8 @@
 #include <linux/pci-aspm.h>
 #include "pci.h"
 
+#define pcibios_assign_all_busses() 1
+
 #define CARDBUS_LATENCY_TIMER	176	/* secondary latency timer */
 #define CARDBUS_RESERVE_BUSNR	3
 
