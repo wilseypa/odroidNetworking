@@ -35,6 +35,7 @@
 #include <linux/netdevice.h>
 #include <linux/if.h>
 #include <linux/if_vlan.h>
+#include <linux/module.h>
 #include <net/sch_generic.h>
 #include <linux/netfilter.h>
 #include <rdma/ib_addr.h>

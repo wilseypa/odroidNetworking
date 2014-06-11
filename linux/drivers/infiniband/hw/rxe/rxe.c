@@ -34,6 +34,8 @@
 #include "rxe.h"
 #include "rxe_loc.h"
 
+#include <linux/module.h>
+
 MODULE_AUTHOR("Bob Pearson, Frank Zago, John Groves");
 MODULE_DESCRIPTION("Soft RDMA transport");
 MODULE_LICENSE("Dual BSD/GPL");
