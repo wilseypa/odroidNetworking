@@ -12,6 +12,81 @@
 #ifndef __EXYNOS_SS_UDC_H__
 #define __EXYNOS_SS_UDC_H__
 
+#include <linux/module.h>
+#include <linux/kernel.h>
+#include <linux/slab.h>
+#include <linux/interrupt.h>
+#include <linux/platform_device.h>
+#include <linux/dma-mapping.h>
+#include <linux/module.h>
+#include <linux/clk.h>
+#include <linux/pm_runtime.h>
+#include <linux/io.h>
+#include <linux/spinlock.h>
+#include <linux/usb/exynos_usb3_drd.h>
+#include <linux/platform_data/dwc3-exynos.h>
+
+struct exynos_drd {
+	struct exynos_drd_core	core;
+	struct platform_device	*udc;
+	struct platform_device	*xhci;
+	struct platform_device	*active_child;
+	struct device		*dev;
+	struct dwc3_exynos_data	*pdata;
+
+	spinlock_t		lock;
+
+	struct clk		*clk;
+	struct resource		*res;
+	int			irq;
+
+	struct resource		glob_res;
+	void __iomem            *regs;
+};
+
+struct exynos_drd_core *exynos_drd_bind(struct platform_device *child)
+{
+	struct device *dev = child->dev.parent;
+	struct platform_device *pdev = to_platform_device(dev);
+	struct exynos_drd *drd = platform_get_drvdata(pdev);
+
+	return &drd->core;
+}
+
+int exynos_drd_try_get(struct platform_device *child)
+{
+	struct device *dev = child->dev.parent;
+	struct platform_device *pdev = to_platform_device(dev);
+	struct exynos_drd *drd = platform_get_drvdata(pdev);
+	int ret = 0;
+
+	spin_lock(&drd->lock);
+	if (!drd->active_child)
+		drd->active_child = child;
+	else
+		ret = -EBUSY;
+	spin_unlock(&drd->lock);
+
+	dev_dbg(dev, "DRD %s %s\n",
+		ret < 0 ? "busy for" : "acquired by", dev_name(&child->dev));
+
+	return ret;
+}
+
+void exynos_drd_put(struct platform_device *child)
+{
+	struct device *dev = child->dev.parent;
+	struct platform_device *pdev = to_platform_device(dev);
+	struct exynos_drd *drd = platform_get_drvdata(pdev);
+
+	spin_lock(&drd->lock);
+	drd->active_child = NULL;
+	spin_unlock(&drd->lock);
+
+	dev_dbg(dev, "DRD released by %s\n", dev_name(&child->dev));
+}
+
+
 #define DMA_ADDR_INVALID (~((dma_addr_t)0))
 
 /* Maximum packet size for different speeds */
