@@ -1693,13 +1693,13 @@ void xhci_urb_free_priv(struct xhci_hcd *xhci, struct urb_priv *urb_priv);
 void xhci_free_command(struct xhci_hcd *xhci,
 		struct xhci_command *command);
 
-#ifdef CONFIG_USB_XHCI_EXYNOS
-int xhci_register_exynos(void);
-void xhci_unregister_exynos(void);
-#elif defined(CONFIG_PCI)
+#ifdef CONFIG_PCI
 /* xHCI PCI glue */
 int xhci_register_pci(void);
 void xhci_unregister_pci(void);
+#elif defined(CONFIG_USB_XHCI_EXYNOS)
+int xhci_register_exynos(void);
+void xhci_unregister_exynos(void);
 #else
 static inline int xhci_register_pci(void) { return 0; }
 static inline void xhci_unregister_pci(void) {}
