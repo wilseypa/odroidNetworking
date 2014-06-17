@@ -114,6 +114,16 @@ static inline uint64_t ntohll(uint64_t x) { return x; }
 #define rmb()	 mb()
 #define wmb()	 mb()
 #define wc_wmb() wmb()
+#elif defined(__arm__)
+
+/* For now we are not using CONFIG_OUTER_CACHE_SYNC so the following definition is possible: */
+static inline void outer_sync(void) {}
+
+#define dsb() asm volatile("dsb" ::: "memory")
+#define mb() do { dsb(); outer_sync(); } while (0)
+#define rmb() dsb()
+#define dsb_st() asm volatile("dsb st" ::: "memory")
+#define wmb() do { dsb_st(); outer_sync(); } while (0)
 
 #else
 
