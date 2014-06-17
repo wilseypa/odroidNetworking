@@ -1915,6 +1915,7 @@ ssize_t ib_uverbs_post_send(struct ib_uverbs_file *file,
 			    const char __user *buf, int in_len,
 			    int out_len)
 {
+  pr_warn("In ib_uverbs_post_send");
 	struct ib_uverbs_post_send      cmd;
 	struct ib_uverbs_post_send_resp resp;
 	struct ib_uverbs_send_wr       *user_wr;
@@ -1926,6 +1927,16 @@ ssize_t ib_uverbs_post_send(struct ib_uverbs_file *file,
 
 	if (copy_from_user(&cmd, buf, sizeof cmd))
 		return -EFAULT;
+
+        pr_warn("cmd.wqe_size == %u", cmd.wqe_size);
+        pr_warn("cmd.wr_count == %u", cmd.wr_count);
+        pr_warn("cmd.sge_count == %u", cmd.sge_count);
+        pr_warn("cmd.qp_handle == %u", cmd.qp_handle);
+
+        if ( !cmd.wr_count ) {
+          pr_warn("Discarding command because it contains zero work requests");
+          goto out;
+        }
 
 	if (in_len < sizeof cmd + cmd.wqe_size * cmd.wr_count +
 	    cmd.sge_count * sizeof (struct ib_uverbs_sge))
@@ -1977,6 +1988,11 @@ ssize_t ib_uverbs_post_send(struct ib_uverbs_file *file,
 		next->num_sge    = user_wr->num_sge;
 		next->opcode     = user_wr->opcode;
 		next->send_flags = user_wr->send_flags;
+
+                pr_warn("next->wr_id == %d", next->wr_id);
+                pr_warn("next->num_sge == %d", next->num_sge);
+                pr_warn("next->opcode == %d", next->opcode);
+                pr_warn("next->send_flags == %d", next->send_flags);
 
 		if (is_ud) {
 			next->wr.ud.ah = idr_read_ah(user_wr->wr.ud.ah,

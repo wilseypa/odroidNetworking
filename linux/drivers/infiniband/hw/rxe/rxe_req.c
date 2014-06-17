@@ -125,6 +125,7 @@ void rnr_nak_timer(unsigned long data)
 
 static struct rxe_send_wqe *req_next_wqe(struct rxe_qp *qp)
 {
+  pr_warn("In req_next_wqe");
 	struct rxe_send_wqe *wqe = queue_head(qp->sq.queue);
 
 	if (unlikely(qp->req.state == QP_STATE_DRAIN)) {
@@ -694,6 +695,7 @@ int rxe_requester(void *arg)
 	if (fill_packet(qp, wqe, pkt, payload)) {
 		wqe->status = IB_WC_LOC_PROT_ERR;
 		wqe->state = wqe_state_error;
+                dump_stack();
 		rxe_completer(qp);
                 goto done;
 	}
