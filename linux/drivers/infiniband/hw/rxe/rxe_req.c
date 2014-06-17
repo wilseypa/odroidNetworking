@@ -513,6 +513,8 @@ static int fill_packet(struct rxe_qp *qp, struct rxe_send_wqe *wqe,
 	u32 crc = 0;
 	u8 *p;
 
+        pr_warn("In fill_packet");
+
 	if (!rxe_crc_disable)
 		crc = rxe_icrc_hdr(pkt);
 
@@ -528,6 +530,11 @@ static int fill_packet(struct rxe_qp *qp, struct rxe_send_wqe *wqe,
 			wqe->dma.resid -= payload;
 			wqe->dma.sge_offset += payload;
 		} else {
+                  pr_warn("qp == %p", qp);
+                  pr_warn("pd == %p", qp->pd);
+                  pr_warn("pkt == %p", pkt);
+                  pr_warn("payload_addr(pkt) == %p", payload_addr(pkt));
+                  pr_warn("payload == %d", payload);
 			if (copy_data(rxe, qp->pd, 0, &wqe->dma,
 				      payload_addr(pkt), payload,
 				      direction_out, !rxe_crc_disable ?

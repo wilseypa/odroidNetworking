@@ -574,6 +574,8 @@ int copy_data(
 		goto err2;
 	}
 
+        pr_warn("sge->length == %d", sge->length);
+
 	if (sge->length && (offset < sge->length)) {
 		mem = lookup_mem(pd, access, sge->lkey, lookup_local);
 		if (!mem) {
@@ -583,25 +585,36 @@ int copy_data(
 	}
 
 	while (length > 0) {
+          pr_warn("length == %d", length);
 		bytes = length;
 
 		if (offset >= sge->length) {
+                  pr_warn("mem == %p", mem);
 			if (mem) {
 				rxe_drop_ref(mem);
 				mem = NULL;
 			}
+                        pr_warn("dma == %p", dma);
 			sge++;
 			dma->cur_sge++;
 			offset = 0;
 
+                        pr_warn("dma->cur_sge == %d", dma->cur_sge);
+                        pr_warn("&dma->num_sge == %p", &dma->num_sge);
+                        pr_warn("dma->num_sge == %d", dma->num_sge);
+
 			if (dma->cur_sge >= dma->num_sge) {
+                          pr_warn("an error");
 				err = -ENOSPC;
 				goto err2;
 			}
 
+                        pr_warn("sge == %p", sge);
+
 			if (sge->length) {
 				mem = lookup_mem(pd, access, sge->lkey,
 						 lookup_local);
+                                pr_warn("lookup mem result == %p", mem);
 				if (!mem) {
 					err = -EINVAL;
 					goto err1;
@@ -615,6 +628,7 @@ int copy_data(
 
 		if (bytes > 0) {
 			iova = sge->addr + offset;
+                        pr_warn("iova == %llu", iova);
 
 			err = rxe_mem_copy(mem, iova, addr, bytes, dir, crcp);
 			if (err)
@@ -686,6 +700,8 @@ struct rxe_mem *lookup_mem(struct rxe_pd *pd, int access, u32 key,
 	struct rxe_mem *mem;
 	struct rxe_dev *rxe = to_rdev(pd->ibpd.device);
 	int index = key >> 8;
+
+        pr_warn("key == %u", key);
 
 	if (index >= RXE_MIN_MR_INDEX && index <= RXE_MAX_MR_INDEX) {
 		mem = rxe_pool_get_index(&rxe->mr_pool, index);
