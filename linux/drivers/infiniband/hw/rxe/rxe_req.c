@@ -694,7 +694,8 @@ int rxe_requester(void *arg)
 	if (fill_packet(qp, wqe, pkt, payload)) {
 		wqe->status = IB_WC_LOC_PROT_ERR;
 		wqe->state = wqe_state_error;
-		goto complete;
+		rxe_completer(qp);
+                goto done;
 	}
 
 	update_state(qp, wqe, pkt, payload);
