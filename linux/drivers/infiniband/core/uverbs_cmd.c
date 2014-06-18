@@ -1915,7 +1915,6 @@ ssize_t ib_uverbs_post_send(struct ib_uverbs_file *file,
 			    const char __user *buf, int in_len,
 			    int out_len)
 {
-  pr_warn("In ib_uverbs_post_send");
 	struct ib_uverbs_post_send      cmd;
 	struct ib_uverbs_post_send_resp resp;
 	struct ib_uverbs_send_wr       *user_wr;
@@ -1924,6 +1923,12 @@ ssize_t ib_uverbs_post_send(struct ib_uverbs_file *file,
 	int                             i, sg_ind;
 	int				is_ud;
 	ssize_t                         ret = -EINVAL;
+
+        pr_warn("In ib_uverbs_post_send");
+
+        pr_warn("buf == %p", buf);
+        pr_warn("*(int*)(buf+0x80) == %d", *(int*)(buf+0x80));
+        pr_warn("sizeof(cmd) == %xh\n", sizeof cmd);
 
 	if (copy_from_user(&cmd, buf, sizeof cmd))
 		return -EFAULT;
@@ -1990,7 +1995,7 @@ ssize_t ib_uverbs_post_send(struct ib_uverbs_file *file,
 		next->opcode     = user_wr->opcode;
 		next->send_flags = user_wr->send_flags;
 
-                pr_warn("next->wr_id == %d", next->wr_id);
+                pr_warn("next->wr_id == %llu", next->wr_id);
                 pr_warn("next->num_sge == %d", next->num_sge);
                 pr_warn("next->opcode == %d", next->opcode);
                 pr_warn("next->send_flags == %d", next->send_flags);

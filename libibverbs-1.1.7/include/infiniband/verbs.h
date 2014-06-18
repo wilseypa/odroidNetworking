@@ -1042,10 +1042,13 @@ int ibv_destroy_qp(struct ibv_qp *qp);
 static inline int ibv_post_send(struct ibv_qp *qp, struct ibv_send_wr *wr,
 				struct ibv_send_wr **bad_wr)
 {
-  printf("wr->wr_id == %llu", wr->wr_id);
-  printf("wr->num_sge == %d", wr->num_sge);
-  printf("wr->opcode == %xh", wr->opcode);
-  printf("wr->send_flags == %xh", wr->send_flags);
+  printf("wr->wr_id == %llu\n", wr->wr_id);
+  printf("wr->num_sge == %d\n", wr->num_sge);
+  printf("wr->opcode == %xh\n", wr->opcode);
+  printf("wr->send_flags == %xh\n", wr->send_flags);
+  printf("&wr->num_sge == %p\n", &wr->num_sge);
+  printf("&wr->opcode == %p\n", &wr->opcode);
+  printf("sizeof(struct ibv_send_wr) == %xh\n", sizeof(struct ibv_send_wr));
 	return qp->context->ops.post_send(qp, wr, bad_wr);
 }
 

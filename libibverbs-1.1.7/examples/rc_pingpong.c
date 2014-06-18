@@ -512,6 +512,8 @@ static int pp_post_send(struct pingpong_context *ctx)
 	};
 	struct ibv_send_wr *bad_wr;
 
+        printf("&wr == %p\n", &wr);
+
 	return ibv_post_send(ctx->qp, &wr, &bad_wr);
 }
 
