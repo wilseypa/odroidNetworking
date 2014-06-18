@@ -1935,6 +1935,7 @@ ssize_t ib_uverbs_post_send(struct ib_uverbs_file *file,
 
         if ( !cmd.wr_count ) {
           pr_warn("Discarding command because it contains zero work requests");
+          dump_stack();
           goto out;
         }
 
