@@ -1930,7 +1930,7 @@ ssize_t ib_uverbs_post_send(struct ib_uverbs_file *file,
         pr_warn("*(int*)(buf+0x80) == %d", *(int*)(buf+0x80));
         pr_warn("sizeof(cmd) == %xh\n", sizeof cmd);
 
-	if (copy_from_user(&cmd, buf, sizeof cmd))
+	if (copy_from_user(&cmd, buf+0x70, sizeof cmd))
 		return -EFAULT;
 
         pr_warn("cmd.wqe_size == %u", cmd.wqe_size);
