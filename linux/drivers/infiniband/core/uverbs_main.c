@@ -569,6 +569,12 @@ static ssize_t ib_uverbs_write(struct file *filp, const char __user *buf,
 	struct ib_uverbs_file *file = filp->private_data;
 	struct ib_uverbs_cmd_hdr hdr;
 
+        pr_warn("In ib_uverbs_write\n");
+        pr_warn("buf == %p", buf);
+        pr_warn("sizeof(hdr) == %xh", sizeof hdr);
+        pr_warn("sizeof(ib_uverbs_cmd_hdr) == %xh", sizeof (struct ib_uverbs_cmd_hdr));
+        pr_warn("count == %xh", count);
+
 	if (count < sizeof hdr)
 		return -EINVAL;
 
@@ -588,6 +594,40 @@ static ssize_t ib_uverbs_write(struct file *filp, const char __user *buf,
 
 	if (!(file->device->ib_dev->uverbs_cmd_mask & (1ull << hdr.command)))
 		return -ENOSYS;
+
+        pr_warn("hdr.command == %xh", hdr.command);
+        pr_warn("hdr.in_words == %xh", hdr.in_words);
+        pr_warn("hdr.out_words == %xh", hdr.out_words);
+        
+        if ( hdr.command == 0x1c ) {
+          __u64 response;
+          __u32 qp_handle;
+          __u32 wr_count;
+          __u32 sge_count;
+          __u32 wqe_size;
+          __u64 wr_id;
+          __u32 num_sge;
+          __u32 opcode;
+          __u32 send_flags;
+          response = *(__u64*)(buf + 0x8);
+          pr_warn("response == %llu", response);
+          qp_handle = *(__u32*)(buf + 0x10);
+          pr_warn("qp_handle == %u", qp_handle);
+          wr_count = *(__u32*)(buf + 0x14);
+          pr_warn("wr_count == %u", wr_count);
+          sge_count = *(__u32*)(buf + 0x18);
+          pr_warn("sge_count == %u", sge_count);
+          wqe_size = *(__u32*)(buf + 0x1c);
+          pr_warn("wqe_size == %u", wqe_size);
+          wr_id = *(__u64*)(buf + 0x20);
+          pr_warn("wr_id == %llu", wr_id);
+          num_sge = *(__u32*)(buf + 0x28);
+          pr_warn("num_sge == %u", num_sge);
+          opcode = *(__u32*)(buf + 0x2c);
+          pr_warn("opcode == %u", opcode);
+          send_flags = *(__u32*)(buf + 0x30);
+          pr_warn("send_flags == %u", send_flags);
+        }
 
 	return uverbs_cmd_table[hdr.command](file, buf + sizeof hdr,
 					     hdr.in_words * 4, hdr.out_words * 4);
