@@ -162,6 +162,20 @@ struct rxe_send_wqe {
 	uint32_t		has_rd_atomic;
 	struct rxe_dma_info	dma;
 };
+
+#else
+
+#define RXE_LL_ADDR_LEN		(16)
+struct rxe_av {
+	struct ibv_ah_attr	attr;
+	uint8_t			ll_addr[RXE_LL_ADDR_LEN];
+};
+
+struct rxe_ah {
+	struct ibv_ah		ibv_ah;
+	struct rxe_av		av;
+};
+
 #endif
 
 struct rxe_wq {

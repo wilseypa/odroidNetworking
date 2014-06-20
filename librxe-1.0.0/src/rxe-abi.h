@@ -40,7 +40,7 @@
 
 #include <infiniband/kern-abi.h>
 
-#define RXE_USER_SEND_QUEUE		(1)
+/* #define RXE_USER_SEND_QUEUE		(1) */
 
 struct mmap_info {
 	__u64 offset;
