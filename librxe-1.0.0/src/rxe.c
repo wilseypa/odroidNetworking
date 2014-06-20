@@ -688,7 +688,7 @@ int post_send_db(struct ibv_qp *ibqp)
 	cmd.out_words	= sizeof(resp)/4;
 	cmd.response	= (uintptr_t)&resp;
 	cmd.qp_handle	= ibqp->handle;
-	cmd.wr_count	= 0;
+	cmd.wr_count	= 1;
 	cmd.sge_count	= 0;
 	cmd.wqe_size	= sizeof(struct ibv_send_wr);
 
@@ -734,8 +734,8 @@ static int rxe_post_send(struct ibv_qp *ibqp,
 
 	pthread_spin_unlock(&sq->lock);
 
-	/* err =  post_send_db(ibqp); */
-	return rc;
+	err =  post_send_db(ibqp);
+	return err ? err : rc;
 #else
 	return ibv_cmd_post_send(ibqp, wr_list, bad_wr);
 #endif
