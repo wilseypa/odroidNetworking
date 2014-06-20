@@ -688,7 +688,7 @@ int post_send_db(struct ibv_qp *ibqp)
 	cmd.out_words	= sizeof(resp)/4;
 	cmd.response	= (uintptr_t)&resp;
 	cmd.qp_handle	= ibqp->handle;
-	cmd.wr_count	= 1;
+	cmd.wr_count	= 0;
 	cmd.sge_count	= 0;
 	cmd.wqe_size	= sizeof(struct ibv_send_wr);
 
