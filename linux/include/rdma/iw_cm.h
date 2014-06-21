@@ -52,10 +52,8 @@ struct iw_cm_event {
 	struct sockaddr_in local_addr;
 	struct sockaddr_in remote_addr;
 	void *private_data;
-	void *provider_data;
 	u8 private_data_len;
-	u8 ord;
-	u8 ird;
+	void *provider_data;
 };
 
 /**
