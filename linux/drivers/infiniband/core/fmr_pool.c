@@ -31,6 +31,7 @@
  * SOFTWARE.
  */
 
+#include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/spinlock.h>
 #include <linux/slab.h>

@@ -33,6 +33,7 @@
  * SOFTWARE.
  */
 
+#include <linux/module.h>
 #include <linux/completion.h>
 #include <linux/in.h>
 #include <linux/in6.h>
@@ -1987,8 +1988,8 @@ static int cma_resolve_loopback(struct rdma_id_private *id_priv)
 			((struct sockaddr_in *) src)->sin_addr.s_addr =
 				((struct sockaddr_in *) dst)->sin_addr.s_addr;
 		} else {
-			ipv6_addr_copy(&((struct sockaddr_in6 *) src)->sin6_addr,
-				       &((struct sockaddr_in6 *) dst)->sin6_addr);
+			((struct sockaddr_in6 *) src)->sin6_addr =
+                          ((struct sockaddr_in6 *) dst)->sin6_addr;
 		}
 	}
 

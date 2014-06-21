@@ -33,6 +33,7 @@
  * SOFTWARE.
  *
  */
+#include <linux/module.h>
 #include <linux/dma-mapping.h>
 #include <linux/slab.h>
 #include <rdma/ib_cache.h>

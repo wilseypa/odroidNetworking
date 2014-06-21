@@ -36,6 +36,7 @@
  * SOFTWARE.
  */
 
+#include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/err.h>
 #include <linux/string.h>

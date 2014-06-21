@@ -33,6 +33,7 @@
  * SOFTWARE.
  */
 
+#include <linux/module.h>
 #include <linux/completion.h>
 #include <linux/dma-mapping.h>
 #include <linux/device.h>

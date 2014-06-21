@@ -35,6 +35,7 @@
 #ifndef SA_H
 #define SA_H
 
+#include <rdma/ib_pack.h>
 #include <rdma/ib_sa.h>
 
 static inline void ib_sa_client_get(struct ib_sa_client *client)

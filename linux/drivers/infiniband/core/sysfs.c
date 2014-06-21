@@ -34,6 +34,8 @@
 
 #include "core_priv.h"
 
+#include <linux/module.h>
+#include <linux/stat.h>
 #include <linux/slab.h>
 #include <linux/string.h>
 
