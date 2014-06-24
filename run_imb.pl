@@ -32,9 +32,9 @@ for my $btl (@btls) {
         my @numbers = split /\s+/;
         $group_sum_lat += $numbers[3];
         $group_sum_bw += $numbers[4];
-        if ( ++$group >= $group_max ) {
-          my $mean_lat = $group_sum_lat / $np;
-          my $mean_bw = $group_sum_bw / $np;
+        if ( $group++ >= $group_max ) {
+          my $mean_lat = $group_sum_lat / $np / 2;
+          my $mean_bw = $group_sum_bw / $np / 2;
           print OUT "$transport\t$np\t$numbers[1]\t$numbers[2]\t$mean_lat\t$mean_bw\n";
           $group_sum_lat = 0;
           $group_sum_bw = 0;
