@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 
 my $output_file = 'netpipe.dat';
-my @btls = ("tcp" , "openib");
+my @btls = ("openib");
 my $max_size = 2 ** 16;
 
 my $netpipe_path = "/root/NetPIPE-3.7.1/NPmpi";
@@ -9,7 +9,7 @@ my $netpipe_path = "/root/NetPIPE-3.7.1/NPmpi";
 open(OUT, ">$output_file") || die "Could not open $output_file\n";
 
 for my $btl (@btls) {
-  my $output = `mpirun -n 2 -host xu0,xu1 --mca btl $btl,self,sm $netpipe_path -u $max_size`;
+  my $output = `mpirun -n 2 -host xu0,xu2 --mca btl $btl,self,sm $netpipe_path -u $max_size`;
   my @lines = split("\n", $output);
   my @sizes;
   my @latencies;

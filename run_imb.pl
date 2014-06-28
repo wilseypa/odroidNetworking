@@ -2,7 +2,7 @@
 
 my $output_file = 'imb.dat';
 my @btls = ("tcp" , "openib");
-my @processes = (4, 8, 12, 16);
+my @processes = (2, 4, 6, 8);
 my $imb_path = "/root/imb/3.2.4/src/IMB-MPI1";
 my $msglog = 16;
 
@@ -25,7 +25,7 @@ for my $btl (@btls) {
     $transport = "RoCE";
   }
   for my $np (@processes) {
-    my $output = `mpirun -n $np -host xu0,xu1,xu2,xu3 --mca btl $btl,self,sm $imb_path -msglog $msglog -multi 1 pingpong`;
+    my $output = `mpirun -n $np -host xu0,xu3 --mca btl $btl,self,sm $imb_path -msglog $msglog -multi 1 pingpong`;
     my @lines = split("\n", $output);
     my $group = 0;
     my $group_max = $np/2-1;
