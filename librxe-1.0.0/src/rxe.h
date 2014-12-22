@@ -95,45 +95,62 @@ struct rxe_recv_wqe {
 	struct rxe_dma_info	dma;
 };
 
-#ifdef RXE_USER_SEND_QUEUE
+struct ib_mw_bind_info {
+    struct ib_mr   *mr;
+    uint64_t             addr;
+    uint64_t             length;
+    int             mw_access_flags;
+};
 
 /* kernel send wr */
 struct ib_send_wr {
-	struct ib_send_wr      *next;
-	uint64_t		wr_id;
-	struct ib_sge	       *sg_list;
-	int			num_sge;
-	unsigned int		opcode;
-	int			send_flags;
-	uint32_t		imm_data;
-
-	union {
-		struct {
-			uint64_t	remote_addr;
-			uint32_t	rkey;
-		} rdma;
-		struct {
-			uint64_t	remote_addr;
-			uint64_t	compare_add;
-			uint64_t	swap;
-			uint64_t	compare_add_mask;
-			uint64_t	swap_mask;
-			uint32_t	rkey;
-		} atomic;
-		struct {
-			struct ib_ah	*ah;
-			void		*header;
-			int		hlen;
-			int		mss;
-			uint32_t	remote_qpn;
-			uint32_t	remote_qkey;
-			uint16_t	pkey_index; /* valid for GSI only */
-			uint8_t		port_num;   /* valid for DR SMPs on switch only */
-		} ud;
-	} wr;
-#if 0
-	uint32_t			xrc_remote_srq_num; /* valid for XRC sends only */
-#endif
+    struct ib_send_wr      *next;
+    uint64_t                     wr_id;
+    struct ib_sge          *sg_list;
+    int                     num_sge;
+    unsigned int           opcode;
+    int                     send_flags;
+    uint32_t             imm_data;
+    union {
+        struct {
+            uint64_t     remote_addr;
+            uint32_t     rkey;
+        } rdma;
+        struct {
+            uint64_t     remote_addr;
+            uint64_t     compare_add;
+            uint64_t     swap;
+            uint64_t     compare_add_mask;
+            uint64_t     swap_mask;
+            uint32_t     rkey;
+        } atomic;
+        struct {
+            struct ib_ah *ah;
+            void   *header;
+            int     hlen;
+            int     mss;
+            uint32_t     remote_qpn;
+            uint32_t     remote_qkey;
+            uint16_t     pkey_index; /* valid for GSI only */
+            uint8_t      port_num;   /* valid for DR SMPs on switch only */
+        } ud;
+        struct {
+            uint64_t                             iova_start;
+            struct ib_fast_reg_page_list   *page_list;
+            unsigned int                    page_shift;
+            unsigned int                    page_list_len;
+            uint32_t                             length;
+            int                             access_flags;
+            uint32_t                             rkey;
+        } fast_reg;
+        struct {
+            struct ib_mw            *mw;
+            /* The new rkey for the memory window. */
+            uint32_t                      rkey;
+            struct ib_mw_bind_info   bind_info;
+        } bind_mw;
+    } wr;
+    uint32_t                     xrc_remote_srq_num;     /* XRC TGT QPs only */
 };
 
 #define RXE_LL_ADDR_LEN		(16)
@@ -162,7 +179,6 @@ struct rxe_send_wqe {
 	uint32_t		has_rd_atomic;
 	struct rxe_dma_info	dma;
 };
-#endif
 
 struct rxe_wq {
 	struct rxe_queue	*queue;
