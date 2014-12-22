@@ -1,5 +1,0 @@
-Exynos 5410 Dual cluster support patch.
-
-Patches allow all 8 CPU cores (4 x A7 and 4 x A15) to run at the same time. From my understanding this is already available in Kernel v3.12-rc5.
-
-http://lwn.net/Articles/570336/

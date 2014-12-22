@@ -1,9 +1,11 @@
 AM_CFLAGS = -g -Wall -D_GNU_SOURCE
-  
+
 rxe_version_script = @RXE_VERSION_SCRIPT@
 
+ACLOCAL_AMFLAGS = -I m4
+
 RXE_SOURCES = src/rxe.c
-  
+
 if HAVE_IBV_DEVICE_LIBRARY_EXTENSION
     lib_LTLIBRARIES = src/librxe.la
     src_librxe_la_SOURCES = $(RXE_SOURCES)
