@@ -31,3 +31,4 @@ linux/uInitrd
 linux/usr/initramfs_data.cpio
 linux/lib/oid_registry_data.c
 linux/initramfs-*
+*.dtb
