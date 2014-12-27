@@ -14,8 +14,12 @@
 #include <linux/platform_device.h>
 #include <linux/module.h>
 #include <linux/slab.h>
+#include <linux/sysfs.h>
 
 #include "xhci.h"
+
+extern struct device_attribute dev_attr_poll;
+extern struct device_attribute dev_attr_pollcpu;
 
 static void xhci_plat_quirks(struct device *dev, struct xhci_hcd *xhci)
 {
@@ -148,6 +152,15 @@ static int xhci_plat_probe(struct platform_device *pdev)
 	ret = usb_add_hcd(xhci->shared_hcd, irq, IRQF_SHARED);
 	if (ret)
 		goto put_usb3_hcd;
+
+    ret = device_create_file(&hcd->self.root_hub->dev, &dev_attr_poll);
+    if (ret)
+        pr_warn("xhci: Unable to create poll attribute");
+
+    ret = device_create_file(&hcd->self.root_hub->dev, &dev_attr_pollcpu);
+    if (ret)
+        pr_warn("xhci: Unable to create pollcpu attribute");
+
 #if defined(CONFIG_MACH_ODROIDXU3)
     #define USB3_PORT0_IRQ  104
     #define USB3_PORT1_IRQ  105
@@ -183,6 +196,9 @@ static int xhci_plat_remove(struct platform_device *dev)
 {
 	struct usb_hcd	*hcd = platform_get_drvdata(dev);
 	struct xhci_hcd	*xhci = hcd_to_xhci(hcd);
+
+    device_remove_file(&hcd->self.root_hub->dev, &dev_attr_poll);
+    device_remove_file(&hcd->self.root_hub->dev, &dev_attr_pollcpu);
 
 	usb_remove_hcd(xhci->shared_hcd);
 	usb_put_hcd(xhci->shared_hcd);

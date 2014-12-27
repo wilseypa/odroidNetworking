@@ -1,0 +1,43 @@
+#!/usr/bin/perl
+
+use warnings;
+use strict;
+use Getopt::Long;
+
+my $parms = "/sys/bus/usb/devices/usb3";
+my $poll = undef;
+my $pollcpu = 3;
+
+sub main {
+    GetOptions(
+        "poll!"     => \$poll,
+        "pollcpu=i"     => \$pollcpu
+    );
+
+    my $poll_status = `cat $parms/poll`;
+    chomp($poll_status);
+
+    if (defined($poll) && ($poll_status ne $poll)) {
+        if ($poll) {
+            system("echo '$pollcpu' > $parms/pollcpu");
+            system("echo 1 > $parms/poll");
+        } else {
+            system("echo 0 > $parms/poll");
+        }
+
+        # Update the poll/interrupt status
+        $poll_status = `cat $parms/poll`;
+        chomp($poll_status);
+    }
+
+    my $mode = ($poll_status eq "0") ? "Interrupt" : "Polling";
+
+    print "Mode: $mode\n";
+    if ($mode eq "Polling") {
+        print "Polling thread bound to CPU $pollcpu\n";
+    }
+}
+
+main();
+
+exit;

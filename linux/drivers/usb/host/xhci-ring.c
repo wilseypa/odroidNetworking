@@ -107,7 +107,7 @@ static bool last_trb_on_last_seg(struct xhci_hcd *xhci, struct xhci_ring *ring,
  * segment?  I.e. would the updated event TRB pointer step off the end of the
  * event seg?
  */
-static int last_trb(struct xhci_hcd *xhci, struct xhci_ring *ring,
+int last_trb(struct xhci_hcd *xhci, struct xhci_ring *ring,
 		struct xhci_segment *seg, union xhci_trb *trb)
 {
 	if (ring == xhci->event_ring)
@@ -2660,7 +2660,7 @@ cleanup:
  * Returns >0 for "possibly more events to process" (caller should call again),
  * otherwise 0 if done.  In future, <0 returns should indicate error code.
  */
-static int xhci_handle_event(struct xhci_hcd *xhci)
+int xhci_handle_event(struct xhci_hcd *xhci)
 {
 	union xhci_trb *event;
 	int update_ptrs = 1;
