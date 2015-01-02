@@ -648,16 +648,6 @@ int rxe_requester(void *arg)
 		goto exit;
 	}
 
-    pr_warn("rxe requester:\n");
-    pr_warn("\topcode = %u\n", opcode);
-    pr_warn("\tdma.length = %u\n", wqe->dma.length);
-    pr_warn("\tdma.resid = %u\n", wqe->dma.resid);
-    pr_warn("\tdma.num_sge = %u\n", wqe->dma.num_sge);
-    pr_warn("\tdma.cur_sge = %u\n", wqe->dma.cur_sge);
-    pr_warn("\tdma.sge_offset = %u\n", wqe->dma.sge_offset);
-    pr_warn("\tstate %u\n", wqe->state);
-    pr_warn("\tssn %u\n", wqe->ssn);
-
 	mask = rxe_opcode[opcode].mask;
 	if (unlikely(mask & RXE_READ_OR_ATOMIC)) {
 		if (check_init_depth(qp, wqe))
