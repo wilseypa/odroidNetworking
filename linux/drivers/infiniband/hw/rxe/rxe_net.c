@@ -199,14 +199,6 @@ static inline int addr_same(struct rxe_dev *rxe, struct rxe_av *av)
 			== av->attr.grh.dgid.global.interface_id;
 }
 
-void dump_skb(struct sk_buff *skb)
-{
-	pr_info("skb: %p, head = %p, data = %p, tail = %d, end = %d, len = %d, data_len = %d\n",
-		skb, skb->head, skb->data, skb->tail, skb->end, skb->len, skb->data_len);
-	pr_info("	truesize = %d, mac_len = %d, hdr_len = %d, transport_header = %d, network_header = %d, mac_header = %d\n",
-		skb->truesize, skb->mac_len, skb->hdr_len, skb->transport_header, skb->network_header, skb->mac_header);
-}
-
 static struct sk_buff *init_packet(struct rxe_dev *rxe, struct rxe_av *av,
 				   int paylen, int align)
 {
