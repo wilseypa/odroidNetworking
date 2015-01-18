@@ -4,15 +4,31 @@ use warnings;
 use strict;
 use Getopt::Long;
 
-my $parms = "/sys/bus/usb/devices/usb3";
-my $poll = undef;
+my $parms   = "/sys/bus/usb/devices/usb3";
+my $poll    = undef;
 my $pollcpu = 3;
+my $oscpu   = undef;
 
 sub main {
     GetOptions(
-        "poll!"     => \$poll,
+        "oscpu=i"       => \$oscpu,
+        "poll!"         => \$poll,
         "pollcpu=i"     => \$pollcpu
     );
+
+    if (defined($oscpu)) {
+        for my $i (0 .. 7) {
+            if ($oscpu ne $i) {
+                system("chown odroid /sys/devices/system/cpu/cpu$i/online");
+                system("echo 0 > /sys/devices/system/cpu/cpu$i/online");
+            }
+        }
+        for my $i (0 .. 7) {
+            if ($oscpu ne $i) {
+                system("echo 1 > /sys/devices/system/cpu/cpu$i/online");
+            }
+        }
+    }
 
     my $poll_status = `cat $parms/poll`;
     chomp($poll_status);
