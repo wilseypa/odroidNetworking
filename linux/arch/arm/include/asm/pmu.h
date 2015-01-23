@@ -14,6 +14,7 @@
 
 #include <linux/interrupt.h>
 #include <linux/perf_event.h>
+#include <linux/arm_pmu.h>
 
 /*
  * struct arm_pmu_platdata - ARM PMU platform data
