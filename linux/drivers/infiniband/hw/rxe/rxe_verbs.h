@@ -433,10 +433,10 @@ struct rxe_port {
 struct rxe_arbiter {
 	struct rxe_task		task;
 	struct list_head	qp_list;
-	spinlock_t		list_lock;
-	struct timespec		time;
-	int			delay;
-	int			queue_stalled;
+    struct timer_list   timer;
+    int                 skb_count;
+	spinlock_t		    list_lock;
+	int			        queue_stalled;
 };
 
 /* callbacks from ib_rxe to network interface layer */
@@ -457,8 +457,6 @@ struct rxe_ifc_ops {
 	enum rdma_link_layer (*link_layer)(struct rxe_dev *rxe,
 			      unsigned int port_num);
 };
-
-#define RXE_QUEUE_STOPPED		(999)
 
 struct rxe_dev {
 	struct ib_device	ib_dev;

@@ -32,6 +32,7 @@
  */
 
 #include <linux/skbuff.h>
+#include <linux/if_arp.h>
 #include <linux/netdevice.h>
 #include <linux/if.h>
 #include <linux/if_vlan.h>
@@ -50,11 +51,6 @@ MODULE_LICENSE("Dual BSD/GPL");
 static int rxe_eth_proto_id = ETH_P_RXE;
 module_param_named(eth_proto_id, rxe_eth_proto_id, int, 0644);
 MODULE_PARM_DESC(eth_proto_id, "Ethernet protocol ID (default/correct=0x8915)");
-
-static int rxe_xmit_shortcut;
-module_param_named(xmit_shortcut, rxe_xmit_shortcut, int, 0644);
-MODULE_PARM_DESC(xmit_shortcut,
-		 "Shortcut transmit (EXPERIMENTAL)");
 
 static int rxe_loopback_mad_grh_fix = 1;
 module_param_named(loopback_mad_grh_fix, rxe_loopback_mad_grh_fix, int, 0644);
@@ -142,38 +138,26 @@ static int mcast_delete(struct rxe_dev *rxe, union ib_gid *mgid)
 	return err;
 }
 
-static inline int queue_deactivated(struct sk_buff *skb)
-{
-	const struct net_device_ops *ops = skb->dev->netdev_ops;
-	u16 queue_index = 0;
-	struct netdev_queue *txq;
-
-	if (ops->ndo_select_queue)
-		queue_index = ops->ndo_select_queue(skb->dev, skb);
-	else if (skb->dev->real_num_tx_queues > 1)
-		queue_index = skb_tx_hash(skb->dev, skb);
-
-	txq = netdev_get_tx_queue(skb->dev, queue_index);
-	return txq->qdisc->state & 2;
-}
-
 static int send_finish(struct sk_buff *skb)
 {
-	if (!rxe_xmit_shortcut)
-		return dev_queue_xmit(skb);
-	else
-		return skb->dev->netdev_ops->ndo_start_xmit(skb, skb->dev);
+    int rc;
+    struct sk_buff *nskb;
+
+    nskb = skb_clone(skb, GFP_ATOMIC);
+    if (!nskb)
+        return -ENOMEM;
+
+    rc = dev_queue_xmit(nskb);
+    if (rc != NET_XMIT_SUCCESS)
+        return rc;
+
+    kfree_skb(skb);
+    return 0;
 }
 
 static int send(struct rxe_dev *rxe, struct sk_buff *skb)
 {
-	if (queue_deactivated(skb))
-		return RXE_QUEUE_STOPPED;
-
-	if (netif_queue_stopped(skb->dev))
-		return RXE_QUEUE_STOPPED;
-
-	return NF_HOOK(NFPROTO_RXE, NF_RXE_OUT, skb, rxe->ndev, NULL,
+    return NF_HOOK(NFPROTO_RXE, NF_RXE_OUT, skb, rxe->ndev, NULL,
 		send_finish);
 }
 
@@ -414,7 +398,7 @@ static int can_support_rxe(struct net_device *ndev)
 	}
 
 	/* Let's says we support all ethX devices */
-	if (strncmp(ndev->name, "eth", 3) == 0)
+	if (ndev->type == ARPHRD_ETHER)
 		rc = 1;
 
 out:

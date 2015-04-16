@@ -154,6 +154,18 @@ enum rxe_device_param {
 	RXE_MAX_FMR_INDEX		= 0x00040000,
 	RXE_MIN_MW_INDEX		= 0x00040001,
 	RXE_MAX_MW_INDEX		= 0x00060000,
+
+    /* PSN window in RC, to prevent mixing new packets PSN with
+     * old ones. According to IB SPEC this number is half of
+     * the PSN range (2^24).
+     */
+    RXE_MAX_UNACKED_PSNS        = 0x800000,
+
+    /* Max inflight SKBs per queue pair */
+    RXE_MAX_INFLIGHT_SKBS_PER_QP    = 64,
+
+    /* Delay before calling arbiter timer */
+    RXE_NSEC_ARB_TIMER_DELAY    = 200,
 };
 
 /*
@@ -197,17 +209,7 @@ enum rxe_port_info_param {
 };
 
 extern int rxe_debug_flags;
-extern int rxe_crc_disable;
-extern int rxe_nsec_per_packet;
-extern int rxe_nsec_per_kbyte;
-extern int rxe_max_skb_per_qp;
-extern int rxe_max_req_comp_gap;
 extern int rxe_max_pkt_per_ack;
 extern int rxe_default_mtu;
-extern int rxe_fast_comp;
-extern int rxe_fast_resp;
-extern int rxe_fast_req;
-extern int rxe_fast_arb;
-extern int rxe_bypass_arbiter;
 
 #endif /* RXE_PARAM_H */

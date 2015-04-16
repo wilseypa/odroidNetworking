@@ -513,15 +513,13 @@ static int fill_packet(struct rxe_qp *qp, struct rxe_send_wqe *wqe,
 	u32 crc = 0;
 	u8 *p;
 
-	if (!rxe_crc_disable)
-		crc = rxe_icrc_hdr(pkt);
+    crc = rxe_icrc_hdr(pkt);
 
 	if (pkt->mask & RXE_WRITE_OR_SEND) {
 		if (wqe->ibwr.send_flags & IB_SEND_INLINE) {
 			p = &wqe->dma.inline_data[wqe->dma.sge_offset];
 
-			if (!rxe_crc_disable)
-				crc = crc32_le(crc, p, payload);
+			crc = crc32_le(crc, p, payload);
 
 			memcpy(payload_addr(pkt), p, payload);
 
@@ -530,8 +528,8 @@ static int fill_packet(struct rxe_qp *qp, struct rxe_send_wqe *wqe,
 		} else {
 			if (copy_data(rxe, qp->pd, 0, &wqe->dma,
 				      payload_addr(pkt), payload,
-				      direction_out, !rxe_crc_disable ?
-				      &crc : NULL)) {
+				      direction_out,
+				      &crc)) {
 				return -1;
 			}
 		}
@@ -540,8 +538,7 @@ static int fill_packet(struct rxe_qp *qp, struct rxe_send_wqe *wqe,
 	p = payload_addr(pkt) + payload;
 	pad = (-payload) & 0x3;
 	if (pad) {
-		if (!rxe_crc_disable)
-			crc = crc32_le(crc, zerobuf, pad);
+		crc = crc32_le(crc, zerobuf, pad);
 
 		memcpy(p, zerobuf, pad);
 
@@ -622,21 +619,19 @@ int rxe_requester(void *arg)
 	if (!wqe)
 		goto exit;
 
-	/* heuristic sliding window algorithm to keep
-	   sender from overrunning receiver queues */
+    /* RC only, PSN window to prevent mixing new packets PSN
+     * with old ones. According to IB SPEC this number is
+     * half of the PSN range (2^24).
+     */
 	if (qp_type(qp) == IB_QPT_RC)  {
-		if (psn_compare(qp->req.psn, qp->comp.psn +
-				rxe_max_req_comp_gap) > 0) {
+		if (qp->req.psn > qp->comp.psn + RXE_MAX_UNACKED_PSNS) {
 			qp->req.wait_psn = 1;
 			goto exit;
 		}
 	}
 
-	/* heuristic algorithm to prevent sender from
-	   overrunning the output queue. to not overrun
-	   the receiver's input queue (UC/UD) requires
-	   rate control or application level flow control */
-	if (atomic_read(&qp->req_skb_out) > rxe_max_skb_per_qp) {
+	/* Limit the number of inflight SKBs per QP*/
+	if (atomic_read(&qp->req_skb_out) > RXE_MAX_INFLIGHT_SKBS_PER_QP) {
 		qp->need_req_skb = 1;
 		goto exit;
 	}
@@ -693,10 +688,7 @@ int rxe_requester(void *arg)
 
 	update_state(qp, wqe, pkt, payload);
 
-	if (rxe_bypass_arbiter)
-		xmit_one_packet(to_rdev(qp->ibqp.device), qp, PKT_TO_SKB(pkt));
-	else
-		arbiter_skb_queue(to_rdev(qp->ibqp.device), qp, PKT_TO_SKB(pkt));
+	arbiter_skb_queue(to_rdev(qp->ibqp.device), qp, PKT_TO_SKB(pkt));
 
 	if (mask & RXE_END_MASK)
 		goto complete;
