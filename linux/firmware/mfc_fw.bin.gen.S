@@ -2,7 +2,7 @@
     .section .rodata
     .p2align 2
 _fw_mfc_fw_bin_bin:
-    .incbin "/home/odroid/src/odroidNetworking/linux/firmware/mfc_fw.bin"
+    .incbin "/home/odroid/odroidNetworking/linux/firmware/mfc_fw.bin"
 _fw_end:
    .section .rodata.str,"aMS",%progbits,1
     .p2align 2

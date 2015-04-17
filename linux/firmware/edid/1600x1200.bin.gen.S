@@ -2,7 +2,7 @@
     .section .rodata
     .p2align 2
 _fw_edid_1600x1200_bin_bin:
-    .incbin "/home/odroid/src/odroidNetworking/linux/firmware/edid/1600x1200.bin"
+    .incbin "/home/odroid/odroidNetworking/linux/firmware/edid/1600x1200.bin"
 _fw_end:
    .section .rodata.str,"aMS",%progbits,1
     .p2align 2
